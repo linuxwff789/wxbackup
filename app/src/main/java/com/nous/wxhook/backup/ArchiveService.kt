@@ -2,7 +2,7 @@ package com.nous.wxhook.backup
 
 import android.util.Base64
 import android.util.Log
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.storage.WxHookPaths
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -11,7 +11,7 @@ import java.util.zip.GZIPOutputStream
 
 /**
  * Handles archive creation, compression, and database decryption.
- * All su commands go through RootCommandRunner.
+ * All su commands go through RootGateways.
  */
 object ArchiveService {
 
@@ -90,8 +90,8 @@ object ArchiveService {
                 script.toByteArray(Charsets.UTF_8), Base64.NO_WRAP
             )
             BackupEnv.su("printf '%s' $b64 | base64 -d > $shPath && chmod 755 $shPath")
-            // Use RootCommandRunner with long timeout for decryption
-            RootCommandRunner.runSu("sh $shPath > /data/local/tmp/decrypt_exec.log 2>&1", 600_000)
+            // Use RootGateways with long timeout for decryption
+            RootGateways.run("sh $shPath > /data/local/tmp/decrypt_exec.log 2>&1", 600_000)
             if (File(gzFile).exists() && File(gzFile).length() > 0) return "OK:$gzFile"
             ""
         } catch (e: Exception) {
@@ -116,16 +116,16 @@ object ArchiveService {
             if (pwd.isEmpty()) return ""
 
             // Kill existing sqlcipher, setup work dir, cleanup
-            RootCommandRunner.runSu(
+            RootGateways.run(
                 "killall sqlcipher 2>/dev/null; mkdir -p $workDir; $cleanupAll", 30_000
             )
 
             // /proc DB must be copied sequentially to ext4 before SQLCipher opens it.
-            val copyResult = RootCommandRunner.runSu(
+            val copyResult = RootGateways.run(
                 "dd if=\"$dbPath\" of=\"$workDb\" bs=4M status=none", 300_000
             )
             if (!copyResult.isSuccess) return ""
-            val copiedSize = RootCommandRunner.runSuQuiet(
+            val copiedSize = RootGateways.runQuiet(
                 "stat -c %s \"$workDb\" 2>/dev/null"
             ).trim().toLongOrNull() ?: 0L
             if (copiedSize < 1_000_000L) return ""
@@ -143,40 +143,40 @@ object ArchiveService {
                 "-cmd '.mode insert' " +
                 "-cmd 'SELECT * FROM message WHERE rowid > $lastRowId;' " +
                 "> \"$workSql\" 2>/dev/null"
-            val queryResult = RootCommandRunner.runSu(sqlCmd, 300_000)
+            val queryResult = RootGateways.run(sqlCmd, 300_000)
             if (!queryResult.isSuccess) {
-                RootCommandRunner.runSu(cleanupWork, 10_000)
+                RootGateways.run(cleanupWork, 10_000)
                 return ""
             }
-            val sqlSize = RootCommandRunner.runSuQuiet(
+            val sqlSize = RootGateways.runQuiet(
                 "stat -c %s \"$workSql\" 2>/dev/null"
             ).trim().toLongOrNull() ?: 0L
             if (sqlSize <= 0L) {
-                RootCommandRunner.runSu(cleanupWork, 10_000)
+                RootGateways.run(cleanupWork, 10_000)
                 return ""
             }
 
             // Compress the SQL dump
             val compressor = if (BackupEnv.useZstd()) "${BackupEnv.binDir}/zstd -c -3" else "gzip -c"
-            val gzipResult = RootCommandRunner.runSu(
+            val gzipResult = RootGateways.run(
                 "$compressor \"$workSql\" > \"$workOut\"", 120_000
             )
-            val outputSize = RootCommandRunner.runSuQuiet(
+            val outputSize = RootGateways.runQuiet(
                 "stat -c %s \"$workOut\" 2>/dev/null"
             ).trim().toLongOrNull() ?: 0L
             if (!gzipResult.isSuccess || outputSize <= 0L) {
-                RootCommandRunner.runSu(cleanupWork, 10_000)
+                RootGateways.run(cleanupWork, 10_000)
                 return ""
             }
 
             // Move output to final location
-            val moved = RootCommandRunner.runSu(
+            val moved = RootGateways.run(
                 "cp \"$workOut\" \"$finalOut\" && chmod 664 \"$finalOut\"", 60_000
             ).isSuccess
-            RootCommandRunner.runSu(cleanupWork, 10_000)
+            RootGateways.run(cleanupWork, 10_000)
             if (moved) "OK:$finalOut" else ""
         } catch (e: Exception) {
-            RootCommandRunner.runSu(
+            RootGateways.run(
                 "killall sqlcipher 2>/dev/null; rm -f $workDb $workDb-shm $workDb-wal $workOut $finalOut 2>/dev/null",
                 10_000
             )

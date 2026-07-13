@@ -13,7 +13,7 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -26,7 +26,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
-private fun su(cmd: String): String = RootCommandRunner.runSuQuiet(cmd)
+private fun su(cmd: String): String = RootGateways.runQuiet(cmd)
 
 data class ChatMessage(
     val msgSvrId: Long, val type: Int,
@@ -36,7 +36,7 @@ data class ChatMessage(
 
 class ChatDetailActivity : AppCompatActivity() {
 
-    internal fun su(cmd: String): String = RootCommandRunner.runSuQuiet(cmd)
+    internal fun su(cmd: String): String = RootGateways.runQuiet(cmd)
 
     /** Look up nickname from rcontact by wxid */
     private val nickCache = ConcurrentHashMap<String, String>()

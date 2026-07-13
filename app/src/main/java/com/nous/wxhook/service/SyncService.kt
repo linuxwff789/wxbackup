@@ -9,7 +9,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -47,7 +47,7 @@ class SyncService : Service() {
                 appendLog("同步服务启动")
                 updateNotification("读取配置...")
                 // Read remote config
-                val cfgRaw = RootCommandRunner.runSuQuiet("cat \"$BACKUP_DIR/remote_config.json\" 2>/dev/null").ifBlank { "{}" }
+                val cfgRaw = RootGateways.runQuiet("cat \"$BACKUP_DIR/remote_config.json\" 2>/dev/null").ifBlank { "{}" }
                 val cfg = org.json.JSONObject(cfgRaw)
                 val enabled = cfg.optBoolean("enabled", false)
                 val remoteStr = cfg.optString("remote", "")
@@ -66,7 +66,7 @@ class SyncService : Service() {
                 appendLog("打包: $pkgName")
                 val findCmd = "find \"$BACKUP_DIR\" -maxdepth 1 -type f -name \"backup_*.json\" 2>/dev/null; " +
                     "find \"$BACKUP_DIR\" -maxdepth 2 -type f \\( -name \"*.sql.gz\" -o -name \"*.sql.zst\" -o -name \"db_state.json\" \\) 2>/dev/null"
-                val files = RootCommandRunner.runSuQuiet(findCmd).lines().filter { it.isNotBlank() }
+                val files = RootGateways.runQuiet(findCmd).lines().filter { it.isNotBlank() }
                 if (files.isEmpty()) { result = "无备份文件可同步"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
 
                 val pkgInfo = BackupPackage.create(files, pkgPath, tag, "incremental")
@@ -83,12 +83,12 @@ class SyncService : Service() {
                 if (rcloneCfg.exists()) {
                     args.add("--config"); args.add(rcloneCfg.absolutePath)
                 }
-                val rcloneResult = RootCommandRunner.runSu(args.joinToString(" "), 120_000)
+                val rcloneResult = RootGateways.run(args.joinToString(" "), 120_000)
                 if (rcloneResult.timedOut) { result = "上传超时"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
                 if (!rcloneResult.isSuccess) { result = "上传失败(exit=${rcloneResult.exitCode}) ${rcloneResult.stderr.take(200)}"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
 
                 // Cleanup local pkg
-                RootCommandRunner.runSu("rm -f \"$pkgPath\"", 10_000)
+                RootGateways.run("rm -f \"$pkgPath\"", 10_000)
                 result = "同步完成: $pkgName (${formatSize(pkgInfo.totalSize)})"
                 appendLog(result)
                 updateNotification(result)
@@ -116,7 +116,7 @@ class SyncService : Service() {
             val line = "[" + SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date()) + "] " + msg
             val tmp = File(filesDir, "sync_live.log")
             tmp.appendText(line + "\n")
-            RootCommandRunner.runSu("cat \"${tmp.absolutePath}\" >> /sdcard/Download/wxhook_backup/sync_live.log && chmod 644 /sdcard/Download/wxhook_backup/sync_live.log")
+            RootGateways.run("cat \"${tmp.absolutePath}\" >> /sdcard/Download/wxhook_backup/sync_live.log && chmod 644 /sdcard/Download/wxhook_backup/sync_live.log")
             tmp.writeText("")
         } catch (_: Exception) {}
     }

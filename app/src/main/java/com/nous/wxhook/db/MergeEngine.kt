@@ -1,7 +1,7 @@
 package com.nous.wxhook.db
 
 import android.util.Log
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import java.io.File
 
 /**
@@ -47,7 +47,7 @@ PRAGMA cipher_use_hmac=OFF;
         val sqlFile = File("/data/local/tmp/_mg_sql_$tag.sql")
         sqlFile.writeText(prg(key) + sql)
         try {
-            val out = RootCommandRunner.runSuQuiet("$SQLCIPHER '$dbPath' < '${sqlFile.absolutePath}' 2>/dev/null | tail -1").trim()
+            val out = RootGateways.gateway.runQuiet("$SQLCIPHER '$dbPath' < '${sqlFile.absolutePath}' 2>/dev/null | tail -1").trim()
             return out
         } finally { sqlFile.delete() }
     }
@@ -75,7 +75,7 @@ PRAGMA cipher_use_hmac=OFF;
 
         // Copy base to output
         if (baseDbPath != outputPath) {
-            RootCommandRunner.runSu("cp '$baseDbPath' '$outputPath'")
+            RootGateways.gateway.run("cp '$baseDbPath' '$outputPath'")
         }
 
         // Phase 1: dump overlay as INSERT statements
@@ -88,7 +88,7 @@ PRAGMA cipher_use_hmac=OFF;
 .output '${dumpFile.absolutePath}'
 SELECT * FROM message;
 """.trimIndent())
-            RootCommandRunner.runSu("$SQLCIPHER '$overlayDbPath' < '${dumpSqlFile.absolutePath}' 2>/dev/null")
+            RootGateways.gateway.run("$SQLCIPHER '$overlayDbPath' < '${dumpSqlFile.absolutePath}' 2>/dev/null")
             dumpSqlFile.delete()
 
             if (!dumpFile.exists() || dumpFile.length() < 10L) {
@@ -113,7 +113,7 @@ SELECT * FROM message;
             val runSqlFile = File("/data/local/tmp/_mg_run_$tag.sql")
             runSqlFile.writeText(prg(config.key) + ".read '${iorFile.absolutePath}'\nSELECT changes();")
             val changes = try {
-                val out = RootCommandRunner.runSuQuiet("$SQLCIPHER '$outputPath' < '${runSqlFile.absolutePath}' 2>/dev/null | tail -1").trim()
+                val out = RootGateways.gateway.runQuiet("$SQLCIPHER '$outputPath' < '${runSqlFile.absolutePath}' 2>/dev/null | tail -1").trim()
                 out.toLongOrNull() ?: 0L
             } catch (e: Exception) { 0L }
 

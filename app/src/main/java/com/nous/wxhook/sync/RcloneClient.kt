@@ -2,7 +2,7 @@ package com.nous.wxhook.sync
 
 import com.nous.wxhook.core.command.CommandResult
 import com.nous.wxhook.core.command.ShellEscaper
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -29,7 +29,7 @@ class RcloneClient(
 
     override suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
         if (configPath == null) return@withContext Result.failure(Exception("No config"))
-        val result = RootCommandRunner.runSu(
+        val result = RootGateways.run(
             rcloneArgs("lsd", "gdrive:").joinToString(" "), 15_000
         )
         if (result.isSuccess) Result.success(Unit)
@@ -37,7 +37,7 @@ class RcloneClient(
     }
 
     override suspend fun ensureDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        val result = RootCommandRunner.runSu(
+        val result = RootGateways.run(
             rcloneArgs("mkdir", path).joinToString(" "), 10_000
         )
         if (result.isSuccess) Result.success(Unit)
@@ -46,7 +46,7 @@ class RcloneClient(
 
     override suspend fun upload(local: File, remote: String): Result<RemoteObject> =
         withContext(Dispatchers.IO) {
-            val result = RootCommandRunner.runSu(
+            val result = RootGateways.run(
                 rcloneArgs("copy", local.absolutePath, remote, "--no-check-certificate", "--timeout=30s").joinToString(" "),
                 120_000
             )
@@ -59,7 +59,7 @@ class RcloneClient(
 
     override suspend fun download(remote: String, local: File): Result<Unit> =
         withContext(Dispatchers.IO) {
-            val result = RootCommandRunner.runSu(
+            val result = RootGateways.run(
                 rcloneArgs("copy", remote, local.absolutePath, "--no-check-certificate", "--timeout=30s").joinToString(" "),
                 120_000
             )
@@ -69,7 +69,7 @@ class RcloneClient(
 
     override suspend fun list(remote: String): Result<List<RemoteObject>> =
         withContext(Dispatchers.IO) {
-            val result = RootCommandRunner.runSu(
+            val result = RootGateways.run(
                 rcloneArgs("ls", remote, "--no-check-certificate").joinToString(" "),
                 30_000
             )
@@ -82,7 +82,7 @@ class RcloneClient(
         }
 
     override suspend fun delete(remote: String): Result<Unit> = withContext(Dispatchers.IO) {
-        val result = RootCommandRunner.runSu(
+        val result = RootGateways.run(
             rcloneArgs("delete", remote, "--no-check-certificate").joinToString(" "),
             30_000
         )

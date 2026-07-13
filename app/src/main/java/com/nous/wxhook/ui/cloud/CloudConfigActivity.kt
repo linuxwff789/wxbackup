@@ -9,15 +9,19 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import com.nous.wxhook.service.SyncService
-import java.io.File
+import kotlinx.coroutines.launch
 
 class CloudConfigActivity : AppCompatActivity() {
 
-    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val rcloneCfgFile get() = File(filesDir, ".config/rclone/rclone.conf")
+    private val viewModel: CloudConfigViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -25,10 +29,27 @@ class CloudConfigActivity : AppCompatActivity() {
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         BackupHookLocal.init(this)
         buildUI()
+
+        // Observe ViewModel state
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.uiState.collect { state ->
+                    // Handle toast messages
+                    if (state.toastMessage.isNotEmpty()) {
+                        Toast.makeText(this@CloudConfigActivity, state.toastMessage, Toast.LENGTH_LONG).show()
+                        viewModel.clearToast()
+                    }
+                    // Update title from test results
+                    if (state.testResult.isNotEmpty()) {
+                        supportActionBar?.title = state.testResult
+                    }
+                }
+            }
+        }
     }
 
     override fun onSupportNavigateUp(): Boolean { finish(); return true }
-    override fun onResume() { super.onResume(); buildUI() }
+    override fun onResume() { super.onResume(); viewModel.loadAll() }
 
     private fun buildUI() {
         val root = LinearLayout(this).apply {
@@ -57,7 +78,7 @@ class CloudConfigActivity : AppCompatActivity() {
         // ── Config section ──
         root.addView(cardTitle("🔑 远端配置"))
         val configCard = card()
-        val remotes = parseRemotes()
+        val remotes = viewModel.uiState.value.remotes
         if (remotes.isEmpty()) {
             configCard.addView(TextView(this).apply {
                 text = "暂无配置，请添加远端存储"; textSize = 13f
@@ -65,7 +86,7 @@ class CloudConfigActivity : AppCompatActivity() {
                 setTextColor(0xFF9E9E9E.toInt())
             })
         } else {
-            for ((name, type) in remotes) {
+            for (remote in remotes) {
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
@@ -73,7 +94,7 @@ class CloudConfigActivity : AppCompatActivity() {
                     setBackgroundColor(Color.WHITE)
                 }
                 row.addView(TextView(this).apply {
-                    text = "📦 $name ($type)"; textSize = 14f
+                    text = "📦 ${remote.name} (${remote.type})"; textSize = 14f
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 })
                 val testBtn = Button(this).apply {
@@ -81,7 +102,7 @@ class CloudConfigActivity : AppCompatActivity() {
                     setTextColor(0xFF6200EE.toInt())
                     setBackgroundColor(Color.TRANSPARENT)
                     layoutParams = LinearLayout.LayoutParams(dp(60), LinearLayout.LayoutParams.WRAP_CONTENT)
-                    setOnClickListener { testRemote(name) }
+                    setOnClickListener { viewModel.testRemote(remote.name) }
                 }
                 row.addView(testBtn)
                 configCard.addView(row)
@@ -114,67 +135,31 @@ class CloudConfigActivity : AppCompatActivity() {
             setOnClickListener { SyncService.start(this@CloudConfigActivity) }
         })
 
-        // Load status
-        Thread {
-            val sb = StringBuilder()
-            val cfgRaw = try { java.io.File("/sdcard/Download/wxhook_backup/remote_config.json").readText() } catch (_: Exception) { "{}" }
-            val cfg = org.json.JSONObject(cfgRaw)
-            sb.appendLine("云同步: ${if (cfg.optBoolean("enabled", false)) "✅ 已启用" else "⛔ 未启用"}")
-            sb.appendLine("远端路径: ${cfg.optString("remote", "未设置")}")
-            sb.appendLine("rclone配置: ${remotes.size} 个远端")
-            handler.post { statusText.text = sb.toString() }
-        }.start()
-
         val sv = ScrollView(this)
         sv.addView(root)
         setContentView(sv)
-    }
 
-    private fun parseRemotes(): List<Pair<String, String>> {
-        if (!rcloneCfgFile.exists()) return emptyList()
-        return try {
-            val lines = rcloneCfgFile.readText().lines()
-            val result = mutableListOf<Pair<String, String>>()
-            var currentName = ""
-            var currentType = ""
-            for (line in lines) {
-                val m = Regex("^\\[(.+)]$").find(line.trim())
-                if (m != null) {
-                    if (currentName.isNotEmpty() && currentType.isNotEmpty())
-                        result.add(currentName to currentType)
-                    currentName = m.groupValues[1]
-                    currentType = ""
-                } else if (line.trim().startsWith("type = ")) {
-                    currentType = line.trim().removePrefix("type = ")
+        // Update status text from ViewModel
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.uiState.collect { state ->
+                    if (state.statusText.isNotEmpty()) {
+                        statusText.text = state.statusText
+                    }
                 }
             }
-            if (currentName.isNotEmpty() && currentType.isNotEmpty())
-                result.add(currentName to currentType)
-            result
-        } catch (_: Exception) { emptyList() }
-    }
-
-    private fun testRemote(name: String) {
-        Thread {
-            runOnUiThread { supportActionBar?.title = "⏳ 测试 $name..." }
-            val result = BackupHookLocal.testRemoteConnection(name, rcloneCfgFile.absolutePath)
-            runOnUiThread {
-                val first = result.lines().first().take(60)
-                supportActionBar?.title = first
-                android.widget.Toast.makeText(this, result, android.widget.Toast.LENGTH_LONG).show()
-            }
-        }.start()
+        }
     }
 
     private fun addRemote(provider: String) {
-        val name = "remote${System.currentTimeMillis() % 10000}"
+        val name = viewModel.addRemote(provider)
         when (provider) {
             "webdav" -> showWebdavDialog(name)
             "s3" -> showS3Dialog(name)
         }
     }
 
-    // ── S3 Dialog (copied from SettingsActivity, simplified) ──
+    // ── S3 Dialog ──
     private fun showS3Dialog(name: String) {
         val ctx = this
         val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 16, 40, 16) }
@@ -203,19 +188,8 @@ class CloudConfigActivity : AppCompatActivity() {
                 var endpoint = ep.text.toString().trim()
                 val ak = ek.text.toString().trim(); val ask = sk.text.toString().trim()
                 if (ak.isEmpty() || ask.isEmpty()) return@setPositiveButton
-                if (endpoint.isEmpty()) {
-                    val epMap = mapOf("AWS" to "s3.$region.amazonaws.com","Cloudflare" to "https://$region.r2.cloudflarestorage.com",
-                        "Minio" to "http://127.0.0.1:9000","Alibaba" to "oss-$region.aliyuncs.com",
-                        "TencentCOS" to "cos.$region.myqcloud.com","HuaweiOBS" to "obs.$region.myhuaweicloud.com")
-                    endpoint = epMap[s3Prov] ?: ""
-                }
-                val sb = StringBuilder()
-                sb.appendLine("[$name]"); sb.appendLine("type = s3")
-                sb.appendLine("provider = $s3Prov"); sb.appendLine("access_key_id = $ak")
-                sb.appendLine("secret_access_key = $ask"); sb.appendLine("region = $region")
-                if (endpoint.isNotEmpty()) sb.appendLine("endpoint = $endpoint")
-                sb.appendLine("acl = private")
-                writeConfig(name, sb.toString())
+                if (endpoint.isEmpty()) endpoint = viewModel.getS3Endpoint(s3Prov, region)
+                viewModel.saveS3Config(name, s3Prov, region, endpoint, ak, ask)
             }.setNegativeButton("取消", null).show()
     }
 
@@ -243,25 +217,8 @@ class CloudConfigActivity : AppCompatActivity() {
                 val vendor = vSpin.selectedItem.toString()
                 if (url.isEmpty() || user.isEmpty()) return@setPositiveButton
                 if (!url.startsWith("http")) url = "https://$url"
-                val obscured = try {
-                    RootCommandRunner.run(arrayOf(BackupHookLocal.binPath+"/rclone","obscure",pass)).stdout.trim()
-                } catch (_: Exception) { pass }
-                val sb = StringBuilder()
-                sb.appendLine("url = $url"); sb.appendLine("vendor = $vendor")
-                sb.appendLine("user = $user"); sb.appendLine("pass = $obscured")
-                writeConfig(name, sb.toString())
+                viewModel.saveWebdavConfig(name, url, vendor, user, pass)
             }.setNegativeButton("取消", null).show()
-    }
-
-    private fun writeConfig(name: String, content: String) {
-        Thread {
-            try {
-                rcloneCfgFile.parentFile?.mkdirs()
-                val existing = if (rcloneCfgFile.exists()) rcloneCfgFile.readText()+"\n" else ""
-                rcloneCfgFile.writeText(existing + "[$name]\ntype = ???\n$content")
-                runOnUiThread { buildUI(); android.widget.Toast.makeText(this, "✅ $name 已保存", android.widget.Toast.LENGTH_SHORT).show() }
-            } catch (e: Exception) { runOnUiThread { android.widget.Toast.makeText(this, "❌ ${e.message}", android.widget.Toast.LENGTH_SHORT).show() } }
-        }.start()
     }
 
     private fun cardTitle(text: String) = TextView(this).apply {

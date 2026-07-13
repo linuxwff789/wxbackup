@@ -1,10 +1,8 @@
 package com.nous.wxhook.ui.settings
 
-import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
-import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -13,13 +11,19 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.cardview.widget.CardView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
-import java.io.File
+import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.io.File
 
 // ── Data ──
 sealed class SettingsItem {
@@ -32,14 +36,8 @@ sealed class SettingsItem {
 
 class SettingsActivity : AppCompatActivity() {
 
-    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val viewModel: SettingsViewModel by viewModels()
     private lateinit var recyclerView: RecyclerView
-    private val configFile get() = File(filesDir, "settings_config.json")
-    private val remoteCfgFile get() = File("/sdcard/Download/wxhook_backup/remote_config.json")
-    private val rcloneCfgFile get() = File(filesDir, ".config/rclone/rclone.conf")
-
-    private fun loadConfig(): JSONObject = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
-    private fun saveConfig(o: JSONObject) { configFile.writeText(o.toString()) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,12 +51,20 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(recyclerView)
         com.nous.wxhook.rootbridge.backup.BackupHookLocal.init(this)
         buildItems()
+
+        // Observe ViewModel state for action bar updates
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.uiState.collect { state ->
+                    supportActionBar?.title = state.actionTitle
+                }
+            }
+        }
     }
 
     override fun onSupportNavigateUp(): Boolean { finish(); return true }
 
     private fun buildItems() {
-        val cfg = loadConfig()
         val items = mutableListOf<SettingsItem>()
 
         // ── Cloud sync section ──
@@ -81,7 +87,7 @@ class SettingsActivity : AppCompatActivity() {
             items.add(SettingsItem.Button("$name", "rclone_create::$args"))
         }
 
-        val rcloneConfText = if (rcloneCfgFile.exists()) rcloneCfgFile.readText() else ""
+        val rcloneConfText = viewModel.uiState.value.rcloneConfText
         items.add(SettingsItem.Input("自定义 rclone.conf", "rclone_conf", rcloneConfText, "也可直接粘贴配置"))
         items.add(SettingsItem.Button("保存配置", "save_rclone"))
         items.add(SettingsItem.Button("🔍 测试连接", "test_rclone"))
@@ -94,28 +100,20 @@ class SettingsActivity : AppCompatActivity() {
         items.add(SettingsItem.Button("重建备份状态", "rebuild_state"))
 
         recyclerView.adapter = SettingsAdapter(items, recyclerView) { action, data ->
-            handleAction(action, data, cfg)
+            handleAction(action, data)
         }
     }
 
-    private fun handleAction(action: String, data: Any?, cfg: JSONObject) {
+    private fun handleAction(action: String, data: Any?) {
         when {
             action == "save_rclone" -> {
                 val text = data as? String ?: return
-                rcloneCfgFile.parentFile?.mkdirs()
-                rcloneCfgFile.writeText(text)
-                runOnUiThread { supportActionBar?.title = "设置 ✅ 配置已保存" }
+                viewModel.saveRcloneConf(text)
             }
-            action == "sync_now" -> doSync()
+            action == "sync_now" -> viewModel.doSync()
             action == "rebuild_state" -> {
-                Thread {
-                    val result = runCatching { com.nous.wxhook.rootbridge.backup.BackupHookLocal.rebuildDbState() }
-                        .getOrElse { "重建失败: ${it.message}" }
-                    runOnUiThread {
-                        supportActionBar?.title = "设置 ✅ 重建完成"
-                        android.widget.Toast.makeText(this@SettingsActivity, if (result.startsWith("重建失败")) result else "✅ 重建完成", android.widget.Toast.LENGTH_SHORT).show()
-                    }
-                }.start()
+                viewModel.rebuildState()
+                Toast.makeText(this, "⏳ 重建中...", Toast.LENGTH_SHORT).show()
             }
             action.startsWith("rclone_create::") -> {
                 val argsStr = action.removePrefix("rclone_create::")
@@ -129,74 +127,36 @@ class SettingsActivity : AppCompatActivity() {
                     }
                 }
             }
-            action == "test_rclone" -> {
-                Thread {
-                    runOnUiThread { supportActionBar?.title = "设置 ⏳ 测试连接中..." }
-                    val conf = if (rcloneCfgFile.exists()) rcloneCfgFile.readText() else ""
-                    val remote = conf.lines().firstOrNull { it.startsWith("[") && it != "[rclone]" }
-                        ?.removeSurrounding("[", "]") ?: ""
-                    if (remote.isNotEmpty()) {
-                        val result = BackupHookLocal.testRemoteConnection(remote, rcloneCfgFile.absolutePath)
-                        val short = result.lines().first().take(60)
-                        runOnUiThread {
-                            supportActionBar?.title = "设置 $short"
-                            android.widget.Toast.makeText(this@SettingsActivity, result, android.widget.Toast.LENGTH_LONG).show()
-                        }
-                    } else {
-                        runOnUiThread { supportActionBar?.title = "设置 ⚠️ 请先保存rclone配置" }
-                    }
-                }.start()
-            }
+            action == "test_rclone" -> viewModel.testRcloneConnection()
         }
     }
 
-    private fun doSync() {
-        Thread {
-            val cfg = loadConfig()
-            val enabled = cfg.optBoolean("sync_enabled", false)
-            val remote = cfg.optString("remote_path", "")
-            if (!enabled || remote.isBlank()) {
-                runOnUiThread { supportActionBar?.title = "设置 ⚠️ 未启用或未配置路径" }; return@Thread
-            }
-            runOnUiThread { supportActionBar?.title = "设置 ☁️ 同步中..." }
-            try {
-                val args = mutableListOf(BackupHookLocal.binPath + "/rclone", "sync", "/sdcard/Download/wxhook_backup", remote, "--update")
-                if (rcloneCfgFile.exists()) { args.add("--config"); args.add(rcloneCfgFile.absolutePath) }
-                val syncResult = RootCommandRunner.run(args.toTypedArray(), 120_000)
-                if (!syncResult.isSuccess) { runOnUiThread { supportActionBar?.title = "设置 ❌ 同步失败(exit=${syncResult.exitCode})" }; return@Thread }
-                runOnUiThread { supportActionBar?.title = "设置 ✅ 同步完成" }
-            } catch (e: Exception) {
-                runOnUiThread { supportActionBar?.title = "设置 ❌ 同步失败: ${e.message}" }
-            }
-        }.start()
-    }
-
     private fun showDriveOAuth(name: String) {
-        // TODO: Google Drive OAuth - will implement after confirming build passes
+        viewModel.createDriveConfig(name)
     }
 
     private fun showS3Dialog(name: String) {
         val ctx = this
-        val col = android.widget.LinearLayout(ctx).apply {
-            orientation = android.widget.LinearLayout.VERTICAL; setPadding(40, 16, 40, 16)
+        val col = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(40, 16, 40, 16)
         }
         val provLabels = listOf("AWS S3","Cloudflare R2","MinIO","阿里云OSS","腾讯COS","华为OBS","DigitalOcean","Wasabi","其他")
         val provVals = listOf("AWS","Cloudflare","Minio","Alibaba","TencentCOS","HuaweiOBS","DigitalOcean","Wasabi","Other")
-        col.addView(android.widget.TextView(ctx).apply { text = "服务商"; textSize = 13f })
+        col.addView(TextView(ctx).apply { text = "服务商"; textSize = 13f })
         val pSpin = android.widget.Spinner(ctx)
         pSpin.adapter = android.widget.ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, provLabels)
         col.addView(pSpin)
-        val ek = android.widget.EditText(ctx).apply { hint = "Access Key ID"; textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
-        val sk = android.widget.EditText(ctx).apply { hint = "Secret Access Key"; textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
-        col.addView(android.widget.TextView(ctx).apply { text = "Access Key ID"; textSize = 13f }); col.addView(ek)
-        col.addView(android.widget.TextView(ctx).apply { text = "Secret Access Key"; textSize = 13f }); col.addView(sk)
+        val ek = EditText(ctx).apply { hint = "Access Key ID"; textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
+        val sk = EditText(ctx).apply { hint = "Secret Access Key"; textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
+        col.addView(TextView(ctx).apply { text = "Access Key ID"; textSize = 13f }); col.addView(ek)
+        col.addView(TextView(ctx).apply { text = "Secret Access Key"; textSize = 13f }); col.addView(sk)
         val allRegions = listOf("us-east-1","us-east-2","us-west-1","us-west-2","eu-west-1","eu-central-1","ap-northeast-1","ap-southeast-1","cn-north-1","oss-cn-hangzhou","oss-cn-beijing","ap-beijing","ap-guangzhou","auto","")
-        col.addView(android.widget.TextView(ctx).apply { text = "区域"; textSize = 13f })
+        col.addView(TextView(ctx).apply { text = "区域"; textSize = 13f })
         val rSpin = android.widget.Spinner(ctx)
         rSpin.adapter = android.widget.ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, allRegions)
         col.addView(rSpin)
-        col.addView(android.widget.TextView(ctx).apply { text = "Endpoint（留空自动填充）"; textSize = 13f })
-        val ep = android.widget.EditText(ctx).apply { hint = "留空自动填充"; textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
+        col.addView(TextView(ctx).apply { text = "Endpoint（留空自动填充）"; textSize = 13f })
+        val ep = EditText(ctx).apply { hint = "留空自动填充"; textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
         col.addView(ep)
         android.app.AlertDialog.Builder(ctx).setTitle("S3 对象存储").setView(col)
             .setPositiveButton("保存") { _, _ ->
@@ -205,47 +165,28 @@ class SettingsActivity : AppCompatActivity() {
                 var endpoint = ep.text.toString().trim()
                 val ak = ek.text.toString().trim(); val ask = sk.text.toString().trim()
                 if (ak.isEmpty() || ask.isEmpty()) return@setPositiveButton
-                if (endpoint.isEmpty()) {
-                    val epMap = mapOf("AWS" to "s3.$region.amazonaws.com", "Cloudflare" to "https://$region.r2.cloudflarestorage.com",
-                        "Minio" to "http://127.0.0.1:9000", "Alibaba" to "oss-$region.aliyuncs.com",
-                        "TencentCOS" to "cos.$region.myqcloud.com", "HuaweiOBS" to "obs.$region.myhuaweicloud.com",
-                        "DigitalOcean" to "$region.digitaloceanspaces.com", "Wasabi" to "s3.$region.wasabisys.com")
-                    endpoint = epMap[s3n] ?: ""
-                }
-                val sb = StringBuilder()
-                sb.appendLine("[$name]"); sb.appendLine("type = s3"); sb.appendLine("provider = $s3n")
-                sb.appendLine("access_key_id = $ak"); sb.appendLine("secret_access_key = $ask")
-                sb.appendLine("region = $region")
-                if (endpoint.isNotEmpty()) sb.appendLine("endpoint = $endpoint")
-                sb.appendLine("acl = private")
-                Thread {
-                    try {
-                        rcloneCfgFile.parentFile?.mkdirs()
-                        val existing = if (rcloneCfgFile.exists()) rcloneCfgFile.readText()+"\n" else ""
-                        rcloneCfgFile.writeText(existing+sb.toString())
-                        runOnUiThread { supportActionBar?.title = "设置 ✅ S3 已保存"; buildItems() }
-                    } catch (e: Exception) { runOnUiThread { supportActionBar?.title = "设置 ❌ ${e.message}" } }
-                }.start()
+                if (endpoint.isEmpty()) endpoint = viewModel.getS3Endpoint(s3n, region)
+                viewModel.saveS3Config(name, s3n, region, endpoint, ak, ask)
             }.setNegativeButton("取消", null).show()
     }
 
     private fun showWebdavDialog(name: String) {
         val ctx = this
-        val col = android.widget.LinearLayout(ctx).apply {
-            orientation = android.widget.LinearLayout.VERTICAL; setPadding(40, 16, 40, 16)
+        val col = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(40, 16, 40, 16)
         }
-        col.addView(android.widget.TextView(ctx).apply { text = "服务类型"; textSize = 13f })
+        col.addView(TextView(ctx).apply { text = "服务类型"; textSize = 13f })
         val vSpin = android.widget.Spinner(ctx)
         vSpin.adapter = android.widget.ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, listOf("nextcloud","owncloud","sharepoint","fastmail","other"))
         col.addView(vSpin)
-        col.addView(android.widget.TextView(ctx).apply { text = "WebDAV 地址"; textSize = 13f })
-        val urlEt = android.widget.EditText(ctx).apply { hint = "https://example.com/remote.php/dav/files/user"; textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
+        col.addView(TextView(ctx).apply { text = "WebDAV 地址"; textSize = 13f })
+        val urlEt = EditText(ctx).apply { hint = "https://example.com/remote.php/dav/files/user"; textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
         col.addView(urlEt)
-        col.addView(android.widget.TextView(ctx).apply { text = "用户名"; textSize = 13f })
-        val userEt = android.widget.EditText(ctx).apply { textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
+        col.addView(TextView(ctx).apply { text = "用户名"; textSize = 13f })
+        val userEt = EditText(ctx).apply { textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
         col.addView(userEt)
-        col.addView(android.widget.TextView(ctx).apply { text = "密码"; textSize = 13f })
-        val passEt = android.widget.EditText(ctx).apply { textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
+        col.addView(TextView(ctx).apply { text = "密码"; textSize = 13f })
+        val passEt = EditText(ctx).apply { textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
         col.addView(passEt)
         android.app.AlertDialog.Builder(ctx).setTitle("WebDAV").setView(col)
             .setPositiveButton("保存") { _, _ ->
@@ -254,20 +195,7 @@ class SettingsActivity : AppCompatActivity() {
                 val vendor = vSpin.selectedItem.toString()
                 if (url.isEmpty() || user.isEmpty()) return@setPositiveButton
                 if (!url.startsWith("http")) url = "https://$url"
-                val obscured = try {
-                    RootCommandRunner.run(arrayOf(BackupHookLocal.binPath+"/rclone","obscure",pass)).stdout.trim()
-                } catch (_: Exception) { pass }
-                val sb = StringBuilder()
-                sb.appendLine("[$name]"); sb.appendLine("type = webdav"); sb.appendLine("url = $url")
-                sb.appendLine("vendor = $vendor"); sb.appendLine("user = $user"); sb.appendLine("pass = $obscured")
-                Thread {
-                    try {
-                        rcloneCfgFile.parentFile?.mkdirs()
-                        val existing = if (rcloneCfgFile.exists()) rcloneCfgFile.readText()+"\n" else ""
-                        rcloneCfgFile.writeText(existing+sb.toString())
-                        runOnUiThread { supportActionBar?.title = "设置 ✅ WebDAV 已保存"; buildItems() }
-                    } catch (e: Exception) { runOnUiThread { supportActionBar?.title = "设置 ❌ ${e.message}" } }
-                }.start()
+                viewModel.saveWebdavConfig(name, url, vendor, user, pass)
             }.setNegativeButton("取消", null).show()
     }
 }
@@ -449,4 +377,3 @@ class SettingsAdapter(
         }
     }
 }
-

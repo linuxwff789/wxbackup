@@ -2,6 +2,7 @@ package com.nous.wxhook.service
 
 import org.json.JSONArray
 import org.json.JSONObject
+import com.nous.wxhook.root.RootGateways
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -50,7 +51,7 @@ object BackupPackage {
         val pkgDir = "$tmpDir/package"
         try {
             // Create package directory structure
-            com.nous.wxhook.rootbridge.RootCommandRunner.runSu(
+            RootGateways.gateway.run(
                 "mkdir -p $pkgDir/db $pkgDir/state && chmod 755 $tmpDir $pkgDir $pkgDir/db $pkgDir/state",
                 10_000
             )
@@ -63,14 +64,14 @@ object BackupPackage {
                     name.startsWith("backup_") || name.startsWith("db_") -> "state"
                     else -> "state"
                 }
-                com.nous.wxhook.rootbridge.RootCommandRunner.runSu(
+                RootGateways.gateway.run(
                     "cp \"$f\" $pkgDir/$targetDir/ && chmod 644 $pkgDir/$targetDir/$name",
                     30_000
                 )
                 if (targetDir == "db") hasDb = true
             }
             // Compute total size
-            val sizeRaw = com.nous.wxhook.rootbridge.RootCommandRunner.runSuQuiet(
+            val sizeRaw = RootGateways.gateway.runQuiet(
                 "du -sb $pkgDir 2>/dev/null | cut -f1"
             ).trim()
             val totalSize = sizeRaw.toLongOrNull() ?: 0L
@@ -89,21 +90,21 @@ object BackupPackage {
                 put("files", JSONArray(sourceFiles.map { File(it).name }))
             }
             val manifestStr = manifest.toString(2)
-            com.nous.wxhook.rootbridge.RootCommandRunner.runSu(
+            RootGateways.gateway.run(
                 "printf '%s' '${android.util.Base64.encodeToString(manifestStr.toByteArray(), android.util.Base64.NO_WRAP)}' | base64 -d > $pkgDir/manifest.json && chmod 644 $pkgDir/manifest.json",
                 10_000
             )
             // Package into tar.gz
-            com.nous.wxhook.rootbridge.RootCommandRunner.runSu(
+            RootGateways.gateway.run(
                 "cd $tmpDir && tar czf \"$outputPath\" package/ 2>/dev/null",
                 60_000
             )
             // Verify
-            val exists = com.nous.wxhook.rootbridge.RootCommandRunner.runSuQuiet(
+            val exists = RootGateways.gateway.runQuiet(
                 "stat -c %s \"$outputPath\" 2>/dev/null"
             ).trim().toLongOrNull() ?: 0L
             // Cleanup tmp
-            com.nous.wxhook.rootbridge.RootCommandRunner.runSu("rm -rf $tmpDir", 10_000)
+            RootGateways.gateway.run("rm -rf $tmpDir", 10_000)
             if (exists < 100L) return null
             return PackageInfo(
                 tag = tag,
@@ -116,7 +117,7 @@ object BackupPackage {
                 manifestJson = manifestStr
             )
         } catch (_: Exception) {
-            com.nous.wxhook.rootbridge.RootCommandRunner.runSu("rm -rf $tmpDir", 10_000)
+            RootGateways.gateway.run("rm -rf $tmpDir", 10_000)
             return null
         }
     }
@@ -126,7 +127,7 @@ object BackupPackage {
      */
     fun extract(packagePath: String, extractDir: String): Boolean {
         return try {
-            com.nous.wxhook.rootbridge.RootCommandRunner.runSu(
+            RootGateways.gateway.run(
                 "mkdir -p \"$extractDir\" && tar xzf \"$packagePath\" -C \"$extractDir\" 2>/dev/null",
                 60_000
             ).ok

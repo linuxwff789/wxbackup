@@ -1,7 +1,7 @@
 package com.nous.wxhook.backup
 
 import android.util.Log
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.storage.WxHookPaths
 import org.json.JSONArray
 import org.json.JSONObject
@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Orchestrates the full backup flow: stop → resolve → archive → verify → record.
- * All su commands go through RootCommandRunner.
+ * All su commands go through RootGateways.
  */
 object BackupOrchestrator {
 
@@ -63,7 +63,7 @@ object BackupOrchestrator {
 
                 // Save DB state
                 val maxRowId = runCatching {
-                    val result = RootCommandRunner.runSu(
+                    val result = RootGateways.run(
                         "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6' " +
                         "/data/local/sqlcipher /sdcard/Download/wxhook_backup/tmp/wxhook_dec.db " +
                         "-cmd 'PRAGMA key = \"e9cd2ae\";' -cmd 'PRAGMA cipher_compatibility=3;' " +
@@ -272,20 +272,20 @@ object BackupOrchestrator {
         val g = BackupEnv.binDir + "/git"
         val ld = "LD_LIBRARY_PATH=${BackupEnv.binDir}"
         val env = "HOME=/data/local/tmp $ld $g -C \"${BackupEnv.backupDir}\""
-        val init = RootCommandRunner.runSu("$env init", 30_000)
+        val init = RootGateways.run("$env init", 30_000)
         if (!init.isSuccess) return ""
-        val identity = RootCommandRunner.runSu(
+        val identity = RootGateways.run(
             "$env config user.name wxhook && $env config user.email wxhook@localhost",
             30_000
         )
         if (!identity.isSuccess) return ""
-        val add = RootCommandRunner.runSu("$env add -A", 120_000)
+        val add = RootGateways.run("$env add -A", 120_000)
         if (!add.isSuccess) return ""
-        val commit = RootCommandRunner.runSu(
+        val commit = RootGateways.run(
             "$env commit -m \"$tag\" --allow-empty", 120_000
         )
         if (!commit.isSuccess) return ""
-        val head = RootCommandRunner.runSu("$env rev-parse --verify HEAD", 30_000)
+        val head = RootGateways.run("$env rev-parse --verify HEAD", 30_000)
         return if (head.isSuccess) head.stdout.trim().take(12) else ""
     }
 
@@ -331,7 +331,7 @@ object BackupOrchestrator {
                 args.add("--config"); args.add(BackupEnv.rcloneConfigPath)
             }
             val cmdStr = "$env ${args.joinToString(" ")}"
-            val uploadResult = RootCommandRunner.runSu(cmdStr, 120_000)
+            val uploadResult = RootGateways.run(cmdStr, 120_000)
             if (!uploadResult.isSuccess) {
                 val errMsg = if (uploadResult.stderr.contains("timeout") || uploadResult.stdout.contains("timeout"))
                     "同步超时" else "同步失败(exit=${uploadResult.exitCode})"
@@ -354,7 +354,7 @@ object BackupOrchestrator {
         val cfgFlag = if (cfgPath.isNotEmpty() && File(cfgPath).exists())
             " --config \"$cfgPath\"" else ""
         val result = try {
-            RootCommandRunner.runSu(
+            RootGateways.run(
                 "$env ${BackupEnv.binDir}/rclone lsd \"$remote:\"$cfgFlag --no-check-certificate --timeout=15s 2>&1",
                 20_000
             )
@@ -385,7 +385,7 @@ object BackupOrchestrator {
         val results = mutableListOf<String>()
         val rebuiltRecords = JSONArray()
         return try {
-            val usersOutput = RootCommandRunner.runSuQuiet(
+            val usersOutput = RootGateways.runQuiet(
                 "find ${BackupEnv.backupDir} -mindepth 1 -maxdepth 1 -type d | " +
                 "grep -v '/\\\\.' | grep -v '/tmp$' | grep -v '/.git$'"
             )
@@ -400,7 +400,7 @@ object BackupOrchestrator {
                 val previousRowId = previousState.optLong("lastMessageRowId", 0L)
 
                 // List files in user dir
-                val filesOutput = RootCommandRunner.runSuQuiet(
+                val filesOutput = RootGateways.runQuiet(
                     "find \"$userPath\" -maxdepth 1 -type f"
                 )
                 val files = filesOutput.lines().filter { it.isNotBlank() }.map { File(it) }
@@ -438,7 +438,7 @@ object BackupOrchestrator {
                     val dec = if (lastFile.name.endsWith(".zst"))
                         "${BackupEnv.binDir}/zstd -dc" else "gzip -dc"
                     try {
-                        val pResult = RootCommandRunner.runSu(
+                        val pResult = RootGateways.run(
                             "$dec \"${lastFile.absolutePath}\" 2>/dev/null | tail -1 | cut -d'(' -f2 | cut -d',' -f1",
                             30_000
                         )
@@ -469,7 +469,7 @@ object BackupOrchestrator {
                     val dec = if (baseline.name.endsWith(".zst"))
                         "${BackupEnv.binDir}/zstd -dc" else "gzip -dc"
                     try {
-                        val pResult = RootCommandRunner.runSu(
+                        val pResult = RootGateways.run(
                             "$dec \"${baseline.absolutePath}\" 2>/dev/null | tail -1 | cut -d'(' -f2 | cut -d',' -f1",
                             30_000
                         )
@@ -480,7 +480,7 @@ object BackupOrchestrator {
 
                 // Git commit hash
                 try {
-                    val pResult = RootCommandRunner.runSu(
+                    val pResult = RootGateways.run(
                         "HOME=/data/local/tmp LD_LIBRARY_PATH=${BackupEnv.binDir} $g -C ${BackupEnv.backupDir} rev-parse HEAD",
                         30_000
                     )
@@ -491,7 +491,7 @@ object BackupOrchestrator {
                 // Write state to user dir
                 val tmpState = File(BackupEnv.filesDirForWrite(), "db_state_${userDir.name}.json")
                 tmpState.writeText(state.toString())
-                RootCommandRunner.runSu(
+                RootGateways.run(
                     "cp \"${tmpState.absolutePath}\" \"${File(userDir, DB_STATE_FILE).absolutePath}\" && chmod 664 \"${File(userDir, DB_STATE_FILE).absolutePath}\"",
                     10_000
                 )
@@ -507,7 +507,7 @@ object BackupOrchestrator {
             for (rec in sorted) outArr.put(rec)
             val tmpRecords = File(BackupEnv.filesDirForWrite(), WxHookPaths.RECORDS_FILE)
             tmpRecords.writeText(outArr.toString())
-            RootCommandRunner.runSu(
+            RootGateways.run(
                 "cp \"${tmpRecords.absolutePath}\" \"${File(BackupEnv.backupDir, WxHookPaths.RECORDS_FILE).absolutePath}\" && chmod 664 \"${File(BackupEnv.backupDir, WxHookPaths.RECORDS_FILE).absolutePath}\"",
                 10_000
             )

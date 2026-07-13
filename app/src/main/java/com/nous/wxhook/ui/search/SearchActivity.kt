@@ -9,7 +9,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.util.Log
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import java.io.*
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -36,7 +36,7 @@ class SearchActivity : Activity() {
         setContentView(scrollView)
     }
 
-    private fun su(cmd: String): String = RootCommandRunner.runSuQuiet(cmd)
+    private fun su(cmd: String): String = RootGateways.gateway.runQuiet(cmd)
 
     private fun performSearch() {
         val keyword = searchText.text.toString().trim()

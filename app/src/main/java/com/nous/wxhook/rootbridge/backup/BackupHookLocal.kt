@@ -4,7 +4,7 @@ import com.nous.wxhook.backup.ArchiveService
 import com.nous.wxhook.backup.BackupEnv
 import com.nous.wxhook.backup.BackupManifest
 import com.nous.wxhook.backup.BackupOrchestrator
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.storage.WxHookPaths
 import java.io.File
 
@@ -30,12 +30,12 @@ object BackupHookLocal {
         try { File(WxHookPaths.BACKUP_DIR).mkdirs() } catch (_: Exception) {}
         try { File("${WxHookPaths.BACKUP_DIR}/tmp").mkdirs() } catch (_: Exception) {}
         // Prevent Android MediaStore from scanning backup images
-        RootCommandRunner.runSu(
+        RootGateways.gateway.run(
             "touch ${WxHookPaths.BACKUP_DIR}/.nomedia && chmod 644 ${WxHookPaths.BACKUP_DIR}/.nomedia",
             10_000
         )
         // Fix DNS for rclone (Go resolver needs /etc/resolv.conf)
-        RootCommandRunner.runSu(
+        RootGateways.gateway.run(
             "mkdir -p /data/local/tmp/etc && echo 'nameserver 8.8.8.8' > /data/local/tmp/etc/resolv.conf && " +
             "mount --bind /data/local/tmp/etc /etc 2>/dev/null; " +
             "echo 'nameserver 8.8.4.4' >> /etc/resolv.conf 2>/dev/null",
