@@ -17,10 +17,21 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file("../release.keystore")
-            storePassword = "wxhook123"
-            keyAlias = "wxhook"
-            keyPassword = "wxhook123"
+            val ciKeystoreB64 = System.getenv("KEYSTORE_BASE64")
+            if (ciKeystoreB64 != null) {
+                val tmpFile = java.io.File.createTempFile("release", ".keystore")
+                tmpFile.deleteOnExit()
+                tmpFile.writeBytes(java.util.Base64.getDecoder().decode(ciKeystoreB64))
+                storeFile = tmpFile
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
+                keyAlias = System.getenv("KEY_ALIAS") ?: ""
+                keyPassword = System.getenv("KEY_PASSWORD") ?: ""
+            } else {
+                storeFile = file("../release.keystore")
+                storePassword = "wxhook123"
+                keyAlias = "wxhook"
+                keyPassword = "wxhook123"
+            }
         }
     }
     buildTypes {

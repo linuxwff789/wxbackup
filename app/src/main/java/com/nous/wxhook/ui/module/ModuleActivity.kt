@@ -21,7 +21,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.nous.wxhook.db.BackupManager
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 
 class ModuleActivity : AppCompatActivity() {
 

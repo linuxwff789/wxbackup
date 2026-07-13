@@ -1,7 +1,6 @@
 package com.nous.wxhook.ui.module
 
 import android.app.Application
-import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nous.wxhook.db.BackupManager

@@ -5,7 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
-import com.nous.wxhook.service.SyncService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
