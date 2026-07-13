@@ -69,6 +69,11 @@
             android:exported="true" />
 
         <service
+            android:name=".root.libsu.WxRootService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" />
+
+        <service
             android:name=".service.DecryptService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />

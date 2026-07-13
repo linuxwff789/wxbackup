@@ -81,6 +81,10 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
+    // libsu - root shell management
+    implementation("com.github.topjohnwu.libsu:core:6.0.0")
+    implementation("com.github.topjohnwu.libsu:service:6.0.0")
+
     // SQLCipher for WeChat DB decryption
     // TODO: find correct Maven coordinates or add custom repository
     // implementation("net.zetetic:android-database-sqlcipher:4.5.6")
