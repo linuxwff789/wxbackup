@@ -29,15 +29,13 @@
         </activity>
         <activity android:name=".ui.module.ModuleActivity" android:exported="true" />
         <activity android:name=".ui.settings.SettingsActivity" android:exported="true" />
-
         <activity android:name=".ui.status.StatusActivity" android:exported="true" />
         <activity android:name=".ui.cloud.CloudConfigActivity" android:exported="true" />
-        <activity android:name=".ui.chatlist.ChatListActivity" />
-        <activity android:name=".ui.chatdetail.ChatDetailActivity" />
-        <activity android:name=".ui.search.SearchActivity" />
-        <activity android:name=".ui.backup.BackupActivity" />
-        <activity android:name=".ui.merge.MergeActivity" />
-        <activity android:name=".ui.settings.SettingsActivity" android:exported="true" />
+        <activity android:name=".ui.chatlist.ChatListActivity" android:exported="false" />
+        <activity android:name=".ui.chatdetail.ChatDetailActivity" android:exported="false" />
+        <activity android:name=".ui.search.SearchActivity" android:exported="false" />
+        <activity android:name=".ui.backup.BackupActivity" android:exported="false" />
+        <activity android:name=".ui.merge.MergeActivity" android:exported="false" />
 
         <receiver
             android:name=".receiver.MessageReceiver"
