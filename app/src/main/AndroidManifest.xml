@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-permission android:name="android.permission.ACCESS_SUPERUSER" />
+    <application
+        android:name=".App"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".ui.module.ModuleActivity" android:exported="true" />
+        <activity android:name=".ui.settings.SettingsActivity" android:exported="true" />
+
+        <activity android:name=".ui.status.StatusActivity" android:exported="true" />
+        <activity android:name=".ui.cloud.CloudConfigActivity" android:exported="true" />
+        <activity android:name=".ui.chatlist.ChatListActivity" />
+        <activity android:name=".ui.chatdetail.ChatDetailActivity" />
+        <activity android:name=".ui.search.SearchActivity" />
+        <activity android:name=".ui.backup.BackupActivity" />
+        <activity android:name=".ui.merge.MergeActivity" />
+        <activity android:name=".ui.settings.SettingsActivity" android:exported="true" />
+
+        <receiver
+            android:name=".receiver.MessageReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.nous.wxhook.MESSAGE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".receiver.KeyReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.nous.wxhook.KEY_CAPTURED" />
+            </intent-filter>
+        </receiver>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <provider
+            android:name=".db.WxHookProvider"
+            android:authorities="com.nous.wxhook.provider"
+            android:exported="true" />
+
+        <service
+            android:name=".service.DecryptService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".service.BackupService"
+            android:exported="false" />
+        <service
+            android:name=".service.SyncService"
+            android:exported="false" />
+        <activity android:name=".ui.viewer.ImageViewerActivity" android:exported="false" />
+        <service
+            android:name=".ui.module.ModuleTileService"
+            android:exported="true"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+    </application>
+
+</manifest>

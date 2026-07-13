@@ -1,0 +1,46 @@
+name: Compile Native Binaries
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Compile rclone for Android
+        run: |
+          mkdir -p dist
+          cd /tmp
+          curl -sL https://github.com/rclone/rclone/archive/refs/tags/v1.69.2.tar.gz | tar xz
+          cd rclone-1.69.2
+          GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o rclone
+          cp rclone $GITHUB_WORKSPACE/dist/rclone
+
+      - name: Compile zstd for Android
+        run: |
+          cd /tmp
+          curl -sL https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz | tar xz
+          cd zstd-1.5.6
+          make zstd-release -j$(nproc) CC="gcc -O2"
+          cp programs/zstd $GITHUB_WORKSPACE/dist/zstd
+
+      - name: Upload Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: native-binaries
+          name: "Pre-compiled native binaries"
+          artifacts: "dist/rclone,dist/zstd"
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: true
+          removeArtifacts: true
+          body: "rclone v1.69.2 + zstd v1.5.6 for Android arm64"

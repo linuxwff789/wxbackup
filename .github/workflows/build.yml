@@ -1,0 +1,67 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      
+      - name: Setup Android SDK
+        run: |
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
+          yes | sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+      
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Download native binaries
+        run: |
+          mkdir -p app/src/main/assets/bin
+          curl -sL "https://github.com/linuxwff789/wxhook/releases/download/native-binaries/rclone" -o app/src/main/assets/bin/rclone
+          curl -sL "https://github.com/linuxwff789/wxhook/releases/download/native-binaries/zstd" -o app/src/main/assets/bin/zstd
+          chmod +x app/src/main/assets/bin/rclone app/src/main/assets/bin/zstd
+          ls -lh app/src/main/assets/bin/
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+      
+      - name: Build with Gradle
+        run: ./gradlew assembleDebug
+      
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wxhook-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload Xposed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wxhook-xposed-debug
+          path: xposed/build/outputs/apk/debug/xposed-debug.apk
+
+      - name: Publish to Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: nightly
+          name: "wxhook nightly build"
+          artifacts: "app/build/outputs/apk/debug/app-debug.apk,xposed/build/outputs/apk/debug/xposed-debug.apk"
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: true
+          removeArtifacts: true
+          body: "自动构建 ${{ github.run_number }} - ${{ github.sha }}"

@@ -1,0 +1,24 @@
+# Android / Gradle
+*.iml
+.gradle/
+/local.properties
+/.idea/
+/build/
+/app/build/
+/captures
+.externalNativeBuild/
+.cxx/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Gradle wrapper (build on remote WSL2, not local)
+gradlew
+gradlew.bat
+
+# Keys / secrets
+*.jks
+*.keystore
+keystore.properties
+app/src/main/assets/bin/rclone
