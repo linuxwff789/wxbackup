@@ -3,6 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+import java.io.File
+import java.util.Base64
+
 android {
     namespace = "com.nous.wxhook.xposed"
     compileSdk = 35
