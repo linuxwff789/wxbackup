@@ -70,22 +70,22 @@ object ArchiveService {
         val gzFile = "$tmpDir/EnMicroMsg_baseline" + BackupEnv.ext()
         return try {
             val pwd = getDbPassword()
+            val sqlScript = "/data/local/tmp/decrypt_full.sql"
+            val scriptContent = "PRAGMA key = '$pwd';\n" +
+                "PRAGMA cipher_compatibility = 3;\n" +
+                "PRAGMA cipher_page_size = 1024;\n" +
+                "PRAGMA kdf_iter = 4000;\n" +
+                "PRAGMA cipher_use_hmac = OFF;\n" +
+                ".output stdout\n" +
+                ".mode insert\n" +
+                "SELECT * FROM message;\n"
             val script = "#!/system/bin/sh\n" +
                 "mkdir -p $tmpDir\n" +
                 "cp \"$dbPath\" $tmpDir/wxhook_dec.db 2>/dev/null\n" +
+                "printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript\n" +
                 "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6' " +
-                "${BackupEnv.binDir}/sqlcipher $tmpDir/wxhook_dec.db -batch " +
-                "-cmd '.output /dev/null' " +
-                "-cmd 'PRAGMA key = \"$pwd\";' " +
-                "-cmd 'PRAGMA cipher_compatibility = 3;' " +
-                "-cmd 'PRAGMA cipher_page_size = 1024;' " +
-                "-cmd 'PRAGMA kdf_iter = 4000;' " +
-                "-cmd 'PRAGMA cipher_use_hmac = OFF;' " +
-                "-cmd '.output stdout' " +
-                "-cmd '.mode insert' " +
-                "-cmd 'SELECT * FROM message;' " +
-                "2>/dev/null | " +
-                (if (BackupEnv.useZstd()) "${BackupEnv.binDir}/zstd -c -3" else "gzip -c") +
+                "${BackupEnv.binDir}/sqlcipher $tmpDir/wxhook_dec.db < $sqlScript " +
+                (if (BackupEnv.useZstd()) "2>/dev/null | ${BackupEnv.binDir}/zstd -c -3" else "2>/dev/null | gzip -c") +
                 " > $gzFile 2>/dev/null\n"
             val b64 = Base64.encodeToString(
                 script.toByteArray(Charsets.UTF_8), Base64.NO_WRAP
@@ -132,18 +132,19 @@ object ArchiveService {
             if (copiedSize < 1_000_000L) return ""
 
             // Run SQLCipher to extract incremental SQL
+            // Write SQL commands to a script file first, then pipe to sqlcipher
+            val sqlScript = "$workDir/incr_query.sql"
+            val scriptContent = "PRAGMA key = '$pwd';\n" +
+                "PRAGMA cipher_compatibility = 3;\n" +
+                "PRAGMA cipher_page_size = 1024;\n" +
+                "PRAGMA kdf_iter = 4000;\n" +
+                "PRAGMA cipher_use_hmac = OFF;\n" +
+                ".output stdout\n" +
+                ".mode insert\n" +
+                "SELECT * FROM message WHERE rowid > $lastRowId;\n"
+            RootGateways.runQuiet("printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript")
             val sqlCmd = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6' " +
-                "${BackupEnv.binDir}/sqlcipher \"$workDb\" -batch " +
-                "-cmd '.output /dev/null' " +
-                "-cmd 'PRAGMA key = \"$pwd\";' " +
-                "-cmd 'PRAGMA cipher_compatibility = 3;' " +
-                "-cmd 'PRAGMA cipher_page_size = 1024;' " +
-                "-cmd 'PRAGMA kdf_iter = 4000;' " +
-                "-cmd 'PRAGMA cipher_use_hmac = OFF;' " +
-                "-cmd '.output stdout' " +
-                "-cmd '.mode insert' " +
-                "-cmd 'SELECT * FROM message WHERE rowid > $lastRowId;' " +
-                "> \"$workSql\" 2>/dev/null"
+                "${BackupEnv.binDir}/sqlcipher \"$workDb\" < $sqlScript > \"$workSql\" 2>/dev/null"
             val queryResult = RootGateways.run(sqlCmd, 300_000)
             if (!queryResult.isSuccess) {
                 RootGateways.run(cleanupWork, 10_000)
