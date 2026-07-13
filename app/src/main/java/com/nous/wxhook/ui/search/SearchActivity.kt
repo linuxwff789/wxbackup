@@ -36,7 +36,7 @@ class SearchActivity : Activity() {
         setContentView(scrollView)
     }
 
-    private fun su(cmd: String): String = RootGateways.gateway.runQuiet(cmd)
+    private fun su(cmd: String): String = RootGateways.runQuiet(cmd)
 
     private fun performSearch() {
         val keyword = searchText.text.toString().trim()

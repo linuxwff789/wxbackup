@@ -51,7 +51,7 @@ object BackupPackage {
         val pkgDir = "$tmpDir/package"
         try {
             // Create package directory structure
-            RootGateways.gateway.run(
+            RootGateways.run(
                 "mkdir -p $pkgDir/db $pkgDir/state && chmod 755 $tmpDir $pkgDir $pkgDir/db $pkgDir/state",
                 10_000
             )
@@ -64,14 +64,14 @@ object BackupPackage {
                     name.startsWith("backup_") || name.startsWith("db_") -> "state"
                     else -> "state"
                 }
-                RootGateways.gateway.run(
+                RootGateways.run(
                     "cp \"$f\" $pkgDir/$targetDir/ && chmod 644 $pkgDir/$targetDir/$name",
                     30_000
                 )
                 if (targetDir == "db") hasDb = true
             }
             // Compute total size
-            val sizeRaw = RootGateways.gateway.runQuiet(
+            val sizeRaw = RootGateways.runQuiet(
                 "du -sb $pkgDir 2>/dev/null | cut -f1"
             ).trim()
             val totalSize = sizeRaw.toLongOrNull() ?: 0L
@@ -90,21 +90,21 @@ object BackupPackage {
                 put("files", JSONArray(sourceFiles.map { File(it).name }))
             }
             val manifestStr = manifest.toString(2)
-            RootGateways.gateway.run(
+            RootGateways.run(
                 "printf '%s' '${android.util.Base64.encodeToString(manifestStr.toByteArray(), android.util.Base64.NO_WRAP)}' | base64 -d > $pkgDir/manifest.json && chmod 644 $pkgDir/manifest.json",
                 10_000
             )
             // Package into tar.gz
-            RootGateways.gateway.run(
+            RootGateways.run(
                 "cd $tmpDir && tar czf \"$outputPath\" package/ 2>/dev/null",
                 60_000
             )
             // Verify
-            val exists = RootGateways.gateway.runQuiet(
+            val exists = RootGateways.runQuiet(
                 "stat -c %s \"$outputPath\" 2>/dev/null"
             ).trim().toLongOrNull() ?: 0L
             // Cleanup tmp
-            RootGateways.gateway.run("rm -rf $tmpDir", 10_000)
+            RootGateways.run("rm -rf $tmpDir", 10_000)
             if (exists < 100L) return null
             return PackageInfo(
                 tag = tag,
@@ -117,7 +117,7 @@ object BackupPackage {
                 manifestJson = manifestStr
             )
         } catch (_: Exception) {
-            RootGateways.gateway.run("rm -rf $tmpDir", 10_000)
+            RootGateways.run("rm -rf $tmpDir", 10_000)
             return null
         }
     }
@@ -127,7 +127,7 @@ object BackupPackage {
      */
     fun extract(packagePath: String, extractDir: String): Boolean {
         return try {
-            RootGateways.gateway.run(
+            RootGateways.run(
                 "mkdir -p \"$extractDir\" && tar xzf \"$packagePath\" -C \"$extractDir\" 2>/dev/null",
                 60_000
             ).ok

@@ -30,12 +30,12 @@ object BackupHookLocal {
         try { File(WxHookPaths.BACKUP_DIR).mkdirs() } catch (_: Exception) {}
         try { File("${WxHookPaths.BACKUP_DIR}/tmp").mkdirs() } catch (_: Exception) {}
         // Prevent Android MediaStore from scanning backup images
-        RootGateways.gateway.run(
+        RootGateways.run(
             "touch ${WxHookPaths.BACKUP_DIR}/.nomedia && chmod 644 ${WxHookPaths.BACKUP_DIR}/.nomedia",
             10_000
         )
         // Fix DNS for rclone (Go resolver needs /etc/resolv.conf)
-        RootGateways.gateway.run(
+        RootGateways.run(
             "mkdir -p /data/local/tmp/etc && echo 'nameserver 8.8.8.8' > /data/local/tmp/etc/resolv.conf && " +
             "mount --bind /data/local/tmp/etc /etc 2>/dev/null; " +
             "echo 'nameserver 8.8.4.4' >> /etc/resolv.conf 2>/dev/null",

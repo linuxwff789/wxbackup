@@ -86,7 +86,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     "/sdcard/Download/wxhook_backup", remote, "--update"
                 )
                 if (rcloneCfgFile.exists()) { args.add("--config"); args.add(rcloneCfgFile.absolutePath) }
-                val syncResult = RootGateways.gateway.run(args.joinToString(" "), 120_000)
+                val syncResult = RootGateways.run(args.joinToString(" "), 120_000)
                 if (!syncResult.isSuccess) {
                     withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ❌ 同步失败(exit=${syncResult.exitCode})") }
                     return@launch
@@ -150,7 +150,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val obscured = try {
-                    RootGateways.gateway.run(arrayOf(BackupHookLocal.binPath + "/rclone", "obscure", pass).joinToString(" ")).stdout.trim()
+                    RootGateways.run(arrayOf(BackupHookLocal.binPath + "/rclone", "obscure", pass).joinToString(" ")).stdout.trim()
                 } catch (_: Exception) { pass }
 
                 val sb = StringBuilder()

@@ -155,7 +155,7 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
                     rcloneArgs.add("--config")
                     rcloneArgs.add(configPath.absolutePath)
                 }
-                val syncResult = RootGateways.gateway.run(rcloneArgs.joinToString(" "), 120_000)
+                val syncResult = RootGateways.run(rcloneArgs.joinToString(" "), 120_000)
                 if (syncResult.isSuccess) {
                     withContext(Dispatchers.Main) { appendLog("☁️ 同步完成") }
                 } else {
@@ -206,7 +206,7 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
 
         // 1. Root 检测
         try {
-            val output = RootGateways.gateway.runQuiet("id")
+            val output = RootGateways.runQuiet("id")
             if (output.contains("uid=0")) {
                 sb.appendLine("✅ Root: 正常 (${output})")
             } else {
@@ -219,21 +219,21 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
         // 2. Xposed 模块检测
         try {
             val xpPkg = "com.nous.wxhook.xposed"
-            val xpOutput = RootGateways.gateway.runQuiet("pm list packages | grep $xpPkg")
+            val xpOutput = RootGateways.runQuiet("pm list packages | grep $xpPkg")
             if (xpOutput.contains(xpPkg)) {
                 sb.appendLine("✅ Xposed 模块: 已安装")
             } else {
                 sb.appendLine("❌ Xposed 模块: 未安装")
             }
 
-            val lsOutput = RootGateways.gateway.runQuiet("ls /data/adb/lspd/modules/")
+            val lsOutput = RootGateways.runQuiet("ls /data/adb/lspd/modules/")
             if (lsOutput.contains("wxhook")) {
                 sb.appendLine("✅ LSPosed: 模块已注册")
             } else {
                 sb.appendLine("⚠️ LSPosed: 模块未注册")
             }
 
-            val logOutput = RootGateways.gateway.runQuiet("logcat -d | grep 'wxhook:Hook' | tail -1")
+            val logOutput = RootGateways.runQuiet("logcat -d | grep 'wxhook:Hook' | tail -1")
             if (logOutput.isNotEmpty()) {
                 sb.appendLine("✅ Xposed Hook: 已加载")
                 sb.appendLine("   $logOutput")
@@ -246,7 +246,7 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
 
         // 3. 微信进程检测
         try {
-            val pid = RootGateways.gateway.runQuiet("pidof com.tencent.mm")
+            val pid = RootGateways.runQuiet("pidof com.tencent.mm")
             if (pid.isNotEmpty()) {
                 sb.appendLine("✅ 微信: 运行中 (pid=$pid)")
             } else {
@@ -308,7 +308,7 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun loadLiveLog(): String {
         try {
-            return RootGateways.gateway.runQuiet("tail -50 /sdcard/Download/wxhook_backup/backup_live.log 2>/dev/null")
+            return RootGateways.runQuiet("tail -50 /sdcard/Download/wxhook_backup/backup_live.log 2>/dev/null")
         } catch (_: Exception) {}
         return ""
     }
@@ -355,7 +355,7 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
         try {
             val tmp = File(filesDir, "backup_live.log")
             tmp.appendText("$line\n")
-            RootGateways.gateway.run(
+            RootGateways.run(
                 "mkdir -p /sdcard/Download/wxhook_backup && cat \"${tmp.absolutePath}\" >> /sdcard/Download/wxhook_backup/backup_live.log && chmod 644 /sdcard/Download/wxhook_backup/backup_live.log"
             )
             tmp.writeText("")

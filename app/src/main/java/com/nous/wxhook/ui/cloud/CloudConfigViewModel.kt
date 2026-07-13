@@ -94,7 +94,7 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val obscured = try {
-                    RootGateways.gateway.run(arrayOf(BackupHookLocal.binPath + "/rclone", "obscure", pass).joinToString(" ")).stdout.trim()
+                    RootGateways.run(arrayOf(BackupHookLocal.binPath + "/rclone", "obscure", pass).joinToString(" ")).stdout.trim()
                 } catch (_: Exception) { pass }
 
                 val sb = StringBuilder()
