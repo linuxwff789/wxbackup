@@ -83,11 +83,9 @@ class SyncService : Service() {
                 if (rcloneCfg.exists()) {
                     args.add("--config"); args.add(rcloneCfg.absolutePath)
                 }
-                val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", args.joinToString(" ")))
-                val finished = proc.waitFor(120, java.util.concurrent.TimeUnit.SECONDS)
-                proc.inputStream.bufferedReader().readText()
-                if (!finished) { proc.destroyForcibly(); result = "上传超时"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
-                if (proc.exitValue() != 0) { result = "上传失败(exit=${proc.exitValue()})"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
+                val rcloneResult = RootCommandRunner.runSu(args.joinToString(" "), 120_000)
+                if (rcloneResult.timedOut) { result = "上传超时"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
+                if (!rcloneResult.isSuccess) { result = "上传失败(exit=${rcloneResult.exitCode}) ${rcloneResult.stderr.take(200)}"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
 
                 // Cleanup local pkg
                 RootCommandRunner.runSu("rm -f \"$pkgPath\"", 10_000)

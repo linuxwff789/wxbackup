@@ -244,8 +244,7 @@ class CloudConfigActivity : AppCompatActivity() {
                 if (url.isEmpty() || user.isEmpty()) return@setPositiveButton
                 if (!url.startsWith("http")) url = "https://$url"
                 val obscured = try {
-                    val p = Runtime.getRuntime().exec(arrayOf(BackupHookLocal.binPath+"/rclone","obscure",pass))
-                    p.inputStream.bufferedReader().readText().trim()
+                    RootCommandRunner.run(arrayOf(BackupHookLocal.binPath+"/rclone","obscure",pass)).stdout.trim()
                 } catch (_: Exception) { pass }
                 val sb = StringBuilder()
                 sb.appendLine("url = $url"); sb.appendLine("vendor = $vendor")

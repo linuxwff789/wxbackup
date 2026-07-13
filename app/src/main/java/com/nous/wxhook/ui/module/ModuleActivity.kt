@@ -420,9 +420,9 @@ class ModuleActivity : AppCompatActivity() {
                 val configPath = File(filesDir, ".config/rclone/rclone.conf")
                 val rcloneArgs = mutableListOf(com.nous.wxhook.rootbridge.backup.BackupHookLocal.binPath + "/rclone", "sync", "/sdcard/Download/wxhook_backup", remote, "--update")
                 if (configPath.exists()) { rcloneArgs.add("--config"); rcloneArgs.add(configPath.absolutePath) }
-                val proc = Runtime.getRuntime().exec(rcloneArgs.toTypedArray())
-                proc.waitFor()
-                handler.post { log("☁️ 同步完成") }
+                val syncResult = RootCommandRunner.run(rcloneArgs.toTypedArray(), 120_000)
+                if (syncResult.isSuccess) handler.post { log("☁️ 同步完成") }
+                else handler.post { log("☁️ 同步失败(exit=${syncResult.exitCode})") }
             } catch (e: Exception) {
                 handler.post { log("☁️ 同步失败: ${e.message}") }
             }

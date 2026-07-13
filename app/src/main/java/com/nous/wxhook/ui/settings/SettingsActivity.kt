@@ -162,7 +162,8 @@ class SettingsActivity : AppCompatActivity() {
             try {
                 val args = mutableListOf(BackupHookLocal.binPath + "/rclone", "sync", "/sdcard/Download/wxhook_backup", remote, "--update")
                 if (rcloneCfgFile.exists()) { args.add("--config"); args.add(rcloneCfgFile.absolutePath) }
-                Runtime.getRuntime().exec(args.toTypedArray()).waitFor(120, java.util.concurrent.TimeUnit.SECONDS)
+                val syncResult = RootCommandRunner.run(args.toTypedArray(), 120_000)
+                if (!syncResult.isSuccess) { runOnUiThread { supportActionBar?.title = "设置 ❌ 同步失败(exit=${syncResult.exitCode})" }; return@Thread }
                 runOnUiThread { supportActionBar?.title = "设置 ✅ 同步完成" }
             } catch (e: Exception) {
                 runOnUiThread { supportActionBar?.title = "设置 ❌ 同步失败: ${e.message}" }
@@ -254,8 +255,7 @@ class SettingsActivity : AppCompatActivity() {
                 if (url.isEmpty() || user.isEmpty()) return@setPositiveButton
                 if (!url.startsWith("http")) url = "https://$url"
                 val obscured = try {
-                    val p = Runtime.getRuntime().exec(arrayOf(BackupHookLocal.binPath+"/rclone","obscure",pass))
-                    p.inputStream.bufferedReader().readText().trim()
+                    RootCommandRunner.run(arrayOf(BackupHookLocal.binPath+"/rclone","obscure",pass)).stdout.trim()
                 } catch (_: Exception) { pass }
                 val sb = StringBuilder()
                 sb.appendLine("[$name]"); sb.appendLine("type = webdav"); sb.appendLine("url = $url")
