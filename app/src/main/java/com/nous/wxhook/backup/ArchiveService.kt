@@ -71,7 +71,8 @@ object ArchiveService {
         return try {
             val pwd = getDbPassword()
             val sqlScript = "/data/local/tmp/decrypt_full.sql"
-            val scriptContent = "PRAGMA key = '$pwd';\n" +
+            val scriptContent = ".output /dev/null\n" +
+                "PRAGMA key = '$pwd';\n" +
                 "PRAGMA cipher_compatibility = 3;\n" +
                 "PRAGMA cipher_page_size = 1024;\n" +
                 "PRAGMA kdf_iter = 4000;\n" +
@@ -134,7 +135,8 @@ object ArchiveService {
             // Run SQLCipher to extract incremental SQL
             // Write SQL commands to a script file first, then pipe to sqlcipher
             val sqlScript = "$workDir/incr_query.sql"
-            val scriptContent = "PRAGMA key = '$pwd';\n" +
+            val scriptContent = ".output /dev/null\n" +
+                "PRAGMA key = '$pwd';\n" +
                 "PRAGMA cipher_compatibility = 3;\n" +
                 "PRAGMA cipher_page_size = 1024;\n" +
                 "PRAGMA kdf_iter = 4000;\n" +
