@@ -1,0 +1,30 @@
+package com.nous.wxhook.root
+
+import com.nous.wxhook.core.command.CommandResult
+
+data class RootStatus(
+    val available: Boolean,
+    val uid: Int = -1,
+    val message: String = "",
+)
+
+data class FileMetadata(
+    val path: String,
+    val exists: Boolean,
+    val isDirectory: Boolean = false,
+    val size: Long = 0,
+    val uid: Int = 0,
+    val gid: Int = 0,
+    val mode: String = "",
+)
+
+interface RootGateway {
+    suspend fun check(): RootStatus
+    suspend fun exists(path: String): Boolean
+    suspend fun stat(path: String): FileMetadata?
+    suspend fun mkdirs(path: String): Boolean
+    suspend fun copy(src: String, dst: String): Boolean
+    suspend fun delete(path: String): Boolean
+    suspend fun run(command: String, timeoutMs: Long = 60_000): CommandResult
+    suspend fun runQuiet(command: String, timeoutMs: Long = 60_000): String
+}
