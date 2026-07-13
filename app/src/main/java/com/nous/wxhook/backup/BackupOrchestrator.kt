@@ -1,4 +1,6 @@
 package com.nous.wxhook.backup
+import com.nous.wxhook.rootbridge.backup.BackupHookLocal
+import com.nous.wxhook.core.command.CommandResult
 
 import android.util.Log
 import com.nous.wxhook.root.RootGateways

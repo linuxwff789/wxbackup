@@ -1,4 +1,5 @@
 package com.nous.wxhook.backup
+import com.nous.wxhook.core.command.CommandResult
 
 import com.nous.wxhook.root.RootGateways
 
