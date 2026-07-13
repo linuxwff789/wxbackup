@@ -116,6 +116,20 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun testWebDavConnection(url: String, user: String, pass: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ⏳ WebDAV测试中...") }
+            try {
+                val client = com.nous.wxhook.sync.WebDavClient(url, user, pass)
+                val result = client.testConnection()
+                val msg = if (result.isSuccess) "设置 ✅ WebDAV连接成功" else "设置 ❌ WebDAV: ${result.exceptionOrNull()?.message}"
+                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = msg) }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ❌ WebDAV: ${e.message}") }
+            }
+        }
+    }
+
     fun rebuildState() {
         viewModelScope.launch(Dispatchers.IO) {
             val result = runCatching { BackupHookLocal.rebuildDbState() }

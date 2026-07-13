@@ -196,7 +196,15 @@ class SettingsActivity : AppCompatActivity() {
                 if (url.isEmpty() || user.isEmpty()) return@setPositiveButton
                 if (!url.startsWith("http")) url = "https://$url"
                 viewModel.saveWebdavConfig(name, url, vendor, user, pass)
-            }.setNegativeButton("取消", null).show()
+            }
+            .setNeutralButton("测试连接") { _, _ ->
+                var url = urlEt.text.toString().trim()
+                val user = userEt.text.toString().trim(); val pass = passEt.text.toString().trim()
+                if (url.isEmpty() || user.isEmpty()) return@setNeutralButton
+                if (!url.startsWith("http")) url = "https://$url"
+                viewModel.testWebDavConnection(url, user, pass)
+            }
+            .setNegativeButton("取消", null).show()
     }
 }
 
