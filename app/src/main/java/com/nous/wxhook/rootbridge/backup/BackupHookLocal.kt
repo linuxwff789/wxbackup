@@ -3,6 +3,7 @@ package com.nous.wxhook.rootbridge.backup
 import org.json.JSONArray
 import org.json.JSONObject
 import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.storage.WxHookPaths
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -16,12 +17,12 @@ import java.util.Locale
  */
 object BackupHookLocal {
 
-    private const val RECORDS_FILE = "backup_records.json"
-    private const val STATE_FILE = "backup_state.json"
-    private const val DB_CONFIG_FILE = "db_config.json"
-    private const val DB_STATE_FILE = "db_state.json"
+    private const val RECORDS_FILE = WxHookPaths.RECORDS_FILE
+    private const val STATE_FILE = WxHookPaths.STATE_FILE
+    private const val DB_CONFIG_FILE = WxHookPaths.DB_CONFIG_FILE
+    private const val DB_STATE_FILE = WxHookPaths.DB_STATE_FILE
     private const val RCLONE_REMOTE = "gdrive:wxhook-backup"
-    private const val BACKUP_DIR = "/sdcard/Download/wxhook_backup"
+    private const val BACKUP_DIR = WxHookPaths.BACKUP_DIR
     private var binDir = "/data/data/com.termux/files/usr/bin"
     private var filesDirPath = "/data/local/tmp"
     val binPath: String get() = binDir

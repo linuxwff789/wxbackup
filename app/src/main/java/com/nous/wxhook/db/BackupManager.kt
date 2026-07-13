@@ -1,5 +1,6 @@
 package com.nous.wxhook.db
 
+import com.nous.wxhook.storage.WxHookPaths
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -13,9 +14,9 @@ import java.util.Locale
  */
 object BackupManager {
 
-    const val BACKUP_DIR = "/sdcard/Download/wxhook_backup"
-    private const val RECORDS_FILE = "backup_records.json"
-    private const val STATE_FILE = "backup_state.json"
+    const val BACKUP_DIR = WxHookPaths.BACKUP_DIR
+    private const val RECORDS_FILE = WxHookPaths.RECORDS_FILE
+    private const val STATE_FILE = WxHookPaths.STATE_FILE
 
     data class BackupRecord(val tag: String, val type: String, val time: Long, val dbSize: Long, val fileCount: Long, val totalSize: Long, val message: String)
 

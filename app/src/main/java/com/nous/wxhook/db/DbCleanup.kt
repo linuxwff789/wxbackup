@@ -1,6 +1,7 @@
 package com.nous.wxhook.db
 
 import android.util.Log
+import com.nous.wxhook.storage.WxHookPaths
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -13,7 +14,7 @@ import java.util.Locale
 object DbCleanup {
 
     private const val TAG = "wxhook:Cleanup"
-    private const val DB_DIR = "/sdcard/Download"
+    private const val DB_DIR = WxHookPaths.DOWNLOAD_DIR
     private const val DB_PREFIX = "EnMicroMsg"
     private const val MAX_COPIES = 2 // Keep at most 2 copies
 
