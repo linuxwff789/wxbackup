@@ -22,9 +22,9 @@ android {
         create("release") {
             val ciKeystoreB64 = System.getenv("KEYSTORE_BASE64")
             if (ciKeystoreB64 != null) {
-                val tmpFile = java.io.File.createTempFile("release", ".keystore")
+                val tmpFile = File.createTempFile("release", ".keystore")
                 tmpFile.deleteOnExit()
-                tmpFile.writeBytes(java.util.Base64.getDecoder().decode(ciKeystoreB64))
+                tmpFile.writeBytes(Base64.getDecoder().decode(ciKeystoreB64))
                 storeFile = tmpFile
                 storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
                 keyAlias = System.getenv("KEY_ALIAS") ?: ""
