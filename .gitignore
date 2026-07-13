@@ -22,3 +22,9 @@ gradlew.bat
 *.keystore
 keystore.properties
 app/src/main/assets/bin/rclone
+
+# wxbackup additions
+xposed/build/
+tmp_fix*.py
+*.orig
+.hermes/
