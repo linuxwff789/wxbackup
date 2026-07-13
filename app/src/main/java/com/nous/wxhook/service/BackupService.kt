@@ -9,7 +9,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import java.io.File
 import java.text.SimpleDateFormat
@@ -88,13 +88,13 @@ class BackupService : Service() {
             val line = "[" + SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date()) + "] " + msg
             val tmp = File(filesDir, "backup_live.log")
             tmp.appendText(line + "\n")
-            RootCommandRunner.runSu("mkdir -p /sdcard/Download/wxhook_backup && cat \"${tmp.absolutePath}\" >> /sdcard/Download/wxhook_backup/backup_live.log && chmod 644 /sdcard/Download/wxhook_backup/backup_live.log")
+            RootGateways.run("mkdir -p /sdcard/Download/wxhook_backup && cat \"${tmp.absolutePath}\" >> /sdcard/Download/wxhook_backup/backup_live.log && chmod 644 /sdcard/Download/wxhook_backup/backup_live.log")
             tmp.writeText("")
         } catch (_: Exception) {}
     }
 
     private fun runSu(cmd: String): String {
-        return RootCommandRunner.runSuQuiet(cmd)
+        return RootGateways.runQuiet(cmd)
     }
 
     private fun createNotification(text: String): Notification {

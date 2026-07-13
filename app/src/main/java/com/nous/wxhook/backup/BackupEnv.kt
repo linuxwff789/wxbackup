@@ -1,6 +1,6 @@
 package com.nous.wxhook.backup
 
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.storage.WxHookPaths
 import org.json.JSONObject
 import java.io.File
@@ -21,10 +21,10 @@ object BackupEnv {
     val backupDir: String get() = WxHookPaths.BACKUP_DIR
 
     fun su(cmd: String, timeoutMs: Long = 60_000) =
-        RootCommandRunner.runSu(cmd, timeoutMs)
+        RootGateways.run(cmd, timeoutMs)
 
     fun suOut(cmd: String, timeoutMs: Long = 60_000) =
-        RootCommandRunner.runSuQuiet(cmd, timeoutMs)
+        RootGateways.runQuiet(cmd, timeoutMs)
 
     fun suCopy(tmp: File, dest: File, mode: String = "644") {
         su("cp \"${tmp.absolutePath}\" \"${dest.absolutePath}\" && chmod $mode \"${dest.absolutePath}\"")

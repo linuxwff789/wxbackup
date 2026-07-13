@@ -17,7 +17,7 @@ import androidx.cardview.widget.CardView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.progressindicator.CircularProgressIndicator
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -63,7 +63,7 @@ class ChatListActivity : AppCompatActivity() {
                 val sqlFile = File(cacheDir, "cl_${tag}.sql")
                 sqlFile.writeText("PRAGMA key='$key';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;SELECT c.username,IFNULL(NULLIF(r.conRemark,''),IFNULL(r.nickname,c.username)),c.unReadCount,c.conversationTime,CASE WHEN c.username LIKE '%@chatroom' THEN 'group' WHEN c.username LIKE '%@app' OR c.username LIKE 'gh_%' THEN 'official' ELSE 'contact' END FROM rconversation c LEFT JOIN rcontact r ON c.username=r.username ORDER BY c.conversationTime DESC LIMIT 200;")
                 val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
-                val out = RootCommandRunner.runSuQuiet("$sc '$dbPath' < '${sqlFile.absolutePath}'")
+                val out = RootGateways.runQuiet("$sc '$dbPath' < '${sqlFile.absolutePath}'")
                 val lines = out.lines(); sqlFile.delete()
                 Log.i("wxhook:ChatList","lines=${lines.size}")
                 val convs = mutableListOf<ChatConversation>()

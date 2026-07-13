@@ -1,6 +1,6 @@
 package com.nous.wxhook.backup
 
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 
 /**
  * Discovers WeChat data directories and user hashes from /proc/<pid>/root.
@@ -16,10 +16,10 @@ object WeChatSourceResolver {
         try {
             val pid = TargetAppController.findWeChatPid() ?: return emptyList()
             val basePath = "/proc/$pid/root/data/data/com.tencent.mm/MicroMsg"
-            val dirsOutput = RootCommandRunner.runSuQuiet("ls $basePath 2>/dev/null")
+            val dirsOutput = RootGateways.runQuiet("ls $basePath 2>/dev/null")
             val dirs = dirsOutput.lines().filter { it.isNotBlank() }
             for (d in dirs) {
-                val dbCheck = RootCommandRunner.runSuQuiet("ls $basePath/$d/EnMicroMsg.db 2>/dev/null")
+                val dbCheck = RootGateways.runQuiet("ls $basePath/$d/EnMicroMsg.db 2>/dev/null")
                 if (dbCheck.trim().isNotEmpty()) {
                     paths.add("$basePath/$d")
                 }

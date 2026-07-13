@@ -1,7 +1,7 @@
 package com.nous.wxhook.util
 
 import android.content.Context
-import com.nous.wxhook.rootbridge.RootCommandRunner
+import com.nous.wxhook.root.RootGateways
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
@@ -36,7 +36,7 @@ object SetupManager {
             // Copy to /data/local/tmp/wxhook_bin/ (where SELinux allows execution)
             val tmpDir = "/data/local/tmp/wxhook_bin"
             try {
-                RootCommandRunner.runSu("mkdir -p $tmpDir && cp " + dir.absolutePath + "/* $tmpDir/ && chmod 755 $tmpDir/*")
+                RootGateways.run("mkdir -p $tmpDir && cp " + dir.absolutePath + "/* $tmpDir/ && chmod 755 $tmpDir/*")
                 marker.writeText("ok")
                 android.util.Log.i("wxhook:Setup", "copied to $tmpDir")
             } catch (e: Exception) {
