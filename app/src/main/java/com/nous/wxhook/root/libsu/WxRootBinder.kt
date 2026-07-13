@@ -32,9 +32,12 @@ class WxRootBinder : android.os.Binder(), IInterface {
     companion object {
         const val TRANSACTION_EXEC = android.os.IBinder.FIRST_CALL_TRANSACTION + 1
         const val TRANSACTION_CHECK_ROOT = android.os.IBinder.FIRST_CALL_TRANSACTION + 2
+        private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
 
-        // App 端代理
-        fun exec(shell: android.os.IBinder, command: String): Shell.Result {
+        // 简单结果类，替代 Shell.Result
+        data class ExecResult(val code: Int, val out: List<String>, val err: List<String>)
+
+        fun exec(shell: android.os.IBinder, command: String): ExecResult {
             val data = Parcel.obtain()
             val reply = Parcel.obtain()
             try {
@@ -45,7 +48,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 val code = reply.readInt()
                 val out = reply.createStringArrayList() ?: emptyList()
                 val err = reply.createStringArrayList() ?: emptyList()
-                return Shell.Result(code, out, err)
+                return ExecResult(code, out, err)
             } finally {
                 data.recycle()
                 reply.recycle()
@@ -65,7 +68,5 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 reply.recycle()
             }
         }
-
-        private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
     }
 }
