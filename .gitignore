@@ -13,9 +13,6 @@
 .DS_Store
 Thumbs.db
 
-# Gradle wrapper (build on remote WSL2, not local)
-gradlew
-gradlew.bat
 
 # Keys / secrets
 *.jks
