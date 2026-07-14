@@ -245,6 +245,14 @@ class SettingsAdapter(
                     val o = runCatching { JSONObject(File(ctx.filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
                     o.put(item.key, checked)
                     File(ctx.filesDir, "settings_config.json").writeText(o.toString())
+                    // Sync to remote_config.json for cloudSync
+                    if (item.key == "sync_enabled") {
+                        val remoteFile = File("/sdcard/Download/wxhook_backup/remote_config.json")
+                        val rc = try { JSONObject(remoteFile.readText()) } catch (_: Exception) { JSONObject() }
+                        rc.put("enabled", checked)
+                        remoteFile.parentFile?.mkdirs()
+                        remoteFile.writeText(rc.toString(2))
+                    }
                 }
             }
             is SettingsItem.Input -> {
