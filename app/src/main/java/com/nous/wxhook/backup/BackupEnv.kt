@@ -21,7 +21,7 @@ object BackupEnv {
         val cfg = File(backupDir, "db_config.json")
         if (cfg.exists()) {
             val json = JSONObject(backupRead(cfg.absolutePath))
-            json.optString("compression", "gzip") == "zstd"
+            json.optString("compression", "zstd") == "zstd"
         } else false
     } catch (_: Exception) { false }
 
