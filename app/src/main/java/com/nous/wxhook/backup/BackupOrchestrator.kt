@@ -114,7 +114,13 @@ object BackupOrchestrator {
                 }
             }
 
-            // 4. Save config and records
+            // 4. Scan files and save manifest
+            val allFiles = FileManifest.scanFiles(dir)
+            val manifest = FileManifest.toManifest(allFiles, tag)
+            FileManifest.save(dir, manifest)
+            callback?.onProgress("清单已保存: ${allFiles.size}个文件", totalFiles, totalSize)
+
+            // 5. Save config and records
             BackupManifest.saveDbConfig()
             BackupManifest.saveState(tag, totalFiles, totalSize)
             BackupManifest.addRecord(
@@ -124,7 +130,7 @@ object BackupOrchestrator {
                 )
             )
 
-            // 5. Cloud sync
+            // 6. Cloud sync
             cloudSync(callback)
             
             BackupHookLocal.Result(
@@ -246,7 +252,7 @@ object BackupOrchestrator {
                 }
             }
 
-            // 3. Save state
+            // 3. Save state and update manifest
             BackupManifest.saveState(tag, totalFiles, totalSize)
 
             val incrFiles = mutableListOf<String>()
@@ -254,6 +260,16 @@ object BackupOrchestrator {
                 ?.filter { it.name.startsWith("incr_") && it.name.endsWith(BackupEnv.ext()) }
                 ?.sortedBy { it.name } ?: emptyList()
             for (f in incList) incrFiles.add(f.name)
+
+            // Update manifest with new files
+            val oldManifest = FileManifest.load(dir)
+            val newFilesList = FileManifest.scanFiles(dir)
+            val diff = FileManifest.diff(oldManifest, newFilesList)
+            if (diff.added.isNotEmpty() || diff.modified.isNotEmpty()) {
+                val updatedManifest = FileManifest.toManifest(newFilesList, tag)
+                FileManifest.save(dir, updatedManifest)
+                callback?.onProgress("清单已更新: +${diff.added.size} ~${diff.modified.size}", totalFiles, totalSize)
+            }
 
             // 4. Cloud sync
             cloudSync(callback)
@@ -274,7 +290,6 @@ object BackupOrchestrator {
         }
     }
 
-    // ── Git operations ──
 
 
     // ── Remote sync via WebDAV (incremental) ──
