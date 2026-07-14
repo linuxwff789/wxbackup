@@ -46,10 +46,10 @@ object FileManifest {
         for (dir in attachmentDirs) {
             val sourceDir = "$wxBasePath/$dir"
             val output = RootGateways.runQuiet(
-                "find \"$sourceDir\" -type f -exec stat -c '%s\\t%Y\\t%n' {} + 2>/dev/null"
+                "find \"$sourceDir\" -type f -exec stat -c '%s %Y %n' {} + 2>/dev/null"
             )
             output.lineSequence().filter { it.isNotBlank() }.forEach { line ->
-                val parts = line.split('\t', limit = 3)
+                val parts = line.split(' ', limit = 3)
                 if (parts.size != 3) return@forEach
                 val relativePath = parts[2].removePrefix("$wxBasePath/")
                 entries.add(FileEntry(
