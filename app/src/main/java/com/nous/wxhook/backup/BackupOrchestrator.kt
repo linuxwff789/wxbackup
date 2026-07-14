@@ -347,7 +347,7 @@ object BackupOrchestrator {
                 )
                 val archiveSize = BackupEnv.suOut("stat -c %s \"$tmpIncrArchive\" 2>/dev/null").trim().toLongOrNull() ?: 0L
                 if (archiveResult.isSuccess && archiveSize > 0L && BackupEnv.suCopyResult(tmpIncrArchive, incrArchive.absolutePath)) {
-                    totalFiles++; totalSize += BackupEnv.backupSize(incrArchive.absolutePath)
+                    totalFiles++; totalSize += BackupEnv.backupSize(incrArchive.absolutePath); newFiles++
                     callback?.onProgress("增量附件归档: ${incrArchive.name}", totalFiles, totalSize)
                 }
                 BackupEnv.su("rm -f \"$tmpIncrArchive\"")
