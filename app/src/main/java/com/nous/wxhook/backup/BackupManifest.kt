@@ -142,23 +142,5 @@ object BackupManifest {
     }
 
     /**
-     * Writes the gitCommit hash into the state file and all user db_state.json files.
      */
-    fun stampGitCommit(gitHash: String) {
-        if (gitHash.isEmpty()) return
-        try {
-            val stateFile = File(BackupEnv.backupDir, STATE_FILE)
-            val st = JSONObject(BackupEnv.backupRead(stateFile.absolutePath))
-            st.put("gitCommit", gitHash)
-            BackupEnv.backupWrite(stateFile.absolutePath, st.toString())
-            for (d in WeChatSourceResolver.findUserBackupDirs()) {
-                val dbStateFile = File(d, DB_STATE_FILE)
-                if (BackupEnv.backupExists(dbStateFile.absolutePath)) {
-                    val dbst = JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath))
-                    dbst.put("gitCommit", gitHash)
-                    BackupEnv.backupWrite(dbStateFile.absolutePath, dbst.toString())
-                }
-            }
-        } catch (_: Exception) {}
-    }
 }

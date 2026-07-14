@@ -107,23 +107,22 @@ object BackupOrchestrator {
             }
 
             // 4. Git commit
-            val gitHash = gitAddAndCommit(tag)
+            
             cloudSync(callback)
 
             // 5. Save config and records
             BackupManifest.saveDbConfig()
             BackupManifest.saveState(tag, totalFiles, totalSize)
-            BackupManifest.stampGitCommit(gitHash)
             BackupManifest.addRecord(
                 BackupManifest.createRecord(
                     tag, "full", totalFiles, totalSize, "全量备份完成",
                     durationMs = System.currentTimeMillis() - startTime
                 )
             )
-            val gitMsg = if (gitHash.isNotEmpty()) " git:$gitHash" else " (git无commit)"
+            
             BackupHookLocal.Result(
                 true,
-                "全量备份完成: ${totalFiles}个文件, ${BackupManifest.formatSize(totalSize)}$gitMsg"
+                "全量备份完成: ${totalFiles}个文件, ${BackupManifest.formatSize(totalSize)}"
             )
         } catch (e: Exception) {
             BackupHookLocal.Result(false, "备份失败: ${e.message}")
@@ -241,11 +240,10 @@ object BackupOrchestrator {
             }
 
             // 3. Git commit
-            val gitHash = gitAddAndCommit(tag)
+            
             cloudSync(callback)
 
             BackupManifest.saveState(tag, totalFiles, totalSize)
-            BackupManifest.stampGitCommit(gitHash)
 
             val incrFiles = mutableListOf<String>()
             val incList = dir.listFiles()
@@ -262,7 +260,7 @@ object BackupOrchestrator {
             rec.put("newFiles", newFiles)
             BackupManifest.addRecord(rec)
             val msg = if (newFiles > 0) "增量备份: ${newFiles}个文件(${BackupManifest.formatSize(totalSize)}), DB:${incrFrom}→${incrTo}" else "无新文件"
-            val gitMsg = if (gitHash.isNotEmpty()) " git:$gitHash" else " (git无commit)"
+            
             BackupHookLocal.Result(true, msg + gitMsg)
         } catch (e: Exception) {
             BackupHookLocal.Result(false, "增量备份失败: ${e.message}")
@@ -271,26 +269,6 @@ object BackupOrchestrator {
 
     // ── Git operations ──
 
-    fun gitAddAndCommit(tag: String): String {
-        val g = BackupEnv.binDir + "/git"
-        val ld = "LD_LIBRARY_PATH=${BackupEnv.binDir}"
-        val env = "HOME=/data/local/tmp $ld $g -C \"${BackupEnv.backupDir}\""
-        val init = RootGateways.run("$env init", 30_000)
-        if (!init.isSuccess) return ""
-        val identity = RootGateways.run(
-            "$env config user.name wxhook && $env config user.email wxhook@localhost",
-            30_000
-        )
-        if (!identity.isSuccess) return ""
-        val add = RootGateways.run("$env add -A", 120_000)
-        if (!add.isSuccess) return ""
-        val commit = RootGateways.run(
-            "$env commit -m \"$tag\" --allow-empty", 120_000
-        )
-        if (!commit.isSuccess) return ""
-        val head = RootGateways.run("$env rev-parse --verify HEAD", 30_000)
-        return if (head.isSuccess) head.stdout.trim().take(12) else ""
-    }
 
     // ── Remote sync via WebDAV (incremental) ──
 
@@ -518,7 +496,6 @@ object BackupOrchestrator {
                         30_000
                     )
                     val hash = pResult.stdout.trim().take(12)
-                    if (hash.isNotEmpty() && hash != "HEAD") state.put("gitCommit", hash)
                 } catch (_: Exception) {}
 
                 // Write state to user dir
@@ -530,7 +507,6 @@ object BackupOrchestrator {
                 )
                 results.add(
                     "${userDir.name}: rowId=${state.optLong("lastMessageRowId", 0)} " +
-                    "incr=${incrFiles.size} git=${state.optString("gitCommit", "-")}"
                 )
             }
             val sorted = (0 until rebuiltRecords.length())
