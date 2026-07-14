@@ -38,7 +38,7 @@ object BackupOrchestrator {
             val wxPaths = WeChatSourceResolver.findWxPaths()
             if (wxPaths.isEmpty()) return BackupHookLocal.Result(false, "微信未运行或未找到数据")
 
-            // 2. Backup DB (baseline)
+            // 2. Backup DB (baseline) — dump directly to user dir
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val userDir = File(dir, userHash)
@@ -47,19 +47,14 @@ object BackupOrchestrator {
                 callback?.onProgress("[$userHash] 数据库基线...", totalFiles, totalSize)
                 val dbSrc = "$wxBasePath/EnMicroMsg.db"
                 val dbGzFile = File(userDir, "EnMicroMsg_baseline" + BackupEnv.ext())
-                // Decrypt + compress
-                val decResult = ArchiveService.decryptAndDump(dbSrc)
+                // Decrypt + compress — dump directly to final location
+                val decResult = ArchiveService.decryptAndDump(dbSrc, dbGzFile.absolutePath)
                 if (decResult.startsWith("OK:")) {
-                    val gzPath = decResult.substring(3)
-                    val gzFile = File(gzPath)
-                    if (gzFile.exists()) {
-                        val copied = BackupEnv.suCopy(gzFile, dbGzFile)
-                        if (copied && BackupEnv.backupExists(dbGzFile.absolutePath) && BackupEnv.backupSize(dbGzFile.absolutePath) > 0) {
-                            totalFiles++; totalSize += BackupEnv.backupSize(dbGzFile.absolutePath)
-                        }
+                    if (BackupEnv.backupExists(dbGzFile.absolutePath) && BackupEnv.backupSize(dbGzFile.absolutePath) > 0) {
+                        totalFiles++; totalSize += BackupEnv.backupSize(dbGzFile.absolutePath)
                     }
                 }
-                // 如果用户目录没有有效文件，重新压缩
+                // Fallback: compress directly if decryptAndDump failed
                 if (!BackupEnv.backupExists(dbGzFile.absolutePath) || BackupEnv.backupSize(dbGzFile.absolutePath) <= 0) {
                     BackupEnv.su("rm -f \"${dbGzFile.absolutePath}\"")
                     val compressed = ArchiveService.compressFileSu(dbSrc, dbGzFile.absolutePath)
@@ -68,14 +63,12 @@ object BackupOrchestrator {
                     }
                 }
 
-                // Save DB state - query rowid from the already-decrypted DB
+                // Save DB state
                 val maxRowId = runCatching {
                     val pwd = ArchiveService.getDbPassword()
-                    // Use the decrypted DB that decryptAndDump() already created
                     val decDb = "/sdcard/Download/wxhook_backup/tmp/wxhook_dec.db"
                     val exists = RootGateways.runQuiet("test -e \"$decDb\" && echo 1").trim() == "1"
                     if (!exists || pwd.isEmpty()) return@runCatching 0L
-
                     val sqlScript = "/data/local/tmp/wxhook_backup/rowid_query.sql"
                     RootGateways.run("mkdir -p /data/local/tmp/wxhook_backup", 5_000)
                     val scriptContent = ".output /dev/null\n" +
@@ -95,81 +88,71 @@ object BackupOrchestrator {
                 BackupManifest.saveDbState(userDir, tag, maxRowId)
             }
 
-            // 3. Backup attachments (tar directly from source)
+            // 3. Scan source files for manifest + collect attachment dirs for tar
             val tarFiles = mutableListOf<String>()
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-
                 for (attDir in ATT_DIRS) {
                     val src = "$wxBasePath/$attDir"
-                    val exists = BackupEnv.suOut("test -d \"$src\" && echo 1").trim() == "1"
-                    if (!exists) continue
-
-                    callback?.onProgress("[$userHash] $attDir...", totalFiles, totalSize)
-                    tarFiles.add("$wxBasePath/$attDir")
-
-                    val countResult = BackupEnv.suOut(
-                        "find \"$src\" -type f 2>/dev/null | wc -l"
-                    ).trim().toLongOrNull() ?: 0L
-                    val sizeResult = BackupEnv.suOut(
-                        "du -sb \"$src\" 2>/dev/null | cut -f1"
-                    ).trim().toLongOrNull() ?: 0L
-                    totalFiles += countResult
-                    totalSize += sizeResult
+                    if (BackupEnv.suOut("test -d \"$src\" && echo 1").trim() == "1") {
+                        tarFiles.add("$wxBasePath/$attDir")
+                    }
                 }
             }
-
-            // 4. Archive attachments locally. toybox tar has no zstd support, so pipe it to bundled zstd.
-            if (tarFiles.isNotEmpty()) {
-                val archiveFile = File(dir, "attachments_$tag.tar.zst")
-                val tmpArchive = "/data/local/tmp/${archiveFile.name}"
-                val tarArgs = tarFiles.joinToString(" ") { sourceDir ->
-                    val microMsgDir = sourceDir.substringBeforeLast("/").substringBeforeLast("/")
-                    val relativePath = sourceDir.removePrefix("$microMsgDir/")
-                    "-C \"$microMsgDir\" \"$relativePath\""
-                }
-                val archiveResult = BackupEnv.su(
-                    "tar cf - $tarArgs 2>/dev/null | ${BackupEnv.binDir}/zstd -c -3 > \"$tmpArchive\"",
-                    600_000,
-                )
-                val archiveSize = BackupEnv.suOut("stat -c %s \"$tmpArchive\" 2>/dev/null").trim().toLongOrNull() ?: 0L
-                if (!archiveResult.isSuccess || archiveSize <= 0L || !BackupEnv.suCopyResult(tmpArchive, archiveFile.absolutePath)) {
-                    return BackupHookLocal.Result(false, "附件归档失败")
-                }
-                totalFiles++
-                totalSize += BackupEnv.backupSize(archiveFile.absolutePath)
-                BackupEnv.su("rm -f \"$tmpArchive\"")
-            }
-
-            // 5. Snapshot WeChat attachment sources for incremental change detection.
             val sourceFiles = wxPaths.flatMap { wxBasePath ->
-                FileManifest.scanWeChatAttachments(
-                    wxBasePath,
-                    WeChatSourceResolver.extractUserHash(wxBasePath),
-                    ATT_DIRS,
-                )
+                FileManifest.scanWeChatAttachments(wxBasePath, WeChatSourceResolver.extractUserHash(wxBasePath), ATT_DIRS)
             }
             val manifest = FileManifest.toManifest(sourceFiles, tag)
             FileManifest.save(dir, manifest)
-            callback?.onProgress("清单已保存: ${sourceFiles.size}个文件", totalFiles, totalSize)
+            totalFiles += sourceFiles.size
 
-            // 6. Save config and records
+            // 4. Save config and state
             BackupManifest.saveDbConfig()
             BackupManifest.saveState(tag, totalFiles, totalSize)
             BackupManifest.addRecord(
-                BackupManifest.createRecord(
-                    tag, "full", totalFiles, totalSize, "全量备份完成",
-                    durationMs = System.currentTimeMillis() - startTime
-                )
+                BackupManifest.createRecord(tag, "full", totalFiles, totalSize, "全量备份完成",
+                    durationMs = System.currentTimeMillis() - startTime)
             )
 
-            // 7. Cloud sync
-            cloudSync(callback, tarFiles = tarFiles)
-            
-            BackupHookLocal.Result(
-                true,
-                "全量备份完成: ${totalFiles}个文件, ${BackupManifest.formatSize(totalSize)}"
-            )
+            // 5. Package everything into one wxbackup_full_<tag>.tar.zst
+            //    DB + state + manifest + config from backupDir; attachments from WeChat source
+            val pkgFile = File(dir, "wxbackup_full_$tag.tar.zst")
+            val tmpPkg = "/data/local/tmp/${pkgFile.name}"
+
+            // Build tar args: DB/state/manifest from backup dir
+            val backupFiles = mutableListOf<String>()
+            for (wxBasePath in wxPaths) {
+                val h = WeChatSourceResolver.extractUserHash(wxBasePath)
+                backupFiles.add("\"$h/EnMicroMsg_baseline${BackupEnv.ext()}\"")
+                backupFiles.add("\"$h/db_state.json\"")
+            }
+            backupFiles.add("\"file_manifest.json\"")
+            backupFiles.add("\"db_config.json\"")
+            backupFiles.add("\"backup_state.json\"")
+            backupFiles.add("\"backup_records.json\"")
+
+            // Build tar args: attachments from WeChat source (different -C)
+            val attTarArgs = tarFiles.joinToString(" ") { sourceDir ->
+                val microMsgDir = sourceDir.substringBeforeLast("/").substringBeforeLast("/")
+                val rel = sourceDir.removePrefix("$microMsgDir/")
+                "-C \"$microMsgDir\" \"$rel\""
+            }
+
+            // Two-pass tar: first DB/metadata, then attachments, pipe to zstd
+            val tarCmd = "tar -C \"${BackupEnv.backupDir}\" cf - ${backupFiles.joinToString(" ")} " +
+                "$attTarArgs 2>/dev/null | ${BackupEnv.binDir}/zstd -c -3 > \"$tmpPkg\""
+            val pkgResult = BackupEnv.su(tarCmd, 600_000)
+            val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
+            if (!pkgResult.isSuccess || pkgSize <= 0L || !BackupEnv.suCopyResult(tmpPkg, pkgFile.absolutePath)) {
+                return BackupHookLocal.Result(false, "打包失败")
+            }
+            BackupEnv.su("rm -f \"$tmpPkg\"")
+
+            // 6. Cloud sync
+            cloudSync(callback)
+
+            BackupHookLocal.Result(true,
+                "全量备份完成: ${totalFiles}个文件, ${BackupManifest.formatSize(totalSize)}, 包: ${pkgFile.name}")
         } catch (e: Exception) {
             BackupHookLocal.Result(false, "备份失败: ${e.message}")
         }
