@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.nous.wxhook.root.RootGateways
+import com.nous.wxhook.sync.WebDavClient
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -40,22 +41,34 @@ class SyncService : Service() {
     private fun startSync() {
         try { startForeground(NOTIFICATION_ID, createNotification("同步中...")) } catch (_: Exception) {}
         Thread {
-            val binDir = "/data/local/tmp/wxhook_bin"
             val BACKUP_DIR = "/sdcard/Download/wxhook_backup"
             var result = "同步失败"
             try {
                 appendLog("同步服务启动")
                 updateNotification("读取配置...")
-                // Read remote config
-                val cfgRaw = RootGateways.runQuiet("cat \"$BACKUP_DIR/remote_config.json\" 2>/dev/null").ifBlank { "{}" }
-                val cfg = org.json.JSONObject(cfgRaw)
-                val enabled = cfg.optBoolean("enabled", false)
-                val remoteStr = cfg.optString("remote", "")
-                if (!enabled || remoteStr.isBlank()) {
-                    result = "同步未启用或未配置"; appendLog(result); updateNotification(result)
+
+                // Read WebDAV config from settings_config.json
+                val settingsCfgRaw = try {
+                    File(filesDir, "settings_config.json").readText()
+                } catch (_: Exception) { "{}" }
+                val settingsCfg = org.json.JSONObject(settingsCfgRaw)
+                val webdavUrl = settingsCfg.optString("webdav_url", "")
+                val webdavUser = settingsCfg.optString("webdav_user", "")
+                val webdavPass = settingsCfg.optString("webdav_pass", "")
+                val remotePath = settingsCfg.optString("remote_path", "wxhook-backup")
+
+                if (webdavUrl.isBlank() || webdavUser.isBlank()) {
+                    result = "WebDAV未配置"; appendLog(result); updateNotification(result)
                     sendResult(false, result); return@Thread
                 }
-                val rcloneCfg = File(filesDir, ".config/rclone/rclone.conf")
+
+                // Read remote config
+                val remoteCfgRaw = RootGateways.runQuiet("cat \"$BACKUP_DIR/remote_config.json\" 2>/dev/null").ifBlank { "{}" }
+                val remoteCfg = org.json.JSONObject(remoteCfgRaw)
+                if (!remoteCfg.optBoolean("enabled", false)) {
+                    result = "同步未启用"; appendLog(result); updateNotification(result)
+                    sendResult(false, result); return@Thread
+                }
 
                 // Package backup files into .wxhook
                 val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
@@ -73,19 +86,36 @@ class SyncService : Service() {
                 if (pkgInfo == null) { result = "打包失败"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
                 appendLog("打包完成: ${pkgInfo.totalSize} bytes (${pkgInfo.fileCount} files)")
 
-                // Upload
+                // Incremental upload via WebDAV
                 updateNotification("上传中...")
-                val env = "HOME=/data/local/tmp LD_LIBRARY_PATH=$binDir SSL_CERT_DIR=/system/etc/security/cacerts"
-                val rclone = "$binDir/rclone"
-                val args = mutableListOf("$env $rclone", "copy", pkgPath,
-                    if (remoteStr.contains(":")) remoteStr else "$remoteStr:",
-                    "--no-check-certificate", "--timeout=30s")
-                if (rcloneCfg.exists()) {
-                    args.add("--config"); args.add(rcloneCfg.absolutePath)
+                val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
+                val testResult = client.testConnection()
+                if (testResult.isFailure) {
+                    result = "WebDAV连接失败: ${testResult.exceptionOrNull()?.message}"
+                    appendLog(result); updateNotification(result); sendResult(false, result)
+                    return@Thread
                 }
-                val rcloneResult = RootGateways.run(args.joinToString(" "), 120_000)
-                if (rcloneResult.timedOut) { result = "上传超时"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
-                if (!rcloneResult.isSuccess) { result = "上传失败(exit=${rcloneResult.exitCode}) ${rcloneResult.stderr.take(200)}"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
+
+                // Ensure remote directory exists
+                client.ensureDirectory(remotePath)
+
+                // List remote files for incremental check
+                val remoteFiles = client.list(remotePath).getOrNull() ?: emptyList()
+                val localFile = File(pkgPath)
+                val remoteMatch = remoteFiles.find { it.path.endsWith(localFile.name) }
+
+                // Upload if new or changed
+                if (remoteMatch == null || remoteMatch.size != localFile.length()) {
+                    val uploadResult = client.upload(localFile, "$remotePath/${localFile.name}")
+                    if (uploadResult.isFailure) {
+                        result = "上传失败: ${uploadResult.exceptionOrNull()?.message}"
+                        appendLog(result); updateNotification(result); sendResult(false, result)
+                        return@Thread
+                    }
+                    appendLog("已上传: ${localFile.name} (${formatSize(localFile.length())})")
+                } else {
+                    appendLog("跳过: ${localFile.name} (远程已存在且大小一致)")
+                }
 
                 // Cleanup local pkg
                 RootGateways.run("rm -f \"$pkgPath\"", 10_000)

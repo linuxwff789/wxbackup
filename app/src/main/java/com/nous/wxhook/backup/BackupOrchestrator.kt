@@ -5,6 +5,7 @@ import com.nous.wxhook.core.command.CommandResult
 import android.util.Log
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.storage.WxHookPaths
+import com.nous.wxhook.sync.WebDavClient
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -107,7 +108,7 @@ object BackupOrchestrator {
 
             // 4. Git commit
             val gitHash = gitAddAndCommit(tag)
-            rcloneSync(callback)
+            cloudSync(callback)
 
             // 5. Save config and records
             BackupManifest.saveDbConfig()
@@ -241,7 +242,7 @@ object BackupOrchestrator {
 
             // 3. Git commit
             val gitHash = gitAddAndCommit(tag)
-            rcloneSync(callback)
+            cloudSync(callback)
 
             BackupManifest.saveState(tag, totalFiles, totalSize)
             BackupManifest.stampGitCommit(gitHash)
@@ -291,9 +292,9 @@ object BackupOrchestrator {
         return if (head.isSuccess) head.stdout.trim().take(12) else ""
     }
 
-    // ── Remote sync ──
+    // ── Remote sync via WebDAV (incremental) ──
 
-    fun rcloneSync(callback: BackupHookLocal.ProgressCallback?) {
+    fun cloudSync(callback: BackupHookLocal.ProgressCallback?) {
         try {
             val configFile = File(BackupEnv.backupDir, "remote_config.json")
             if (!configFile.exists()) return
@@ -302,10 +303,22 @@ object BackupOrchestrator {
             )
             val enabled = config.optBoolean("enabled", false)
             if (!enabled) return
-            val remote = config.optString("remote", "")
-            if (remote.isBlank()) return
-            callback?.onProgress("同步到 $remote...", 0, 0)
-            // Package DB backup files into a tar.gz
+
+            // Read WebDAV settings from settings_config.json
+            val settingsCfg = try {
+                val settingsFile = File(BackupEnv.filesDirPath, "settings_config.json")
+                JSONObject(settingsFile.readText())
+            } catch (_: Exception) { JSONObject() }
+            val webdavUrl = settingsCfg.optString("webdav_url", "")
+            val webdavUser = settingsCfg.optString("webdav_user", "")
+            val webdavPass = settingsCfg.optString("webdav_pass", "")
+            val remoteBase = config.optString("remote", "wxhook-backup")
+
+            if (webdavUrl.isBlank() || webdavUser.isBlank()) return
+
+            callback?.onProgress("同步到 $remoteBase...", 0, 0)
+
+            // Package backup files into tar.gz
             val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
             val pkgName = "wxhook_backup_$tag.tar.gz"
             val pkgPath = "/data/local/tmp/$pkgName"
@@ -325,21 +338,34 @@ object BackupOrchestrator {
                 callback?.onProgress("打包失败", 0, 0); return
             }
             callback?.onProgress("上传 $pkgName (${BackupManifest.formatSize(pkgSize)})...", 0, pkgSize)
-            // Upload with env fix and timeout
-            val env = "HOME=/data/local/tmp LD_LIBRARY_PATH=${BackupEnv.binDir} SSL_CERT_DIR=/system/etc/security/cacerts"
-            val rclone = "${BackupEnv.binDir}/rclone"
-            val args = mutableListOf(rclone, "copy", pkgPath, remote, "--no-check-certificate", "--timeout=30s")
-            if (BackupEnv.rcloneConfigPath.isNotEmpty() && File(BackupEnv.rcloneConfigPath).exists()) {
-                args.add("--config"); args.add(BackupEnv.rcloneConfigPath)
-            }
-            val cmdStr = "$env ${args.joinToString(" ")}"
-            val uploadResult = RootGateways.run(cmdStr, 120_000)
-            if (!uploadResult.isSuccess) {
-                val errMsg = if (uploadResult.stderr.contains("timeout") || uploadResult.stdout.contains("timeout"))
-                    "同步超时" else "同步失败(exit=${uploadResult.exitCode})"
-                callback?.onProgress(errMsg, 0, 0)
+
+            // Incremental upload via WebDavClient
+            val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
+            val testResult = client.testConnection()
+            if (testResult.isFailure) {
+                callback?.onProgress("WebDAV连接失败: ${testResult.exceptionOrNull()?.message}", 0, 0)
                 return
             }
+
+            client.ensureDirectory(remoteBase)
+
+            // List remote files for incremental check
+            val remoteFiles = client.list(remoteBase).getOrNull() ?: emptyList()
+            val localFile = File(pkgPath)
+            val remoteMatch = remoteFiles.find { it.path.endsWith(localFile.name) }
+
+            // Upload if new or changed
+            if (remoteMatch == null || remoteMatch.size != localFile.length()) {
+                val uploadResult = client.upload(localFile, "$remoteBase/${localFile.name}")
+                if (uploadResult.isFailure) {
+                    callback?.onProgress("上传失败: ${uploadResult.exceptionOrNull()?.message}", 0, 0)
+                    return
+                }
+                callback?.onProgress("已上传: ${localFile.name}", 1, pkgSize)
+            } else {
+                callback?.onProgress("跳过: ${localFile.name} (远程已存在)", 1, pkgSize)
+            }
+
             // Cleanup local pkg
             BackupEnv.su("rm -f \"$pkgPath\"", 10_000)
             callback?.onProgress("同步完成: $pkgName", 1, pkgSize)
@@ -348,36 +374,41 @@ object BackupOrchestrator {
         }
     }
 
-    // ── Test remote ──
+    // ── Test remote (WebDAV) ──
 
     fun testRemoteConnection(remote: String, configPath: String = ""): String {
-        val env = "HOME=/data/local/tmp LD_LIBRARY_PATH=${BackupEnv.binDir} SSL_CERT_DIR=/system/etc/security/cacerts"
-        val cfgPath = if (configPath.isNotEmpty()) configPath else BackupEnv.rcloneConfigPath
-        val cfgFlag = if (cfgPath.isNotEmpty() && File(cfgPath).exists())
-            " --config \"$cfgPath\"" else ""
-        val result = try {
-            RootGateways.run(
-                "$env ${BackupEnv.binDir}/rclone lsd \"$remote:\"$cfgFlag --no-check-certificate --timeout=15s 2>&1",
-                20_000
-            )
-        } catch (e: Exception) {
-            return "启动失败: ${e.message}"
+        // Read WebDAV settings from settings_config.json
+        val settingsCfg = try {
+            val settingsFile = File(BackupEnv.filesDirPath, "settings_config.json")
+            JSONObject(settingsFile.readText())
+        } catch (_: Exception) { JSONObject() }
+        val webdavUrl = settingsCfg.optString("webdav_url", "")
+        val webdavUser = settingsCfg.optString("webdav_user", "")
+        val webdavPass = settingsCfg.optString("webdav_pass", "")
+
+        if (webdavUrl.isBlank() || webdavUser.isBlank()) {
+            return "⚠️ WebDAV未配置"
         }
-        if (result.timedOut) return "连接超时(15s)"
-        val out = result.stdout.trim()
-        if (result.exitCode != 0) {
-            val err = when {
-                out.contains("certificate") -> "证书错误，请检查服务端TLS配置"
-                out.contains("no such host") || out.contains("lookup") -> "DNS解析失败，无法连接到服务器"
-                out.contains("401") || out.contains("403") -> "认证失败，请检查账号密码"
-                out.contains("timeout") || out.contains("refused") -> "服务器无响应或被拒绝"
-                else -> "连接失败: ${out.lines().firstOrNull()?.take(120) ?: "未知错误"}"
+
+        return try {
+            val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
+            val result = client.testConnection()
+            if (result.isSuccess) {
+                // Try listing the remote path
+                val listResult = client.list(remote.ifBlank { "." })
+                if (listResult.isSuccess) {
+                    val dirs = listResult.getOrNull()?.take(10) ?: emptyList()
+                    if (dirs.isEmpty()) "✅ 连接成功（远端无文件）"
+                    else "✅ 连接成功\n${dirs.joinToString("\n") { "📦 ${it.path}" }}"
+                } else {
+                    "✅ 连接成功"
+                }
+            } else {
+                "连接失败: ${result.exceptionOrNull()?.message ?: "未知错误"}"
             }
-            return err
+        } catch (e: Exception) {
+            "启动失败: ${e.message}"
         }
-        if (out.isBlank()) return "✅ 连接成功（远端无目录）"
-        val dirs = out.lines().filter { it.isNotBlank() }.take(10)
-        return "✅ 连接成功\n${dirs.joinToString("\n")}"
     }
 
     // ── Rebuild DB State ──

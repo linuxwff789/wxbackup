@@ -29,8 +29,7 @@ data class ModuleUiState(
     val incrBtnText: String = "增量备份 (仅新文件)",
     val backupPath: String = BackupManager.BACKUP_DIR,
     val remoteEnabled: Boolean = false,
-    val remotePath: String = "gdrive:wxhook-backup",
-    val rcloneConfText: String = "",
+    val remotePath: String = "wxhook-backup",
     val statusLoaded: Boolean = false,
 )
 
@@ -40,6 +39,7 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
     val uiState: StateFlow<ModuleUiState> = _uiState.asStateFlow()
 
     private val filesDir: File = application.filesDir
+    private val configFile: File get() = File(filesDir, "settings_config.json")
 
     init {
         loadInitialData()
@@ -57,7 +57,6 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
             _uiState.value = _uiState.value.copy(recordsText = recordsText)
 
             loadRemoteConfig()
-            loadRcloneConf()
         }
     }
 
@@ -92,17 +91,6 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.value = _uiState.value.copy(remotePath = path)
         saveRemoteConfig(remote = path)
         appendLog("☁️ 远程路径已保存: $path")
-    }
-
-    fun saveRcloneConf(confText: String) {
-        try {
-            val cfgDir = File(filesDir, ".config/rclone")
-            cfgDir.mkdirs()
-            val cfgFile = File(cfgDir, "rclone.conf")
-            cfgFile.writeText(confText)
-            _uiState.value = _uiState.value.copy(rcloneConfText = confText)
-            appendLog("✅ rclone 配置已保存")
-        } catch (_: Exception) {}
     }
 
     fun startBackup(incremental: Boolean) {
@@ -146,21 +134,50 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
             val remote = _uiState.value.remotePath
             try {
                 withContext(Dispatchers.Main) { appendLog("☁️ 同步到 $remote...") }
-                val configPath = File(filesDir, ".config/rclone/rclone.conf")
-                val rcloneArgs = mutableListOf(
-                    BackupHookLocal.binPath + "/rclone", "sync",
-                    "/sdcard/Download/wxhook_backup", remote, "--update"
-                )
-                if (configPath.exists()) {
-                    rcloneArgs.add("--config")
-                    rcloneArgs.add(configPath.absolutePath)
+
+                // Read WebDAV config from settings_config.json
+                val cfg = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
+                val webdavUrl = cfg.optString("webdav_url", "")
+                val webdavUser = cfg.optString("webdav_user", "")
+                val webdavPass = cfg.optString("webdav_pass", "")
+
+                if (webdavUrl.isBlank() || webdavUser.isBlank()) {
+                    withContext(Dispatchers.Main) { appendLog("☁️ WebDAV未配置") }
+                    return@launch
                 }
-                val syncResult = RootGateways.run(rcloneArgs.joinToString(" "), 120_000)
-                if (syncResult.isSuccess) {
-                    withContext(Dispatchers.Main) { appendLog("☁️ 同步完成") }
-                } else {
-                    withContext(Dispatchers.Main) { appendLog("☁️ 同步失败(exit=${syncResult.exitCode})") }
+
+                val client = com.nous.wxhook.sync.WebDavClient(webdavUrl, webdavUser, webdavPass)
+                val testResult = client.testConnection()
+                if (testResult.isFailure) {
+                    withContext(Dispatchers.Main) { appendLog("☁️ 连接失败: ${testResult.exceptionOrNull()?.message}") }
+                    return@launch
                 }
+
+                client.ensureDirectory(remote)
+
+                // Incremental: list remote files and only upload new/changed
+                val remoteFiles = client.list(remote).getOrNull() ?: emptyList()
+                val backupDir = File("/sdcard/Download/wxhook_backup")
+                val localFiles = backupDir.listFiles() ?: emptyArray()
+                var uploaded = 0
+                var skipped = 0
+
+                for (local in localFiles) {
+                    if (!local.isFile) continue
+                    val remoteMatch = remoteFiles.find { it.path.endsWith(local.name) }
+                    if (remoteMatch == null || remoteMatch.size != local.length()) {
+                        val uploadResult = client.upload(local, "$remote/${local.name}")
+                        if (uploadResult.isSuccess) {
+                            uploaded++
+                        } else {
+                            withContext(Dispatchers.Main) { appendLog("☁️ 上传失败: ${local.name}") }
+                        }
+                    } else {
+                        skipped++
+                    }
+                }
+
+                withContext(Dispatchers.Main) { appendLog("☁️ 同步完成: 上传${uploaded}个, 跳过${skipped}个") }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { appendLog("☁️ 同步失败: ${e.message}") }
             }
@@ -320,19 +337,8 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
             )
             _uiState.value = _uiState.value.copy(
                 remoteEnabled = cfg.optBoolean("enabled", false),
-                remotePath = cfg.optString("remote", "gdrive:wxhook-backup")
+                remotePath = cfg.optString("remote", "wxhook-backup")
             )
-        } catch (_: Exception) {}
-    }
-
-    private fun loadRcloneConf() {
-        try {
-            val cfgDir = File(filesDir, ".config/rclone")
-            cfgDir.mkdirs()
-            val cfgFile = File(cfgDir, "rclone.conf")
-            val text = if (cfgFile.exists()) cfgFile.readText() else
-                "# 在此粘贴 rclone.conf\n# 格式:\n# [remote_name]\n# type = drive\n# scope = drive\n# token = {...}"
-            _uiState.value = _uiState.value.copy(rcloneConfText = text)
         } catch (_: Exception) {}
     }
 

@@ -8,9 +8,9 @@ import java.util.concurrent.Executors
 
 object SetupManager {
 
-    private val BINS = listOf("git", "rclone", "zstd", "sqlcipher",
+    private val BINS = listOf("git", "zstd", "sqlcipher",
         "libz.so.1", "libcrypto.so.3", "libedit.so", "libncursesw.so.6")
-    private val EXEC = listOf("git", "rclone", "sqlcipher")
+    private val EXEC = listOf("git", "sqlcipher")
     private val executor = Executors.newSingleThreadExecutor()
 
     fun setup(ctx: Context) {
@@ -46,7 +46,6 @@ object SetupManager {
     }
 
     fun git(ctx: Context) = File(ctx.filesDir, "bin/git").absolutePath
-    fun rclone(ctx: Context) = File(ctx.filesDir, "bin/rclone").absolutePath
     fun sqlcipher(ctx: Context) = File(ctx.filesDir, "bin/sqlcipher").absolutePath
     fun libDir(ctx: Context) = File(ctx.filesDir, "bin").absolutePath
 }

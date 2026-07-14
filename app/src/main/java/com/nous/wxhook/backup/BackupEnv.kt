@@ -16,8 +16,6 @@ object BackupEnv {
         internal set
     var filesDirPath: String = "/data/local/tmp"
         internal set
-    var rcloneConfigPath: String = ""
-        internal set
 
     val backupDir: String get() = WxHookPaths.BACKUP_DIR
 

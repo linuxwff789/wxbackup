@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nous.wxhook.root.RootGateways
-import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,7 +28,7 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
     val uiState: StateFlow<CloudConfigUiState> = _uiState.asStateFlow()
 
     private val filesDir: File = application.filesDir
-    private val rcloneCfgFile: File get() = File(filesDir, ".config/rclone/rclone.conf")
+    private val configFile: File get() = File(filesDir, "settings_config.json")
 
     init {
         loadAll()
@@ -37,10 +36,7 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
 
     fun loadAll() {
         viewModelScope.launch {
-            val remotes = withContext(Dispatchers.IO) { parseRemotes() }
-            _uiState.value = _uiState.value.copy(remotes = remotes)
-
-            val statusText = withContext(Dispatchers.IO) { loadStatus(remotes.size) }
+            val statusText = withContext(Dispatchers.IO) { loadStatus() }
             _uiState.value = _uiState.value.copy(statusText = statusText)
         }
     }
@@ -48,12 +44,28 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
     fun testRemote(name: String) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(testResult = "⏳ 测试 $name...")
-            val result = BackupHookLocal.testRemoteConnection(name, rcloneCfgFile.absolutePath)
-            val first = result.lines().first().take(60)
-            _uiState.value = _uiState.value.copy(
-                testResult = first,
-                toastMessage = result
-            )
+            try {
+                val cfg = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
+                val url = cfg.optString("webdav_url", "")
+                val user = cfg.optString("webdav_user", "")
+                val pass = cfg.optString("webdav_pass", "")
+                if (url.isBlank() || user.isBlank()) {
+                    _uiState.value = _uiState.value.copy(testResult = "⚠️ WebDAV未配置")
+                    return@launch
+                }
+                val client = com.nous.wxhook.sync.WebDavClient(url, user, pass)
+                val result = client.testConnection()
+                val msg = if (result.isSuccess) "✅ 连接成功" else "❌ ${result.exceptionOrNull()?.message}"
+                _uiState.value = _uiState.value.copy(
+                    testResult = msg,
+                    toastMessage = msg
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    testResult = "❌ ${e.message}",
+                    toastMessage = "❌ ${e.message}"
+                )
+            }
         }
     }
 
@@ -65,45 +77,14 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
         return "remote${System.currentTimeMillis() % 10000}"
     }
 
-    fun saveS3Config(name: String, provider: String, region: String, endpoint: String, accessKey: String, secretKey: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val sb = StringBuilder()
-                sb.appendLine("[$name]"); sb.appendLine("type = s3")
-                sb.appendLine("provider = $provider"); sb.appendLine("access_key_id = $accessKey")
-                sb.appendLine("secret_access_key = $secretKey"); sb.appendLine("region = $region")
-                if (endpoint.isNotEmpty()) sb.appendLine("endpoint = $endpoint")
-                sb.appendLine("acl = private")
-
-                rcloneCfgFile.parentFile?.mkdirs()
-                val existing = if (rcloneCfgFile.exists()) rcloneCfgFile.readText() + "\n" else ""
-                rcloneCfgFile.writeText(existing + sb.toString())
-                withContext(Dispatchers.Main) {
-                    _uiState.value = _uiState.value.copy(toastMessage = "✅ $name 已保存")
-                }
-                loadAll()
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    _uiState.value = _uiState.value.copy(toastMessage = "❌ ${e.message}")
-                }
-            }
-        }
-    }
-
     fun saveWebdavConfig(name: String, url: String, vendor: String, user: String, pass: String) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val obscured = try {
-                    RootGateways.run(arrayOf(BackupHookLocal.binPath + "/rclone", "obscure", pass).joinToString(" ")).stdout.trim()
-                } catch (_: Exception) { pass }
-
-                val sb = StringBuilder()
-                sb.appendLine("url = $url"); sb.appendLine("vendor = $vendor")
-                sb.appendLine("user = $user"); sb.appendLine("pass = $obscured")
-
-                rcloneCfgFile.parentFile?.mkdirs()
-                val existing = if (rcloneCfgFile.exists()) rcloneCfgFile.readText() + "\n" else ""
-                rcloneCfgFile.writeText(existing + "[$name]\ntype = ??\n$sb")
+                val o = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
+                o.put("webdav_url", url)
+                o.put("webdav_user", user)
+                o.put("webdav_pass", pass)
+                configFile.writeText(o.toString())
                 withContext(Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(toastMessage = "✅ $name 已保存")
                 }
@@ -116,51 +97,20 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun getS3Endpoint(s3Provider: String, region: String): String {
-        return when (s3Provider) {
-            "AWS" -> "s3.$region.amazonaws.com"
-            "Cloudflare" -> "https://$region.r2.cloudflarestorage.com"
-            "Minio" -> "http://127.0.0.1:9000"
-            "Alibaba" -> "oss-$region.aliyuncs.com"
-            "TencentCOS" -> "cos.$region.myqcloud.com"
-            "HuaweiOBS" -> "obs.$region.myhuaweicloud.com"
-            else -> ""
-        }
-    }
-
-    private fun parseRemotes(): List<RemoteInfo> {
-        if (!rcloneCfgFile.exists()) return emptyList()
-        return try {
-            val lines = rcloneCfgFile.readText().lines()
-            val result = mutableListOf<RemoteInfo>()
-            var currentName = ""
-            var currentType = ""
-            for (line in lines) {
-                val m = Regex("^\\[(.+)]$").find(line.trim())
-                if (m != null) {
-                    if (currentName.isNotEmpty() && currentType.isNotEmpty())
-                        result.add(RemoteInfo(currentName, currentType))
-                    currentName = m.groupValues[1]
-                    currentType = ""
-                } else if (line.trim().startsWith("type = ")) {
-                    currentType = line.trim().removePrefix("type = ")
-                }
-            }
-            if (currentName.isNotEmpty() && currentType.isNotEmpty())
-                result.add(RemoteInfo(currentName, currentType))
-            result
-        } catch (_: Exception) { emptyList() }
-    }
-
-    private fun loadStatus(remoteCount: Int): String {
+    private fun loadStatus(): String {
         val sb = StringBuilder()
         val cfgRaw = try {
             File("/sdcard/Download/wxhook_backup/remote_config.json").readText()
         } catch (_: Exception) { "{}" }
         val cfg = JSONObject(cfgRaw)
         sb.appendLine("云同步: ${if (cfg.optBoolean("enabled", false)) "✅ 已启用" else "⛔ 未启用"}")
-        sb.appendLine("远端路径: ${cfg.optString("remote", "未设置")}")
-        sb.appendLine("rclone配置: $remoteCount 个远端")
+
+        // Load WebDAV config
+        val settingsCfg = try {
+            JSONObject(configFile.readText())
+        } catch (_: Exception) { JSONObject() }
+        val webdavUrl = settingsCfg.optString("webdav_url", "")
+        sb.appendLine("WebDAV: ${if (webdavUrl.isNotBlank()) "✅ 已配置 ($webdavUrl)" else "⚠️ 未配置"}")
         return sb.toString()
     }
 }

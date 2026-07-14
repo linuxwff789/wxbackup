@@ -3,7 +3,6 @@ package com.nous.wxhook.ui.settings
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,7 +15,6 @@ import java.io.File
 
 data class SettingsUiState(
     val actionTitle: String = "设置",
-    val rcloneConfText: String = "",
     val configLoaded: Boolean = false,
 )
 
@@ -27,16 +25,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val filesDir: File = application.filesDir
     private val configFile: File get() = File(filesDir, "settings_config.json")
-    private val rcloneCfgFile: File get() = File(filesDir, ".config/rclone/rclone.conf")
 
     init {
         loadConfig()
     }
 
     private fun loadConfig() {
-        val cfg = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
-        val rcloneConfText = if (rcloneCfgFile.exists()) rcloneCfgFile.readText() else ""
-        _uiState.value = _uiState.value.copy(rcloneConfText = rcloneConfText, configLoaded = true)
+        _uiState.value = _uiState.value.copy(configLoaded = true)
     }
 
     fun loadConfigValue(key: String, defaultValue: String = ""): String {
@@ -59,59 +54,24 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         val o = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
         o.put(key, value)
         configFile.writeText(o.toString())
-        if (key == "zstd") {
-            runCatching { BackupHookLocal.setCompressionUseZstd(value) }
-        }
-    }
-
-    fun saveRcloneConf(text: String) {
-        rcloneCfgFile.parentFile?.mkdirs()
-        rcloneCfgFile.writeText(text)
-        _uiState.value = _uiState.value.copy(rcloneConfText = text, actionTitle = "设置 ✅ 配置已保存")
     }
 
     fun doSync() {
         viewModelScope.launch(Dispatchers.IO) {
             val cfg = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
             val enabled = cfg.optBoolean("sync_enabled", false)
-            val remote = cfg.optString("remote_path", "")
-            if (!enabled || remote.isBlank()) {
-                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ⚠️ 未启用或未配置路径") }
+            val webdavUrl = cfg.optString("webdav_url", "")
+            val webdavUser = cfg.optString("webdav_user", "")
+            if (!enabled || webdavUrl.isBlank() || webdavUser.isBlank()) {
+                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ⚠️ WebDAV未配置") }
                 return@launch
             }
             withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ☁️ 同步中...") }
             try {
-                val args = mutableListOf(
-                    BackupHookLocal.binPath + "/rclone", "sync",
-                    "/sdcard/Download/wxhook_backup", remote, "--update"
-                )
-                if (rcloneCfgFile.exists()) { args.add("--config"); args.add(rcloneCfgFile.absolutePath) }
-                val syncResult = RootGateways.run(args.joinToString(" "), 120_000)
-                if (!syncResult.isSuccess) {
-                    withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ❌ 同步失败(exit=${syncResult.exitCode})") }
-                    return@launch
-                }
-                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ✅ 同步完成") }
+                com.nous.wxhook.service.SyncService.start(getApplication())
+                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ✅ 同步已启动") }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ❌ 同步失败: ${e.message}") }
-            }
-        }
-    }
-
-    fun testRcloneConnection() {
-        viewModelScope.launch(Dispatchers.IO) {
-            withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ⏳ 测试连接中...") }
-            val conf = if (rcloneCfgFile.exists()) rcloneCfgFile.readText() else ""
-            val remote = conf.lines().firstOrNull { it.startsWith("[") && it != "[rclone]" }
-                ?.removeSurrounding("[", "]") ?: ""
-            if (remote.isNotEmpty()) {
-                val result = BackupHookLocal.testRemoteConnection(remote, rcloneCfgFile.absolutePath)
-                val short = result.lines().first().take(60)
-                withContext(Dispatchers.Main) {
-                    _uiState.value = _uiState.value.copy(actionTitle = "设置 $short")
-                }
-            } else {
-                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ⚠️ 请先保存rclone配置") }
             }
         }
     }
@@ -140,63 +100,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun saveS3Config(name: String, provider: String, region: String, endpoint: String, accessKey: String, secretKey: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val sb = StringBuilder()
-                sb.appendLine("[$name]"); sb.appendLine("type = s3"); sb.appendLine("provider = $provider")
-                sb.appendLine("access_key_id = $accessKey"); sb.appendLine("secret_access_key = $secretKey")
-                sb.appendLine("region = $region")
-                if (endpoint.isNotEmpty()) sb.appendLine("endpoint = $endpoint")
-                sb.appendLine("acl = private")
-
-                rcloneCfgFile.parentFile?.mkdirs()
-                val existing = if (rcloneCfgFile.exists()) rcloneCfgFile.readText() + "\n" else ""
-                rcloneCfgFile.writeText(existing + sb.toString())
-                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ✅ S3 已保存") }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ❌ ${e.message}") }
-            }
-        }
-    }
-
-    fun saveWebdavConfig(name: String, url: String, vendor: String, user: String, pass: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val obscured = try {
-                    RootGateways.run(arrayOf(BackupHookLocal.binPath + "/rclone", "obscure", pass).joinToString(" ")).stdout.trim()
-                } catch (_: Exception) { pass }
-
-                val sb = StringBuilder()
-                sb.appendLine("[$name]"); sb.appendLine("type = webdav"); sb.appendLine("url = $url")
-                sb.appendLine("vendor = $vendor"); sb.appendLine("user = $user"); sb.appendLine("pass = $obscured")
-
-                rcloneCfgFile.parentFile?.mkdirs()
-                val existing = if (rcloneCfgFile.exists()) rcloneCfgFile.readText() + "\n" else ""
-                rcloneCfgFile.writeText(existing + sb.toString())
-                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ✅ WebDAV 已保存") }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ❌ ${e.message}") }
-            }
-        }
-    }
-
-    fun createDriveConfig(name: String) {
-        // TODO: Google Drive OAuth - will implement after confirming build passes
-        _uiState.value = _uiState.value.copy(actionTitle = "设置 ⚠️ Google Drive OAuth 待实现")
-    }
-
-    fun getS3Endpoint(s3Provider: String, region: String): String {
-        return when (s3Provider) {
-            "AWS" -> "s3.$region.amazonaws.com"
-            "Cloudflare" -> "https://$region.r2.cloudflarestorage.com"
-            "Minio" -> "http://127.0.0.1:9000"
-            "Alibaba" -> "oss-$region.aliyuncs.com"
-            "TencentCOS" -> "cos.$region.myqcloud.com"
-            "HuaweiOBS" -> "obs.$region.myhuaweicloud.com"
-            "DigitalOcean" -> "$region.digitaloceanspaces.com"
-            "Wasabi" -> "s3.$region.wasabisys.com"
-            else -> ""
-        }
+    fun saveWebdavConfig(url: String, user: String, pass: String) {
+        val o = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
+        o.put("webdav_url", url)
+        o.put("webdav_user", user)
+        o.put("webdav_pass", pass)
+        configFile.writeText(o.toString())
+        _uiState.value = _uiState.value.copy(actionTitle = "设置 ✅ WebDAV 已保存")
     }
 }

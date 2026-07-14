@@ -153,27 +153,6 @@ class ModuleActivity : AppCompatActivity() {
         }
         remoteCard.addView(syncBtn)
 
-        // Rclone config editor
-        val cfgLabel = TextView(this).apply {
-            text = "rclone 配置 (rclone.conf)"; textSize = 13f; typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(12), dp(8), dp(12), dp(4))
-        }
-        remoteCard.addView(cfgLabel)
-        val rcloneCfgInput = EditText(this).apply {
-            setText(viewModel.uiState.value.rcloneConfText)
-            textSize = 10f; typeface = Typeface.MONOSPACE
-            minLines = 8; gravity = Gravity.START
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            setBackgroundColor(0xFFF0F0F0.toInt())
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(12), dp(4), dp(12), dp(8)) }
-        }
-        remoteCard.addView(rcloneCfgInput)
-        val saveCfgBtn = Button(this).apply {
-            text = "保存配置"; textSize = 12f
-            setOnClickListener { viewModel.saveRcloneConf(rcloneCfgInput.text.toString()) }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(12), dp(4), dp(12), dp(8)) }
-        }
-        remoteCard.addView(saveCfgBtn)
         root.addView(remoteCard)
 
         // ── Backup card ──

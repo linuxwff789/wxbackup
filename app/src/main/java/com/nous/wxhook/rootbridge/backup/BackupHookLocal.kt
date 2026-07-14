@@ -25,20 +25,12 @@ object BackupHookLocal {
     fun init(ctx: android.content.Context) {
         BackupEnv.binDir = "/data/local/tmp/wxhook_bin"
         BackupEnv.filesDirPath = ctx.filesDir.absolutePath
-        BackupEnv.rcloneConfigPath = ctx.filesDir.absolutePath + "/.config/rclone/rclone.conf"
         // Ensure backup dir exists (app process, not root)
         try { File(WxHookPaths.BACKUP_DIR).mkdirs() } catch (_: Exception) {}
         try { File("${WxHookPaths.BACKUP_DIR}/tmp").mkdirs() } catch (_: Exception) {}
         // Prevent Android MediaStore from scanning backup images
         RootGateways.run(
             "touch ${WxHookPaths.BACKUP_DIR}/.nomedia && chmod 644 ${WxHookPaths.BACKUP_DIR}/.nomedia",
-            10_000
-        )
-        // Fix DNS for rclone (Go resolver needs /etc/resolv.conf)
-        RootGateways.run(
-            "mkdir -p /data/local/tmp/etc && echo 'nameserver 8.8.8.8' > /data/local/tmp/etc/resolv.conf && " +
-            "mount --bind /data/local/tmp/etc /etc 2>/dev/null; " +
-            "echo 'nameserver 8.8.4.4' >> /etc/resolv.conf 2>/dev/null",
             10_000
         )
     }
