@@ -118,7 +118,10 @@ object BackupOrchestrator {
             }
 
             // 4. Scan files and save manifest
+            android.util.Log.d("wxhook:Backup", "scanFiles: dir=${dir.absolutePath}, exists=${BackupEnv.backupExists(dir.absolutePath)}")
             val allFiles = FileManifest.scanFiles(dir)
+            android.util.Log.d("wxhook:Backup", "scanFiles: found ${allFiles.size} files")
+            allFiles.forEach { android.util.Log.d("wxhook:Backup", "  file: ${it.path} (${it.size} bytes)") }
             val manifest = FileManifest.toManifest(allFiles, tag)
             FileManifest.save(dir, manifest)
             callback?.onProgress("清单已保存: ${allFiles.size}个文件", totalFiles, totalSize)
