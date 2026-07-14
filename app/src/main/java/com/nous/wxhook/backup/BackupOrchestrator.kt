@@ -86,41 +86,35 @@ object BackupOrchestrator {
                 BackupManifest.saveDbState(userDir, tag, maxRowId)
             }
 
-            // 3. Backup attachments
+            // 3. Backup attachments (tar directly from source)
+            val tarFiles = mutableListOf<String>()
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                val userDir = File(dir, userHash)
-                userDir.mkdirs()
 
                 for (attDir in ATT_DIRS) {
-                    callback?.onProgress("[$userHash] $attDir...", totalFiles, totalSize)
                     val src = "$wxBasePath/$attDir"
-                    val dst = "${userDir.absolutePath}/$attDir"
-                    try {
-                        val mkResult = BackupEnv.su("mkdir -p $dst")
-                        if (!mkResult.isSuccess) {
-                            callback?.onProgress("创建目录失败: $dst", totalFiles, totalSize)
-                            continue
-                        }
-                        val cpResult = BackupEnv.su(
-                            "cp -r $src $dst 2>/dev/null && " +
-                            "find \\\"$dst\\\" -type d -exec chmod 755 {} + && " +
-                            "find \\\"$dst\\\" -type f -exec chmod 644 {} +"
-                        )
-                        if (!cpResult.isSuccess) {
-                            callback?.onProgress("复制失败: $src → $dst", totalFiles, totalSize)
-                            continue
-                        }
-                        val d = File(dst)
-                        if (d.exists()) {
-                            totalFiles += d.walkTopDown().filter { it.isFile }.count()
-                            totalSize += d.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-                        }
-                    } catch (e: Exception) {
-                        Log.e("wxhook:Backup", "Copy $userHash/$attDir failed: $e")
-                    }
+                    // 检查源目录是否存在
+                    val exists = BackupEnv.suOut("test -d \\\"$src\\\" && echo 1").trim() == "1"
+                    if (!exists) continue
+
+                    callback?.onProgress("[$userHash] $attDir...", totalFiles, totalSize)
+                    tarFiles.add("$wxBasePath/$attDir")
+
+                    // 统计文件数和大小
+                    val countResult = BackupEnv.suOut(
+                        "find \\\"$src\\\" -type f 2>/dev/null | wc -l"
+                    ).trim().toLongOrNull() ?: 0L
+                    val sizeResult = BackupEnv.suOut(
+                        "du -sb \\\"$src\\\" 2>/dev/null | cut -f1"
+                    ).trim().toLongOrNull() ?: 0L
+                    totalFiles += countResult
+                    totalSize += sizeResult
                 }
-            }
+
+                // Save manifest
+                val userDir = File(dir, userHash)
+                userDir.mkdirs()
+                BackupManifest.saveDbState(userDir, tag, 0)
 
             // 4. Scan files and save manifest
             val allFiles = FileManifest.scanFiles(dir)
@@ -139,7 +133,7 @@ object BackupOrchestrator {
             )
 
             // 6. Cloud sync
-            cloudSync(callback)
+            cloudSync(callback, tarFiles = tarFiles)
             
             BackupHookLocal.Result(
                 true,
@@ -302,7 +296,7 @@ object BackupOrchestrator {
 
     // ── Remote sync via WebDAV (incremental) ──
 
-    fun cloudSync(callback: BackupHookLocal.ProgressCallback?, archivePath: String? = null) {
+    fun cloudSync(callback: BackupHookLocal.ProgressCallback?, archivePath: String? = null, tarFiles: List<String> = emptyList()) {
         try {
             val configFile = File(BackupEnv.backupDir, "remote_config.json")
             if (!configFile.exists()) return
@@ -327,8 +321,19 @@ object BackupOrchestrator {
             // Use provided archivePath or create new package
             val pkgPath = if (archivePath != null && File(archivePath).exists()) {
                 archivePath
+            } else if (tarFiles.isNotEmpty()) {
+                // Tar directly from source directories
+                val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                val pkgName = "wxhook_backup_$tag.tar.gz"
+                val tmpPkg = "/data/local/tmp/$pkgName"
+                val tarCmd = tarFiles.joinToString(" ") { "\\\"$it\\\"" }
+                val tarResult = BackupEnv.su("tar czf \\\"$tmpPkg\\\" $tarCmd 2>/dev/null", 120_000)
+                if (!tarResult.isSuccess) {
+                    callback?.onProgress("打包失败", 0, 0); return
+                }
+                tmpPkg
             } else {
-                // Package backup files into tar.gz
+                // Fallback: scan backup directory
                 val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                 val pkgName = "wxhook_backup_$tag.tar.gz"
                 val tmpPkg = "/data/local/tmp/$pkgName"
