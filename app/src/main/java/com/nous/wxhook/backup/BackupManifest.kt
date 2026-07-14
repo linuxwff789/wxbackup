@@ -118,8 +118,8 @@ object BackupManifest {
     }
 
     fun addRecord(record: JSONObject) {
-        val dir = File(BackupEnv.backupDir)
-        if (!dir.exists()) dir.mkdirs()
+        val dir = BackupEnv.backupDir
+        BackupEnv.su("mkdir -p \"$dir\"")
         val f = File(dir, RECORDS_FILE)
         val arr = try {
             val txt = BackupEnv.suOut("cat \"${f.absolutePath}\" 2>/dev/null").trim()

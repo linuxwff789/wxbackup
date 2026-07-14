@@ -86,7 +86,7 @@ object BackupOrchestrator {
                 BackupManifest.saveDbState(userDir, tag, maxRowId)
             }
 
-            // 3. Backup attachments (git will handle dedup)
+            // 3. Backup attachments 
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val userDir = File(dir, userHash)
@@ -99,7 +99,7 @@ object BackupOrchestrator {
                     try {
                         BackupEnv.su("mkdir -p $dst")
                         BackupEnv.su(
-                            "cp -r $src $dst 2>/dev/null && chmod -R 644 $dst 2>/dev/null"
+                            "cp -r $src $dst 2>/dev/null && find "$dst" -type d -exec chmod 755 {} + && find "$dst" -type f -exec chmod 644 {} + 2>/dev/null"
                         )
                         val d = File(dst)
                         if (d.exists()) {
@@ -398,7 +398,6 @@ object BackupOrchestrator {
     // ── Rebuild DB State ──
 
     fun rebuildDbState(): String {
-        val g = BackupEnv.binDir + "/git"
         val results = mutableListOf<String>()
         val rebuiltRecords = JSONArray()
         return try {
@@ -495,7 +494,6 @@ object BackupOrchestrator {
                     } catch (_: Exception) {}
                 }
 
-                // Git commit hash
                 try {
                     val pResult = RootGateways.run(
                         "HOME=/data/local/tmp LD_LIBRARY_PATH=${BackupEnv.binDir} $g -C ${BackupEnv.backupDir} rev-parse HEAD",

@@ -1,5 +1,4 @@
 package com.nous.wxhook.backup
-import com.nous.wxhook.core.command.CommandResult
 
 import android.util.Base64
 import android.util.Log

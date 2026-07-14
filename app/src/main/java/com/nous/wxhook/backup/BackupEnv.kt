@@ -1,5 +1,4 @@
 package com.nous.wxhook.backup
-import com.nous.wxhook.core.command.CommandResult
 
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.storage.WxHookPaths
@@ -25,8 +24,8 @@ object BackupEnv {
     fun suOut(cmd: String, timeoutMs: Long = 60_000) =
         RootGateways.runQuiet(cmd, timeoutMs)
 
-    fun suCopy(tmp: File, dest: File, mode: String = "644") {
-        su("cp \"${tmp.absolutePath}\" \"${dest.absolutePath}\" && chmod $mode \"${dest.absolutePath}\"")
+    fun suCopy(tmp: File, dest: File, mode: String = "644"): Boolean {
+        return su("cp \"${tmp.absolutePath}\" \"${dest.absolutePath}\" && chmod $mode \"${dest.absolutePath}\"").isSuccess
     }
 
     fun suCopyResult(src: String, dest: String, mode: String = "664"): Boolean {
