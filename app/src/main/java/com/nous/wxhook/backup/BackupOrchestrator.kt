@@ -53,13 +53,19 @@ object BackupOrchestrator {
                     val gzPath = decResult.substring(3)
                     val gzFile = File(gzPath)
                     if (gzFile.exists()) {
-                        gzFile.renameTo(dbGzFile)
-                        totalFiles++; totalSize += BackupEnv.backupSize(gzPath)
+                        // 先尝试重命名
+                        val renamed = gzFile.renameTo(dbGzFile)
+                        if (renamed && dbGzFile.exists() && dbGzFile.length() > 0) {
+                            totalFiles++; totalSize += dbGzFile.length()
+                        }
                     }
                 }
-                if (!BackupEnv.backupExists(dbGzFile.absolutePath)) {
-                    ArchiveService.compressFileSu(dbSrc, dbGzFile.absolutePath)
-                    if (BackupEnv.backupExists(dbGzFile.absolutePath)) {
+                // 如果用户目录没有有效文件，重新压缩
+                if (!BackupEnv.backupExists(dbGzFile.absolutePath) || BackupEnv.backupSize(dbGzFile.absolutePath) <= 0) {
+                    // 删除可能存在的无效文件
+                    BackupEnv.su("rm -f \\\"${dbGzFile.absolutePath}\\\"")
+                    val compressed = ArchiveService.compressFileSu(dbSrc, dbGzFile.absolutePath)
+                    if (compressed && BackupEnv.backupExists(dbGzFile.absolutePath)) {
                         totalFiles++; totalSize += BackupEnv.backupSize(dbGzFile.absolutePath)
                     }
                 }
