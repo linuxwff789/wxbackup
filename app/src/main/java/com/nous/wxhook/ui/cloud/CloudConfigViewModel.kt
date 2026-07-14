@@ -97,6 +97,34 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun getS3Endpoint(provider: String, region: String): String {
+        return when (provider) {
+            "AWS" -> "https://s3.$region.amazonaws.com"
+            "Cloudflare" -> "https://$region.r2.cloudflarestorage.com"
+            "Alibaba" -> "https://$region.aliyuncs.com"
+            "TencentCOS" -> "https://cos.$region.myqcloud.com"
+            "HuaweiOBS" -> "https://obs.$region.myhuaweicloud.com"
+            else -> ""
+        }
+    }
+
+    fun saveS3Config(name: String, provider: String, region: String, endpoint: String, ak: String, sk: String) {
+        val configFile = File("/sdcard/Download/wxhook_backup/remote_config.json")
+        val config = try {
+            JSONObject(configFile.readText())
+        } catch (_: Exception) { JSONObject() }
+        config.put("enabled", true)
+        config.put("remote", name)
+        config.put("type", "s3")
+        config.put("provider", provider)
+        config.put("region", region)
+        config.put("endpoint", endpoint)
+        config.put("access_key", ak)
+        config.put("secret_key", sk)
+        configFile.parentFile?.mkdirs()
+        configFile.writeText(config.toString(2))
+    }
+
     private fun loadStatus(): String {
         val sb = StringBuilder()
         val cfgRaw = try {

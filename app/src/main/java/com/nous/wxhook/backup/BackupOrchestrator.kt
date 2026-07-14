@@ -261,7 +261,7 @@ object BackupOrchestrator {
             BackupManifest.addRecord(rec)
             val msg = if (newFiles > 0) "增量备份: ${newFiles}个文件(${BackupManifest.formatSize(totalSize)}), DB:${incrFrom}→${incrTo}" else "无新文件"
             
-            BackupHookLocal.Result(true, msg + gitMsg)
+            BackupHookLocal.Result(true, msg)
         } catch (e: Exception) {
             BackupHookLocal.Result(false, "增量备份失败: ${e.message}")
         }
@@ -319,22 +319,22 @@ object BackupOrchestrator {
 
             // Incremental upload via WebDavClient
             val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
-            val testResult = client.testConnection()
+            val testResult = kotlinx.coroutines.runBlocking { client.testConnection() }
             if (testResult.isFailure) {
                 callback?.onProgress("WebDAV连接失败: ${testResult.exceptionOrNull()?.message}", 0, 0)
                 return
             }
 
-            client.ensureDirectory(remoteBase)
+            kotlinx.coroutines.runBlocking { client.ensureDirectory(remoteBase) }
 
             // List remote files for incremental check
-            val remoteFiles = client.list(remoteBase).getOrNull() ?: emptyList()
+            val remoteFiles = kotlinx.coroutines.runBlocking { client.list(remoteBase) }.getOrNull() ?: emptyList()
             val localFile = File(pkgPath)
             val remoteMatch = remoteFiles.find { it.path.endsWith(localFile.name) }
 
             // Upload if new or changed
             if (remoteMatch == null || remoteMatch.size != localFile.length()) {
-                val uploadResult = client.upload(localFile, "$remoteBase/${localFile.name}")
+                val uploadResult = kotlinx.coroutines.runBlocking { client.upload(localFile, "$remoteBase/${localFile.name}") }
                 if (uploadResult.isFailure) {
                     callback?.onProgress("上传失败: ${uploadResult.exceptionOrNull()?.message}", 0, 0)
                     return
@@ -370,10 +370,10 @@ object BackupOrchestrator {
 
         return try {
             val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
-            val result = client.testConnection()
+            val result = kotlinx.coroutines.runBlocking { client.testConnection() }
             if (result.isSuccess) {
                 // Try listing the remote path
-                val listResult = client.list(remote.ifBlank { "." })
+                val listResult = kotlinx.coroutines.runBlocking { client.list(remote.ifBlank { "." }) }
                 if (listResult.isSuccess) {
                     val dirs = listResult.getOrNull()?.take(10) ?: emptyList()
                     if (dirs.isEmpty()) "✅ 连接成功（远端无文件）"

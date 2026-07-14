@@ -89,7 +89,7 @@ class SyncService : Service() {
                 // Incremental upload via WebDAV
                 updateNotification("上传中...")
                 val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
-                val testResult = client.testConnection()
+                val testResult = kotlinx.coroutines.runBlocking { client.testConnection() }
                 if (testResult.isFailure) {
                     result = "WebDAV连接失败: ${testResult.exceptionOrNull()?.message}"
                     appendLog(result); updateNotification(result); sendResult(false, result)
@@ -97,16 +97,16 @@ class SyncService : Service() {
                 }
 
                 // Ensure remote directory exists
-                client.ensureDirectory(remotePath)
+                kotlinx.coroutines.runBlocking { client.ensureDirectory(remotePath) }
 
                 // List remote files for incremental check
-                val remoteFiles = client.list(remotePath).getOrNull() ?: emptyList()
+                val remoteFiles = kotlinx.coroutines.runBlocking { client.list(remotePath) }.getOrNull() ?: emptyList()
                 val localFile = File(pkgPath)
                 val remoteMatch = remoteFiles.find { it.path.endsWith(localFile.name) }
 
                 // Upload if new or changed
                 if (remoteMatch == null || remoteMatch.size != localFile.length()) {
-                    val uploadResult = client.upload(localFile, "$remotePath/${localFile.name}")
+                    val uploadResult = kotlinx.coroutines.runBlocking { client.upload(localFile, "$remotePath/${localFile.name}") }
                     if (uploadResult.isFailure) {
                         result = "上传失败: ${uploadResult.exceptionOrNull()?.message}"
                         appendLog(result); updateNotification(result); sendResult(false, result)
