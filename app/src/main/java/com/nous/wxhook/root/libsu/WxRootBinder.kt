@@ -1,8 +1,10 @@
 package com.nous.wxhook.root.libsu
 
+import android.os.IBinder
 import android.os.IInterface
 import android.os.Parcel
 import com.topjohnwu.superuser.Shell
+import java.io.File
 
 class WxRootBinder : android.os.Binder(), IInterface {
 
@@ -25,6 +27,87 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 reply?.writeNoException()
                 true
             }
+            TRANSACTION_WRITE_FILE -> {
+                val path = data.readString()
+                val content = data.readString()
+                val result = try {
+                    val file = File(path)
+                    file.parentFile?.mkdirs()
+                    file.writeText(content ?: "")
+                    0 // success
+                } catch (e: Exception) {
+                    -1 // failure
+                }
+                reply?.writeInt(result)
+                reply?.writeNoException()
+                true
+            }
+            TRANSACTION_READ_FILE -> {
+                val path = data.readString()
+                val content = try {
+                    File(path).readText()
+                } catch (e: Exception) {
+                    ""
+                }
+                reply?.writeString(content)
+                reply?.writeNoException()
+                true
+            }
+            TRANSACTION_MKDIRS -> {
+                val path = data.readString()
+                val result = try {
+                    File(path).mkdirs()
+                    0
+                } catch (e: Exception) {
+                    -1
+                }
+                reply?.writeInt(result)
+                reply?.writeNoException()
+                true
+            }
+            TRANSACTION_FILE_EXISTS -> {
+                val path = data.readString()
+                val exists = File(path).exists()
+                reply?.writeInt(if (exists) 1 else 0)
+                reply?.writeNoException()
+                true
+            }
+            TRANSACTION_FILE_SIZE -> {
+                val path = data.readString()
+                val size = try {
+                    File(path).length()
+                } catch (e: Exception) {
+                    0L
+                }
+                reply?.writeLong(size)
+                reply?.writeNoException()
+                true
+            }
+            TRANSACTION_COPY -> {
+                val src = data.readString()
+                val dst = data.readString()
+                val result = try {
+                    File(src).copyTo(File(dst!!), overwrite = true)
+                    0
+                } catch (e: Exception) {
+                    -1
+                }
+                reply?.writeInt(result)
+                reply?.writeNoException()
+                true
+            }
+            TRANSACTION_DELETE -> {
+                val path = data.readString()
+                val result = try {
+                    File(path).delete()
+                    0
+                } catch (e: Exception) {
+                    -1
+                }
+                reply?.writeInt(result)
+                reply?.writeNoException()
+                true
+            }
             else -> super.onTransact(code, data, reply, flags)
         }
     }
@@ -32,10 +115,14 @@ class WxRootBinder : android.os.Binder(), IInterface {
     companion object {
         const val TRANSACTION_EXEC = android.os.IBinder.FIRST_CALL_TRANSACTION + 1
         const val TRANSACTION_CHECK_ROOT = android.os.IBinder.FIRST_CALL_TRANSACTION + 2
+        const val TRANSACTION_WRITE_FILE = android.os.IBinder.FIRST_CALL_TRANSACTION + 3
+        const val TRANSACTION_READ_FILE = android.os.IBinder.FIRST_CALL_TRANSACTION + 4
+        const val TRANSACTION_MKDIRS = android.os.IBinder.FIRST_CALL_TRANSACTION + 5
+        const val TRANSACTION_FILE_EXISTS = android.os.IBinder.FIRST_CALL_TRANSACTION + 6
+        const val TRANSACTION_FILE_SIZE = android.os.IBinder.FIRST_CALL_TRANSACTION + 7
+        const val TRANSACTION_COPY = android.os.IBinder.FIRST_CALL_TRANSACTION + 8
+        const val TRANSACTION_DELETE = android.os.IBinder.FIRST_CALL_TRANSACTION + 9
         private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
-
-        // 简单结果类，替代 Shell.Result
-        data class ExecResult(val code: Int, val out: List<String>, val err: List<String>)
 
         fun exec(shell: android.os.IBinder, command: String): ExecResult {
             val data = Parcel.obtain()
@@ -49,6 +136,113 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 val out = reply.createStringArrayList() ?: emptyList()
                 val err = reply.createStringArrayList() ?: emptyList()
                 return ExecResult(code, out, err)
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+
+        fun writeFile(shell: android.os.IBinder, path: String, content: String): Int {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                data.writeString(path)
+                data.writeString(content)
+                shell.transact(TRANSACTION_WRITE_FILE, data, reply, 0)
+                reply.readException()
+                return reply.readInt()
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+
+        fun readFile(shell: android.os.IBinder, path: String): String {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                data.writeString(path)
+                shell.transact(TRANSACTION_READ_FILE, data, reply, 0)
+                reply.readException()
+                return reply.readString() ?: ""
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+
+        fun mkdirs(shell: android.os.IBinder, path: String): Int {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                data.writeString(path)
+                shell.transact(TRANSACTION_MKDIRS, data, reply, 0)
+                reply.readException()
+                return reply.readInt()
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+
+        fun fileExists(shell: android.os.IBinder, path: String): Boolean {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                data.writeString(path)
+                shell.transact(TRANSACTION_FILE_EXISTS, data, reply, 0)
+                reply.readException()
+                return reply.readInt() == 1
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+
+        fun fileSize(shell: android.os.IBinder, path: String): Long {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                data.writeString(path)
+                shell.transact(TRANSACTION_FILE_SIZE, data, reply, 0)
+                reply.readException()
+                return reply.readLong()
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+
+        fun copy(shell: android.os.IBinder, src: String, dst: String): Int {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                data.writeString(src)
+                data.writeString(dst)
+                shell.transact(TRANSACTION_COPY, data, reply, 0)
+                reply.readException()
+                return reply.readInt()
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+
+        fun delete(shell: android.os.IBinder, path: String): Int {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                data.writeString(path)
+                shell.transact(TRANSACTION_DELETE, data, reply, 0)
+                reply.readException()
+                return reply.readInt()
             } finally {
                 data.recycle()
                 reply.recycle()
@@ -69,4 +263,6 @@ class WxRootBinder : android.os.Binder(), IInterface {
             }
         }
     }
+
+    data class ExecResult(val code: Int, val out: List<String>, val err: List<String>)
 }

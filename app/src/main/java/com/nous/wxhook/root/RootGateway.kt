@@ -27,4 +27,9 @@ interface RootGateway {
     suspend fun delete(path: String): Boolean
     suspend fun run(command: String, timeoutMs: Long = 60_000): CommandResult
     suspend fun runQuiet(command: String, timeoutMs: Long = 60_000): String
+    
+    // 文件操作 - 在 root 进程执行
+    suspend fun writeFile(path: String, content: String): Boolean
+    suspend fun readFile(path: String): String
+    suspend fun fileSize(path: String): Long
 }

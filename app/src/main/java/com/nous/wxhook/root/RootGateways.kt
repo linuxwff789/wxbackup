@@ -13,4 +13,25 @@ object RootGateways {
 
     fun runQuiet(command: String, timeoutMs: Long = 60_000): String =
         runBlocking { gateway.runQuiet(command, timeoutMs) }
+
+    fun writeFile(path: String, content: String): Boolean =
+        runBlocking { gateway.writeFile(path, content) }
+
+    fun readFile(path: String): String =
+        runBlocking { gateway.readFile(path) }
+
+    fun mkdirs(path: String): Boolean =
+        runBlocking { gateway.mkdirs(path) }
+
+    fun exists(path: String): Boolean =
+        runBlocking { gateway.exists(path) }
+
+    fun fileSize(path: String): Long =
+        runBlocking { gateway.fileSize(path) }
+
+    fun copy(src: String, dst: String): Boolean =
+        runBlocking { gateway.copy(src, dst) }
+
+    fun delete(path: String): Boolean =
+        runBlocking { gateway.delete(path) }
 }

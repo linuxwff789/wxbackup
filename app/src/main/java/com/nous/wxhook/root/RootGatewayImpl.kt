@@ -41,8 +41,12 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
     }
 
     override suspend fun exists(path: String): Boolean = withContext(Dispatchers.IO) {
-        run("test -e ${ShellEscaper.quote(path)} && echo 1 || echo 0").let {
-            it.isSuccess && it.stdout.trim() == "1"
+        if (useLibsu) {
+            com.nous.wxhook.root.libsu.RootManager.fileExists(path)
+        } else {
+            run("test -e ${ShellEscaper.quote(path)} && echo 1 || echo 0").let {
+                it.isSuccess && it.stdout.trim() == "1"
+            }
         }
     }
 
@@ -63,15 +67,27 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
     }
 
     override suspend fun mkdirs(path: String): Boolean = withContext(Dispatchers.IO) {
-        run("mkdir -p ${ShellEscaper.quote(path)}").isSuccess
+        if (useLibsu) {
+            com.nous.wxhook.root.libsu.RootManager.mkdirs(path)
+        } else {
+            run("mkdir -p ${ShellEscaper.quote(path)}").isSuccess
+        }
     }
 
     override suspend fun copy(src: String, dst: String): Boolean = withContext(Dispatchers.IO) {
-        run("cp ${ShellEscaper.quote(src)} ${ShellEscaper.quote(dst)}").isSuccess
+        if (useLibsu) {
+            com.nous.wxhook.root.libsu.RootManager.copy(src, dst)
+        } else {
+            run("cp ${ShellEscaper.quote(src)} ${ShellEscaper.quote(dst)}").isSuccess
+        }
     }
 
     override suspend fun delete(path: String): Boolean = withContext(Dispatchers.IO) {
-        run("rm -f ${ShellEscaper.quote(path)}").isSuccess
+        if (useLibsu) {
+            com.nous.wxhook.root.libsu.RootManager.delete(path)
+        } else {
+            run("rm -f ${ShellEscaper.quote(path)}").isSuccess
+        }
     }
 
     override suspend fun run(command: String, timeoutMs: Long): CommandResult =
@@ -91,4 +107,36 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
                 RootCommandRunner.runSuQuiet(command, timeoutMs)
             }
         }
+
+    // 文件操作 - 在 root 进程执行
+    override suspend fun writeFile(path: String, content: String): Boolean = withContext(Dispatchers.IO) {
+        if (useLibsu) {
+            com.nous.wxhook.root.libsu.RootManager.writeFile(path, content)
+        } else {
+            // fallback: 写临时文件再 su 复制
+            val tmp = java.io.File.createTempFile("root_", ".tmp")
+            tmp.writeText(content)
+            try {
+                copy(tmp.absolutePath, path)
+            } finally {
+                tmp.delete()
+            }
+        }
+    }
+
+    override suspend fun readFile(path: String): String = withContext(Dispatchers.IO) {
+        if (useLibsu) {
+            com.nous.wxhook.root.libsu.RootManager.readFile(path)
+        } else {
+            runQuiet("cat ${ShellEscaper.quote(path)} 2>/dev/null")
+        }
+    }
+
+    override suspend fun fileSize(path: String): Long = withContext(Dispatchers.IO) {
+        if (useLibsu) {
+            com.nous.wxhook.root.libsu.RootManager.fileSize(path)
+        } else {
+            runQuiet("stat -c %s ${ShellEscaper.quote(path)} 2>/dev/null").trim().toLongOrNull() ?: 0L
+        }
+    }
 }

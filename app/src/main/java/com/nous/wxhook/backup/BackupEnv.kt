@@ -5,18 +5,29 @@ import com.nous.wxhook.storage.WxHookPaths
 import org.json.JSONObject
 import java.io.File
 
-/**
- * Shared state and utility helpers for the backup subsystem.
- * Initialized once by BackupHookLocal.init().
- */
 object BackupEnv {
+    val backupDir = WxHookPaths.BACKUP_DIR
+    var binDir = "/data/local/tmp/wxhook_bin"
+    var filesDirPath = "/data/local/tmp"
+    var rcloneConfigPath = ""
 
-    var binDir: String = "/data/data/com.termux/files/usr/bin"
-        internal set
-    var filesDirPath: String = "/data/local/tmp"
-        internal set
+    fun init(binDirectory: String, filesDir: String, rcloneCfg: String = "") {
+        binDir = binDirectory
+        filesDirPath = filesDir
+        rcloneConfigPath = rcloneCfg
+    }
 
-    val backupDir: String get() = WxHookPaths.BACKUP_DIR
+    fun useZstd(): Boolean = try {
+        val cfg = File(backupDir, "db_config.json")
+        if (cfg.exists()) {
+            val json = JSONObject(backupRead(cfg.absolutePath))
+            json.optString("compression", "gzip") == "zstd"
+        } else false
+    } catch (_: Exception) { false }
+
+    fun ext(): String = if (useZstd()) ".sql.zst" else ".sql.gz"
+
+    // ── Root 操作 ──
 
     fun su(cmd: String, timeoutMs: Long = 60_000) =
         RootGateways.run(cmd, timeoutMs)
@@ -25,35 +36,33 @@ object BackupEnv {
         RootGateways.runQuiet(cmd, timeoutMs)
 
     fun suCopy(tmp: File, dest: File, mode: String = "644"): Boolean {
-        return su("cp \"${tmp.absolutePath}\" \"${dest.absolutePath}\" && chmod $mode \"${dest.absolutePath}\"").isSuccess
+        return RootGateways.copy(tmp.absolutePath, dest.absolutePath)
     }
 
     fun suCopyResult(src: String, dest: String, mode: String = "664"): Boolean {
-        return su("cp \"$src\" \"$dest\" && chmod $mode \"$dest\"", 120_000).isSuccess
+        return RootGateways.copy(src, dest)
     }
 
     fun filesDirForWrite(): File = File(filesDirPath).apply { mkdirs() }
 
+    // ── /sdcard 操作（走 root） ──
+
     fun backupExists(path: String): Boolean =
-        suOut("test -e \"$path\" && echo 1").trim() == "1"
+        RootGateways.exists(path)
 
     fun backupSize(path: String): Long =
-        suOut("stat -c %s \"$path\" 2>/dev/null").trim().toLongOrNull() ?: 0L
+        RootGateways.fileSize(path)
 
     fun backupRead(path: String): String =
-        suOut("cat \"$path\" 2>/dev/null")
+        RootGateways.readFile(path)
 
     fun backupWrite(path: String, content: String) {
-        val tmp = File(filesDirForWrite(), "sdcard_write_${System.nanoTime()}.tmp")
-        tmp.writeText(content)
-        suCopy(tmp, File(path))
-        tmp.delete()
+        RootGateways.writeFile(path, content)
     }
 
-    fun useZstd(): Boolean = try {
-        val cfg = JSONObject(backupRead(File(backupDir, WxHookPaths.DB_CONFIG_FILE).absolutePath))
-        cfg.optBoolean("zstd", false)
-    } catch (_: Exception) { false }
+    fun backupMkdirs(path: String): Boolean =
+        RootGateways.mkdirs(path)
 
-    fun ext(): String = if (useZstd()) ".sql.zst" else ".sql.gz"
+    fun backupDelete(path: String): Boolean =
+        RootGateways.delete(path)
 }

@@ -57,6 +57,70 @@ object RootManager {
     suspend fun execQuiet(command: String, timeoutMs: Long = 60_000): String =
         exec(command, timeoutMs).let { if (it.stdout.isNotBlank()) it.stdout else it.stderr }
 
+    // 文件操作 - 在 root 进程执行，直接访问 /sdcard
+    suspend fun writeFile(path: String, content: String): Boolean = withContext(Dispatchers.IO) {
+        val binder = service ?: return@withContext false
+        try {
+            WxRootBinder.writeFile(binder as IBinder, path, content) == 0
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun readFile(path: String): String = withContext(Dispatchers.IO) {
+        val binder = service ?: return@withContext ""
+        try {
+            WxRootBinder.readFile(binder as IBinder, path)
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    suspend fun mkdirs(path: String): Boolean = withContext(Dispatchers.IO) {
+        val binder = service ?: return@withContext false
+        try {
+            WxRootBinder.mkdirs(binder as IBinder, path) == 0
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun fileExists(path: String): Boolean = withContext(Dispatchers.IO) {
+        val binder = service ?: return@withContext false
+        try {
+            WxRootBinder.fileExists(binder as IBinder, path)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun fileSize(path: String): Long = withContext(Dispatchers.IO) {
+        val binder = service ?: return@withContext 0L
+        try {
+            WxRootBinder.fileSize(binder as IBinder, path)
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    suspend fun copy(src: String, dst: String): Boolean = withContext(Dispatchers.IO) {
+        val binder = service ?: return@withContext false
+        try {
+            WxRootBinder.copy(binder as IBinder, src, dst) == 0
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun delete(path: String): Boolean = withContext(Dispatchers.IO) {
+        val binder = service ?: return@withContext false
+        try {
+            WxRootBinder.delete(binder as IBinder, path) == 0
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     fun disconnect(context: Context) {
         if (bound) {
             try { context.unbindService(connection) } catch (_: Exception) {}
