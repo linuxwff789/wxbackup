@@ -340,9 +340,12 @@ object BackupOrchestrator {
             if (incrTarFiles.isNotEmpty()) {
                 val incrArchive = File(dir, "incr_attachments_$tag.tar.zst")
                 val tmpIncrArchive = "/data/local/tmp/${incrArchive.name}"
-                val tarArgs = incrTarFiles.joinToString(" ") { "\"$it\"" }
+                val tarArgs = incrTarFiles.joinToString(" ") { fullPath ->
+                    val rel = fullPath.removePrefix("${BackupEnv.backupDir}/")
+                    "\"$rel\""
+                }
                 val archiveResult = BackupEnv.su(
-                    "tar cf - $tarArgs 2>/dev/null | ${BackupEnv.binDir}/zstd -c -3 > \"$tmpIncrArchive\"",
+                    "tar -C \"${BackupEnv.backupDir}\" cf - $tarArgs 2>/dev/null | ${BackupEnv.binDir}/zstd -c -3 > \"$tmpIncrArchive\"",
                     600_000,
                 )
                 val archiveSize = BackupEnv.suOut("stat -c %s \"$tmpIncrArchive\" 2>/dev/null").trim().toLongOrNull() ?: 0L
