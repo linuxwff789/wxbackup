@@ -506,7 +506,7 @@ object BackupOrchestrator {
                     10_000
                 )
                 results.add(
-                    "${userDir.name}: rowId=${state.optLong("lastMessageRowId", 0)} " +
+                    "${userDir.name}: rowId=${state.optLong("lastMessageRowId", 0)}"
                 )
             }
             val sorted = (0 until rebuiltRecords.length())
