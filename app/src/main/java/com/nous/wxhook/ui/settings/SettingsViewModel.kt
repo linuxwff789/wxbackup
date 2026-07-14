@@ -78,13 +78,18 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun testWebDavConnection(url: String, user: String, pass: String) {
         viewModelScope.launch(Dispatchers.IO) {
+            android.util.Log.d("wxhook:WebDAV", "testWebDavConnection start")
             withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ⏳ WebDAV测试中...") }
             try {
                 val client = com.nous.wxhook.sync.WebDavClient(url, user, pass)
+                android.util.Log.d("wxhook:WebDAV", "calling testConnection...")
                 val result = client.testConnection()
+                android.util.Log.d("wxhook:WebDAV", "result: isSuccess=${result.isSuccess}, msg=${result.exceptionOrNull()?.message}")
                 val msg = if (result.isSuccess) "设置 ✅ WebDAV连接成功" else "设置 ❌ WebDAV: ${result.exceptionOrNull()?.message}"
                 withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = msg) }
+                android.util.Log.d("wxhook:WebDAV", "uiState updated: $msg")
             } catch (e: Exception) {
+                android.util.Log.e("wxhook:WebDAV", "exception: ${e.message}", e)
                 withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ❌ WebDAV: ${e.message}") }
             }
         }
