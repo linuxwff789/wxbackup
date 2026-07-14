@@ -15,16 +15,16 @@ class WxRootBinder : android.os.Binder(), IInterface {
             TRANSACTION_EXEC -> {
                 val cmd = data.readString()
                 val result = Shell.cmd(cmd ?: "").exec()
+                reply?.writeNoException()
                 reply?.writeInt(result.code)
                 reply?.writeString(result.out.joinToString("\n"))
                 reply?.writeString(result.err.joinToString("\n"))
-                reply?.writeNoException()
                 true
             }
             TRANSACTION_CHECK_ROOT -> {
                 val isRoot = Shell.getShell().isRoot
-                reply?.writeInt(if (isRoot) 1 else 0)
                 reply?.writeNoException()
+                reply?.writeInt(if (isRoot) 1 else 0)
                 true
             }
             TRANSACTION_WRITE_FILE -> {
@@ -38,8 +38,8 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 } catch (e: Exception) {
                     -1 // failure
                 }
-                reply?.writeInt(result)
                 reply?.writeNoException()
+                reply?.writeInt(result)
                 true
             }
             TRANSACTION_READ_FILE -> {
@@ -49,8 +49,8 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 } catch (e: Exception) {
                     ""
                 }
-                reply?.writeString(content)
                 reply?.writeNoException()
+                reply?.writeString(content)
                 true
             }
             TRANSACTION_MKDIRS -> {
@@ -61,15 +61,15 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 } catch (e: Exception) {
                     -1
                 }
-                reply?.writeInt(result)
                 reply?.writeNoException()
+                reply?.writeInt(result)
                 true
             }
             TRANSACTION_FILE_EXISTS -> {
                 val path = data.readString()
                 val exists = File(path).exists()
-                reply?.writeInt(if (exists) 1 else 0)
                 reply?.writeNoException()
+                reply?.writeInt(if (exists) 1 else 0)
                 true
             }
             TRANSACTION_FILE_SIZE -> {
@@ -79,8 +79,8 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 } catch (e: Exception) {
                     0L
                 }
-                reply?.writeLong(size)
                 reply?.writeNoException()
+                reply?.writeLong(size)
                 true
             }
             TRANSACTION_COPY -> {
@@ -92,8 +92,8 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 } catch (e: Exception) {
                     -1
                 }
-                reply?.writeInt(result)
                 reply?.writeNoException()
+                reply?.writeInt(result)
                 true
             }
             TRANSACTION_DELETE -> {
@@ -104,8 +104,8 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 } catch (e: Exception) {
                     -1
                 }
-                reply?.writeInt(result)
                 reply?.writeNoException()
+                reply?.writeInt(result)
                 true
             }
             else -> super.onTransact(code, data, reply, flags)
@@ -133,8 +133,8 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 shell.transact(TRANSACTION_EXEC, data, reply, 0)
                 reply.readException()
                 val code = reply.readInt()
-                val out = reply.createStringArrayList() ?: emptyList()
-                val err = reply.createStringArrayList() ?: emptyList()
+                val out = reply.readString()?.lineSequence()?.filter { it.isNotEmpty() }?.toList() ?: emptyList()
+                val err = reply.readString()?.lineSequence()?.filter { it.isNotEmpty() }?.toList() ?: emptyList()
                 return ExecResult(code, out, err)
             } finally {
                 data.recycle()

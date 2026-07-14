@@ -121,7 +121,11 @@ object BackupOrchestrator {
             if (tarFiles.isNotEmpty()) {
                 val archiveFile = File(dir, "attachments_$tag.tar.zst")
                 val tmpArchive = "/data/local/tmp/${archiveFile.name}"
-                val tarArgs = tarFiles.joinToString(" ") { "\"$it\"" }
+                val tarArgs = tarFiles.joinToString(" ") { sourceDir ->
+                    val microMsgDir = sourceDir.substringBeforeLast("/").substringBeforeLast("/")
+                    val relativePath = sourceDir.removePrefix("$microMsgDir/")
+                    "-C \"$microMsgDir\" \"$relativePath\""
+                }
                 val archiveResult = BackupEnv.su(
                     "tar cf - $tarArgs 2>/dev/null | ${BackupEnv.binDir}/zstd -c -3 > \"$tmpArchive\"",
                     600_000,
