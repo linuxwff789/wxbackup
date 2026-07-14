@@ -36,7 +36,22 @@ object SetupManager {
             // Copy to /data/local/tmp/wxhook_bin/ (where SELinux allows execution)
             val tmpDir = "/data/local/tmp/wxhook_bin"
             try {
-                RootGateways.run("mkdir -p $tmpDir && cp " + dir.absolutePath + "/* $tmpDir/ && chmod 755 $tmpDir/*")
+                val copyResult = RootGateways.run("mkdir -p $tmpDir && cp " + dir.absolutePath + "/* $tmpDir/ && chmod 755 $tmpDir/*")
+                if (!copyResult.isSuccess) {
+                    android.util.Log.e("wxhook:Setup", "Failed to copy binaries to $tmpDir")
+                    return@submit
+                }
+
+                // Verify binaries work
+                for (name in EXEC) {
+                    val testResult = RootGateways.run("$tmpDir/$name --version 2>&1 | head -1", 10_000)
+                    if (!testResult.isSuccess) {
+                        android.util.Log.e("wxhook:Setup", "Binary $name verification failed")
+                        return@submit
+                    }
+                    android.util.Log.i("wxhook:Setup", "verified $name: ${testResult.stdout.take(50)}")
+                }
+
                 marker.writeText("ok")
                 android.util.Log.i("wxhook:Setup", "copied to $tmpDir")
             } catch (e: Exception) {

@@ -279,12 +279,12 @@ object BackupOrchestrator {
 
     // ── Remote sync via WebDAV (incremental) ──
 
-    fun cloudSync(callback: BackupHookLocal.ProgressCallback?) {
+    fun cloudSync(callback: BackupHookLocal.ProgressCallback?, archivePath: String? = null) {
         try {
             val configFile = File(BackupEnv.backupDir, "remote_config.json")
             if (!configFile.exists()) return
             val config = JSONObject(
-                BackupEnv.suOut("cat \"${configFile.absolutePath}\" 2>/dev/null").ifBlank { "{}" }
+                BackupEnv.suOut("cat \\\"${configFile.absolutePath}\\\" 2>/dev/null").ifBlank { "{}" }
             )
             val enabled = config.optBoolean("enabled", false)
             if (!enabled) return
@@ -301,27 +301,31 @@ object BackupOrchestrator {
 
             if (webdavUrl.isBlank() || webdavUser.isBlank()) return
 
-            callback?.onProgress("同步到 $remoteBase...", 0, 0)
-
-            // Package backup files into tar.gz
-            val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val pkgName = "wxhook_backup_$tag.tar.gz"
-            val pkgPath = "/data/local/tmp/$pkgName"
-            // Find backup state files and latest incr/baseline
-            val findCmd = "find \"${BackupEnv.backupDir}\" -maxdepth 1 -type f -name \"backup_*.json\" 2>/dev/null; " +
-                "find \"${BackupEnv.backupDir}\" -maxdepth 2 -type f \\( -name \"*.sql.gz\" -o -name \"*.sql.zst\" -o -name \"db_state.json\" \\) 2>/dev/null"
-            val files = BackupEnv.suOut(findCmd).lines().filter { it.isNotBlank() }
-            if (files.isEmpty()) {
-                callback?.onProgress("无文件可同步", 0, 0); return
+            // Use provided archivePath or create new package
+            val pkgPath = if (archivePath != null && File(archivePath).exists()) {
+                archivePath
+            } else {
+                // Package backup files into tar.gz
+                val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                val pkgName = "wxhook_backup_$tag.tar.gz"
+                val tmpPkg = "/data/local/tmp/$pkgName"
+                val findCmd = "find \\\"${BackupEnv.backupDir}\\\" -maxdepth 1 -type f -name \\\"backup_*.json\\\" 2>/dev/null; " +
+                    "find \\\"${BackupEnv.backupDir}\\\" -maxdepth 2 -type f \\\\( -name \\\"*.sql.gz\\\" -o -name \\\"*.sql.zst\\\" -o -name \\\"db_state.json\\\" \\\\) 2>/dev/null"
+                val files = BackupEnv.suOut(findCmd).lines().filter { it.isNotBlank() }
+                if (files.isEmpty()) {
+                    callback?.onProgress("无文件可同步", 0, 0); return
+                }
+                val tarCmd = files.joinToString(" ") { "\\\"$it\\\"" }
+                BackupEnv.su("tar czf \\\"$tmpPkg\\\" $tarCmd 2>/dev/null", 120_000)
+                tmpPkg
             }
-            // Create tar.gz
-            val tarCmd = files.joinToString(" ") { "\"$it\"" }
-            BackupEnv.su("tar czf \"$pkgPath\" $tarCmd 2>/dev/null", 120_000)
-            val pkgSize = BackupEnv.suOut("stat -c %s \"$pkgPath\" 2>/dev/null")
+
+            val pkgSize = BackupEnv.suOut("stat -c %s \\\"$pkgPath\\\" 2>/dev/null")
                 .trim().toLongOrNull() ?: 0L
             if (pkgSize < 100L) {
                 callback?.onProgress("打包失败", 0, 0); return
             }
+            val pkgName = File(pkgPath).name
             callback?.onProgress("上传 $pkgName (${BackupManifest.formatSize(pkgSize)})...", 0, pkgSize)
 
             // Incremental upload via WebDavClient
