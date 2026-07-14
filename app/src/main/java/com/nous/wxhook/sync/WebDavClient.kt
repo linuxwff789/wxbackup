@@ -2,10 +2,16 @@ package com.nous.wxhook.sync
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.Base64
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 class WebDavClient(
     private val url: String,
@@ -13,41 +19,58 @@ class WebDavClient(
     private val pass: String,
 ) : CloudClient {
 
-    private fun authHeader(): String {
-        val credentials = "$user:$pass"
-        return "Basic ${Base64.getEncoder().encodeToString(credentials.toByteArray())}"
+    private val client: OkHttpClient by lazy {
+        // Trust all certificates (self-signed / unknown CA)
+        val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
+            override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) {}
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        })
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, trustAllCerts, SecureRandom())
+
+        OkHttpClient.Builder()
+            .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+            .hostnameVerifier { _, _ -> true }
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build()
     }
 
-    private fun request(method: String, path: String, body: ByteArray? = null): Int {
+    private fun authHeader(): String {
+        val credentials = "$user:$pass"
+        return "Basic ${java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())}"
+    }
+
+    private fun request(method: String, path: String, body: String? = null, headers: Map<String, String> = emptyMap()): Int {
         val fullUrl = "${url.trimEnd('/')}/$path"
-        val conn = URL(fullUrl).openConnection() as HttpURLConnection
-        conn.requestMethod = method
-        conn.setRequestProperty("Authorization", authHeader())
-        conn.setRequestProperty("Content-Type", "application/xml")
-        conn.connectTimeout = 15_000
-        conn.readTimeout = 30_000
-        // Accept all SSL certificates (self-signed / unknown CA)
-        if (conn is javax.net.ssl.HttpsURLConnection) {
-            val trustAll = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
-                override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
-                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-            })
-            val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
-            sslContext.init(null, trustAll, java.security.SecureRandom())
-            conn.sslSocketFactory = sslContext.socketFactory
-            conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
+        val reqBuilder = Request.Builder()
+            .url(fullUrl)
+            .header("Authorization", authHeader())
+
+        for ((k, v) in headers) {
+            reqBuilder.header(k, v)
         }
+
         if (body != null) {
-            conn.doOutput = true
-            conn.outputStream.use { it.write(body) }
+            val requestBody = body.toRequestBody("application/xml".toMediaType())
+            reqBuilder.method(method, requestBody)
+        } else {
+            // GET/HEAD without body
+            when (method) {
+                "GET" -> reqBuilder.get()
+                "HEAD" -> reqBuilder.head()
+                "DELETE" -> reqBuilder.delete()
+                else -> reqBuilder.method(method, null)
+            }
         }
-        return conn.responseCode
+
+        val response = client.newCall(reqBuilder.build()).execute()
+        return response.code
     }
 
     override suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            // Use GET instead of PROPFIND — HttpURLConnection doesn't support PROPFIND
             val code = request("GET", "")
             if (code in 200..299) Result.success(Unit)
             else Result.failure(Exception("WebDAV GET failed: $code"))
@@ -66,85 +89,72 @@ class WebDavClient(
         }
     }
 
-    override suspend fun upload(local: File, remote: String): Result<RemoteObject> =
-        withContext(Dispatchers.IO) {
-            try {
-                val data = local.readBytes()
-                val code = request("PUT", remote, data)
-                if (code in 200..299) {
-                    Result.success(RemoteObject(remote, local.length()))
-                } else {
-                    Result.failure(Exception("PUT failed: $code"))
-                }
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
-        }
-
-    override suspend fun download(remote: String, local: File): Result<Unit> =
-        withContext(Dispatchers.IO) {
-            try {
-                val fullUrl = "${url.trimEnd('/')}/$remote"
-                val conn = URL(fullUrl).openConnection() as HttpURLConnection
-                conn.setRequestProperty("Authorization", authHeader())
-                conn.connectTimeout = 15_000
-                conn.readTimeout = 60_000
-                if (conn.responseCode in 200..299) {
-                    conn.inputStream.use { input ->
-                        local.outputStream().use { output -> input.copyTo(output) }
-                    }
-                    Result.success(Unit)
-                } else {
-                    Result.failure(Exception("GET failed: ${conn.responseCode}"))
-                }
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
-        }
-
-    override suspend fun list(remote: String): Result<List<RemoteObject>> =
-        withContext(Dispatchers.IO) {
-            try {
-                val body = """<?xml version="1.0"?>
-<d:propfind xmlns:d="DAV:">
-  <d:prop><d:displayname/><d:getcontentlength/></d:prop>
-</d:propfind>""".toByteArray()
-                // PROPFIND with depth 1
-                val fullUrl = "${url.trimEnd('/')}/$remote"
-                val conn = URL(fullUrl).openConnection() as HttpURLConnection
-                conn.requestMethod = "PROPFIND"
-                conn.setRequestProperty("Authorization", authHeader())
-                conn.setRequestProperty("Content-Type", "application/xml")
-                conn.setRequestProperty("Depth", "1")
-                conn.doOutput = true
-                conn.outputStream.use { it.write(body) }
-                conn.connectTimeout = 15_000
-                conn.readTimeout = 30_000
-
-                if (conn.responseCode !in 200..299) {
-                    return@withContext Result.failure(Exception("PROPFIND failed: ${conn.responseCode}"))
-                }
-                val xml = conn.inputStream.bufferedReader().readText()
-                // 简单解析 response（避免加 XML parser 依赖）
-                val objects = mutableListOf<RemoteObject>()
-                val entries = xml.split("<d:response>").drop(1)
-                for (entry in entries) {
-                    val href = entry.substringAfter("<d:href>", "").substringBefore("</d:href>")
-                    if (href.isNotBlank() && href != "$remote/") {
-                        val size = entry.substringAfter("<d:getcontentlength>", "0")
-                            .substringBefore("</d:getcontentlength>").toLongOrNull() ?: 0
-                        objects.add(RemoteObject(href.trimStart('/'), size))
-                    }
-                }
-                Result.success(objects)
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
-        }
-
-    override suspend fun delete(remote: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun list(path: String): Result<List<CloudFile>> = withContext(Dispatchers.IO) {
         try {
-            val code = request("DELETE", remote)
+            val body = """
+                <?xml version="1.0" encoding="utf-8"?>
+                <D:propfind xmlns:D="DAV:">
+                    <D:allprop/>
+                </D:propfind>
+            """.trimIndent()
+
+            // OkHttp supports PROPFIND via method()
+            val fullUrl = "${url.trimEnd('/')}/$path"
+            val requestBody = body.toRequestBody("application/xml".toMediaType())
+            val request = Request.Builder()
+                .url(fullUrl)
+                .header("Authorization", authHeader())
+                .header("Depth", "1")
+                .method("PROPFIND", requestBody)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
+
+            if (response.code !in 200..299) {
+                return@withContext Result.failure(Exception("PROPFIND failed: ${response.code}"))
+            }
+
+            // Simple XML parsing for href elements
+            val files = mutableListOf<CloudFile>()
+            val hrefRegex = Regex("<[dD]:href>([^<]+)</[dD]:href>")
+            val matches = hrefRegex.findAll(responseBody)
+            for (match in matches) {
+                val href = match.groupValues[1]
+                // Skip the directory itself (last segment)
+                val name = href.trimEnd('/').substringAfterLast('/')
+                if (name.isNotEmpty() && name != path.trimEnd('/').substringAfterLast('/')) {
+                    files.add(CloudFile(href, name, 0))
+                }
+            }
+            Result.success(files)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun upload(localFile: java.io.File, remotePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val body = localFile.readBytes().toRequestBody("application/octet-stream".toMediaType())
+            val code = request("PUT", remotePath, null)
+            // Re-do with body
+            val fullUrl = "${url.trimEnd('/')}/$remotePath"
+            val request = Request.Builder()
+                .url(fullUrl)
+                .header("Authorization", authHeader())
+                .put(body)
+                .build()
+            val response = client.newCall(request).execute()
+            if (response.code in 200..299) Result.success(Unit)
+            else Result.failure(Exception("PUT failed: ${response.code}"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun delete(remotePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val code = request("DELETE", remotePath)
             if (code in 200..299) Result.success(Unit)
             else Result.failure(Exception("DELETE failed: $code"))
         } catch (e: Exception) {

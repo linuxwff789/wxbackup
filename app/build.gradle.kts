@@ -88,6 +88,7 @@ dependencies {
     // libsu - root shell management
     implementation("com.github.topjohnwu.libsu:core:6.0.0")
     implementation("com.github.topjohnwu.libsu:service:6.0.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // SQLCipher for WeChat DB decryption
     // TODO: find correct Maven coordinates or add custom repository
