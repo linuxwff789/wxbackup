@@ -297,7 +297,7 @@ object BackupOrchestrator {
 
     // ── Remote sync via WebDAV (incremental) ──
 
-    fun cloudSync(callback: BackupHookLocal.ProgressCallback?, archivePath: String? = null) {
+    fun cloudSync(callback: BackupHookLocal.ProgressCallback?, archivePath: String? = null, tarFiles: List<String> = emptyList()) {
         try {
             val configFile = File(BackupEnv.backupDir, "remote_config.json")
             if (!configFile.exists()) return
@@ -322,6 +322,17 @@ object BackupOrchestrator {
             // Use provided archivePath or create new package
             val pkgPath = if (archivePath != null && File(archivePath).exists()) {
                 archivePath
+            } else if (tarFiles.isNotEmpty()) {
+                // Tar directly from source directories
+                val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                val pkgName = "wxhook_backup_$tag.tar.gz"
+                val tmpPkg = "/data/local/tmp/$pkgName"
+                val tarCmd = tarFiles.joinToString(" ") { "\\\"$it\\\"" }
+                val tarResult = BackupEnv.su("tar czf \\\"$tmpPkg\\\" $tarCmd", 120_000)
+                if (!tarResult.isSuccess) {
+                    callback?.onProgress("打包失败", 0, 0); return
+                }
+                tmpPkg
             } else {
                 // Package backup files into tar.gz
                 val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
