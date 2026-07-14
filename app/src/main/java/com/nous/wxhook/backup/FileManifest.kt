@@ -41,7 +41,10 @@ object FileManifest {
         val entries = mutableListOf<FileEntry>()
         // 使用 su 列出文件（避免 FUSE 问题）
         val path = dir.absolutePath
-        val output = RootGateways.runQuiet("find \\\"$path\\\" -type f 2>/dev/null")
+        val cmd = "find \"$path\" -type f 2>/dev/null"
+        android.util.Log.d("wxhook:Manifest", "scanFiles cmd: $cmd")
+        val output = RootGateways.runQuiet(cmd)
+        android.util.Log.d("wxhook:Manifest", "scanFiles output: '${output.take(200)}'")
         output.lines().filter { it.isNotBlank() }.forEach { fullPath ->
             val relPath = fullPath.removePrefix("$path/").let {
                 if (prefix.isEmpty()) it else "$prefix/$it"
