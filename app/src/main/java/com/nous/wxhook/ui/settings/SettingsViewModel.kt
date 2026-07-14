@@ -85,12 +85,21 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 android.util.Log.d("wxhook:WebDAV", "calling testConnection...")
                 val result = client.testConnection()
                 android.util.Log.d("wxhook:WebDAV", "result: isSuccess=${result.isSuccess}, msg=${result.exceptionOrNull()?.message}")
-                val msg = if (result.isSuccess) "设置 ✅ WebDAV连接成功" else "设置 ❌ WebDAV: ${result.exceptionOrNull()?.message}"
-                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = msg) }
-                android.util.Log.d("wxhook:WebDAV", "uiState updated: $msg")
+                if (result.isSuccess) {
+                    // List remote files
+                    val listResult = client.list("")
+                    val files = listResult.getOrNull() ?: emptyList()
+                    val fileNames = files.map { it.path.trimEnd('/').substringAfterLast('/') }.filter { it.isNotEmpty() }.take(10)
+                    val msg = if (fileNames.isEmpty()) "✅ 连接成功（远端为空）" else "✅ 连接成功\n远端文件: ${fileNames.joinToString(", ")}"
+                    android.util.Log.d("wxhook:WebDAV", "listing: ${files.size} files")
+                    withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = msg) }
+                } else {
+                    val msg = "❌ WebDAV: ${result.exceptionOrNull()?.message}"
+                    withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = msg) }
+                }
             } catch (e: Exception) {
                 android.util.Log.e("wxhook:WebDAV", "exception: ${e.message}", e)
-                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ❌ WebDAV: ${e.message}") }
+                withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "❌ WebDAV: ${e.message}") }
             }
         }
     }
