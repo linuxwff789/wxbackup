@@ -26,6 +26,18 @@ class WebDavClient(
         conn.setRequestProperty("Content-Type", "application/xml")
         conn.connectTimeout = 15_000
         conn.readTimeout = 30_000
+        // Accept all SSL certificates (self-signed / unknown CA)
+        if (conn is javax.net.ssl.HttpsURLConnection) {
+            val trustAll = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
+                override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+            })
+            val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
+            sslContext.init(null, trustAll, java.security.SecureRandom())
+            conn.sslSocketFactory = sslContext.socketFactory
+            conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
+        }
         if (body != null) {
             conn.doOutput = true
             conn.outputStream.use { it.write(body) }
