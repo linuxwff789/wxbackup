@@ -1,7 +1,9 @@
 package com.nous.wxhook.root.libsu
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.os.IBinder
 import com.nous.wxhook.core.command.CommandResult
 import com.topjohnwu.superuser.ipc.RootService
@@ -12,12 +14,12 @@ object RootManager {
     private var service: WxRootBinder? = null
     private var bound = false
 
-    private val connection = object : RootService.Connection {
-        override fun onConnected(name: android.content.ComponentName?, binder: IBinder?) {
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             service = binder as? WxRootBinder
             bound = true
         }
-        override fun onDisconnected(name: android.content.ComponentName?) {
+        override fun onServiceDisconnected(name: ComponentName?) {
             service = null
             bound = false
         }
