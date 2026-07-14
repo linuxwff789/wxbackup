@@ -62,6 +62,21 @@ object FileManifest {
         return entries
     }
 
+    fun findEntry(manifest: JSONObject, path: String): FileEntry? {
+        val arr = manifest.optJSONArray("files") ?: return null
+        for (i in 0 until arr.length()) {
+            val obj = arr.getJSONObject(i)
+            if (obj.getString("path") == path) {
+                return FileEntry(
+                    path = obj.getString("path"),
+                    size = obj.getLong("size"),
+                    mtime = obj.getLong("mtime"),
+                )
+            }
+        }
+        return null
+    }
+
     fun diff(oldManifest: JSONObject, newFiles: List<FileEntry>): FileDiff {
         val oldEntries = mutableMapOf<String, FileEntry>()
         val oldArr = oldManifest.optJSONArray("files") ?: JSONArray()

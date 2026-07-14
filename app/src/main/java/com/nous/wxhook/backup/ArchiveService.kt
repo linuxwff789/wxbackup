@@ -136,8 +136,8 @@ object ArchiveService {
         val workDir = "/data/local/tmp/wxhook_backup"
         val workDb = "$workDir/wxhook_inc.db"
         val workSql = "$workDir/wxhook_inc_out.sql"
-        val workOut = "$workDir/wxhook_inc_out.sql.gz"
-        val finalOut = "$finalDir/wxhook_inc_out.sql.gz"
+        val workOut = "$workDir/wxhook_inc_out" + BackupEnv.ext()
+        val finalOut = "$finalDir/wxhook_inc_out" + BackupEnv.ext()
         val cleanupWork = "rm -f $workDb $workDb-shm $workDb-wal $workSql $workOut 2>/dev/null"
         val cleanupAll = "$cleanupWork; rm -f $finalOut 2>/dev/null"
         return try {

@@ -47,13 +47,12 @@ object BackupOrchestrator {
                 callback?.onProgress("[$userHash] 数据库基线...", totalFiles, totalSize)
                 val dbSrc = "$wxBasePath/EnMicroMsg.db"
                 val dbGzFile = File(userDir, "EnMicroMsg_baseline" + BackupEnv.ext())
-                // Decrypt + gzip
+                // Decrypt + compress
                 val decResult = ArchiveService.decryptAndDump(dbSrc)
                 if (decResult.startsWith("OK:")) {
                     val gzPath = decResult.substring(3)
                     val gzFile = File(gzPath)
                     if (gzFile.exists()) {
-                        // 用 suCopy 复制（避免 FUSE 问题）
                         val copied = BackupEnv.suCopy(gzFile, dbGzFile)
                         if (copied && BackupEnv.backupExists(dbGzFile.absolutePath) && BackupEnv.backupSize(dbGzFile.absolutePath) > 0) {
                             totalFiles++; totalSize += BackupEnv.backupSize(dbGzFile.absolutePath)
@@ -62,25 +61,35 @@ object BackupOrchestrator {
                 }
                 // 如果用户目录没有有效文件，重新压缩
                 if (!BackupEnv.backupExists(dbGzFile.absolutePath) || BackupEnv.backupSize(dbGzFile.absolutePath) <= 0) {
-                    // 删除可能存在的无效文件
-                    BackupEnv.su("rm -f \\\"${dbGzFile.absolutePath}\\\"")
+                    BackupEnv.su("rm -f \"${dbGzFile.absolutePath}\"")
                     val compressed = ArchiveService.compressFileSu(dbSrc, dbGzFile.absolutePath)
                     if (compressed && BackupEnv.backupExists(dbGzFile.absolutePath)) {
                         totalFiles++; totalSize += BackupEnv.backupSize(dbGzFile.absolutePath)
                     }
                 }
 
-                // Save DB state
+                // Save DB state - use dynamic password, not hardcoded
                 val maxRowId = runCatching {
-                    val result = RootGateways.run(
-                        "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6' " +
-                        "/data/local/sqlcipher /sdcard/Download/wxhook_backup/tmp/wxhook_dec.db " +
-                        "-cmd 'PRAGMA key = \"e9cd2ae\";' -cmd 'PRAGMA cipher_compatibility=3;' " +
-                        "-cmd 'PRAGMA cipher_page_size=1024;' -cmd 'PRAGMA kdf_iter=4000;' " +
-                        "-cmd 'PRAGMA cipher_use_hmac=OFF;' " +
-                        "-cmd 'SELECT max(rowid) FROM message;' 2>/dev/null",
-                        30_000
-                    )
+                    val pwd = ArchiveService.getDbPassword()
+                    val workDb = "/data/local/tmp/wxhook_backup/wxhook_dec.db"
+                    // Copy DB to ext4 for SQLCipher
+                    RootGateways.run("mkdir -p /data/local/tmp/wxhook_backup && dd if=\"$dbSrc\" of=\"$workDb\" bs=4M status=none", 300_000)
+                    val copiedSize = RootGateways.runQuiet("stat -c %s \"$workDb\" 2>/dev/null").trim().toLongOrNull() ?: 0L
+                    if (copiedSize < 1_000_000L) return@runCatching 0L
+
+                    val sqlScript = "/data/local/tmp/wxhook_backup/rowid_query.sql"
+                    val scriptContent = ".output /dev/null\n" +
+                        "PRAGMA key = '$pwd';\n" +
+                        "PRAGMA cipher_compatibility = 3;\n" +
+                        "PRAGMA cipher_page_size = 1024;\n" +
+                        "PRAGMA kdf_iter = 4000;\n" +
+                        "PRAGMA cipher_use_hmac = OFF;\n" +
+                        ".output stdout\n" +
+                        "SELECT coalesce(max(rowid), 0) FROM message;\n"
+                    RootGateways.runQuiet("printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript")
+                    val ld = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
+                    val result = RootGateways.run("$ld ${BackupEnv.binDir}/sqlcipher \"$workDb\" < $sqlScript 2>/dev/null", 30_000)
+                    RootGateways.run("rm -f $workDb $workDb-shm $workDb-wal $sqlScript", 10_000)
                     result.stdout.lines().lastOrNull { it.all { c -> c.isDigit() } }?.toLong() ?: 0L
                 }.getOrDefault(0L)
                 BackupManifest.saveDbState(userDir, tag, maxRowId)
@@ -93,14 +102,12 @@ object BackupOrchestrator {
 
                 for (attDir in ATT_DIRS) {
                     val src = "$wxBasePath/$attDir"
-                    // /proc source path: pass ordinary shell quotes, not literal backslashes.
                     val exists = BackupEnv.suOut("test -d \"$src\" && echo 1").trim() == "1"
                     if (!exists) continue
 
                     callback?.onProgress("[$userHash] $attDir...", totalFiles, totalSize)
                     tarFiles.add("$wxBasePath/$attDir")
 
-                    // 统计文件数和大小
                     val countResult = BackupEnv.suOut(
                         "find \"$src\" -type f 2>/dev/null | wc -l"
                     ).trim().toLongOrNull() ?: 0L
@@ -110,11 +117,6 @@ object BackupOrchestrator {
                     totalFiles += countResult
                     totalSize += sizeResult
                 }
-
-                // Save manifest
-                val userDir = File(dir, userHash)
-                userDir.mkdirs()
-                BackupManifest.saveDbState(userDir, tag, 0)
             }
 
             // 4. Archive attachments locally. toybox tar has no zstd support, so pipe it to bundled zstd.
@@ -151,7 +153,7 @@ object BackupOrchestrator {
             FileManifest.save(dir, manifest)
             callback?.onProgress("清单已保存: ${sourceFiles.size}个文件", totalFiles, totalSize)
 
-            // 5. Save config and records
+            // 6. Save config and records
             BackupManifest.saveDbConfig()
             BackupManifest.saveState(tag, totalFiles, totalSize)
             BackupManifest.addRecord(
@@ -161,7 +163,7 @@ object BackupOrchestrator {
                 )
             )
 
-            // 6. Cloud sync
+            // 7. Cloud sync
             cloudSync(callback, tarFiles = tarFiles)
             
             BackupHookLocal.Result(
@@ -198,10 +200,7 @@ object BackupOrchestrator {
                 userDir.mkdirs()
 
                 val dbState = BackupManifest.loadDbState(userDir)
-                Log.e("wxhook:INCR", "userDir=${userDir.absolutePath}")
-                Log.e("wxhook:INCR", "dbState=$dbState")
                 val lastRowId = dbState.optLong("lastMessageRowId", 0)
-                Log.e("wxhook:INCR", "lastRowId=$lastRowId")
                 if (lastRowId <= 0) {
                     callback?.onProgress(
                         "[$userHash] 无基线数据，请先全量备份", totalFiles, totalSize
@@ -216,15 +215,37 @@ object BackupOrchestrator {
                 incrTo = lastRowId
                 if (incResult.startsWith("OK:")) {
                     val gzPath = incResult.substring(3)
-                    val gzFile = File(gzPath)
                     if (BackupEnv.backupExists(gzPath) && BackupEnv.backupSize(gzPath) > 0) {
-                        // Extract last rowid from gz file (read only last line)
+                        // Extract last rowid via explicit query, not from dump
                         incrTo = runCatching {
-                            val dec = if (BackupEnv.useZstd()) "${BackupEnv.binDir}/zstd -dc" else "gzip -dc"
-                            BackupEnv.suOut(
-                                "$dec \"$gzPath\" 2>/dev/null | tail -1 | cut -d'(' -f2 | cut -d',' -f1"
-                            ).trim().toLong()
+                            val pwd = ArchiveService.getDbPassword()
+                            val workDb = "/data/local/tmp/wxhook_backup/wxhook_inc.db"
+                            RootGateways.run("mkdir -p /data/local/tmp/wxhook_backup", 5_000)
+                            val copiedSize = RootGateways.runQuiet("stat -c %s \"$workDb\" 2>/dev/null").trim().toLongOrNull() ?: 0L
+                            if (copiedSize < 1_000_000L) {
+                                // Still use fallback from compressed dump
+                                val dec = if (BackupEnv.useZstd()) "${BackupEnv.binDir}/zstd -dc" else "gzip -dc"
+                                BackupEnv.suOut(
+                                    "$dec \"$gzPath\" 2>/dev/null | tail -1 | cut -d'(' -f2 | cut -d',' -f1"
+                                ).trim().toLong()
+                            } else {
+                                val sqlScript = "/data/local/tmp/wxhook_backup/incr_max_rowid.sql"
+                                val scriptContent = ".output /dev/null\n" +
+                                    "PRAGMA key = '$pwd';\n" +
+                                    "PRAGMA cipher_compatibility = 3;\n" +
+                                    "PRAGMA cipher_page_size = 1024;\n" +
+                                    "PRAGMA kdf_iter = 4000;\n" +
+                                    "PRAGMA cipher_use_hmac = OFF;\n" +
+                                    ".output stdout\n" +
+                                    "SELECT coalesce(max(rowid), $lastRowId) FROM message WHERE rowid > $lastRowId;\n"
+                                RootGateways.runQuiet("printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript")
+                                val ld = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
+                                val r = RootGateways.run("$ld ${BackupEnv.binDir}/sqlcipher \"$workDb\" < $sqlScript 2>/dev/null", 30_000)
+                                RootGateways.run("rm -f $workDb $workDb-shm $workDb-wal $sqlScript", 10_000)
+                                r.stdout.lines().lastOrNull { it.all { c -> c.isDigit() } }?.toLong() ?: lastRowId
+                            }
                         }.getOrDefault(lastRowId)
+
                         val incrName = "incr_${incrFrom}_to_${incrTo}" + BackupEnv.ext()
                         val incrPath = "${userDir.absolutePath}/$incrName"
                         val ok = BackupEnv.suCopyResult(gzPath, incrPath)
@@ -246,7 +267,8 @@ object BackupOrchestrator {
                 }
             }
 
-            // 2. Attachments incremental (only newer files)
+            // 2. Attachments incremental via manifest diff (not find -newermt)
+            val oldManifest = FileManifest.load(dir)
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val userDir = File(dir, userHash)
@@ -254,27 +276,36 @@ object BackupOrchestrator {
 
                 for (attDir in ATT_DIRS) {
                     val src = "$wxBasePath/$attDir"
-                    val dst = "${userDir.absolutePath}/$attDir"
                     try {
-                        val findOut = BackupEnv.suOut(
-                            "find $src -type f -newermt @$lastTime 2>/dev/null"
+                        // Scan current source files for this attachment directory
+                        val currentFiles = FileManifest.scanWeChatAttachments(
+                            wxBasePath, userHash, listOf(attDir)
                         )
-                        val list = findOut.lines().filter { it.isNotBlank() }
-                        if (list.isNotEmpty()) {
-                            callback?.onProgress(
-                                "[$userHash] 增量 $attDir: ${list.size}个",
-                                totalFiles, totalSize
+                        // Filter to only added or modified relative to old manifest
+                        val toCopy = currentFiles.filter { entry ->
+                            val oldEntry = FileManifest.findEntry(oldManifest, entry.path)
+                            oldEntry == null || oldEntry.size != entry.size || oldEntry.mtime != entry.mtime
+                        }
+                        if (toCopy.isEmpty()) continue
+
+                        callback?.onProgress(
+                            "[$userHash] 增量 $attDir: ${toCopy.size}个",
+                            totalFiles, totalSize
+                        )
+                        for (entry in toCopy) {
+                            // entry.path is "<hash>/image2/..." relative to wxBasePath root
+                            // Source absolute: wxBasePath + "/" + entry.path (without hash prefix)
+                            val rel = entry.path.removePrefix("$userHash/")
+                            val srcFile = "$wxBasePath/$rel"
+                            val dstFile = File(userDir.absolutePath, rel)
+                            dstFile.parentFile?.mkdirs()
+                            val cpResult = BackupEnv.su(
+                                "cp \"$srcFile\" \"${dstFile.absolutePath}\" && chmod 644 \"${dstFile.absolutePath}\""
                             )
-                            for (fp in list) {
-                                val rel = fp.removePrefix("$src/")
-                                val dstFile = File(dst, rel)
-                                dstFile.parentFile?.mkdirs()
-                                val cpResult = BackupEnv.su(
-                                    "cp \\\"$fp\\\" \\\"${dstFile.absolutePath}\\\" && chmod 644 \\\"${dstFile.absolutePath}\\\""
-                                )
-                                if (cpResult.isSuccess && dstFile.exists()) {
-                                    totalFiles++; totalSize += dstFile.length(); newFiles++
-                                }
+                            if (cpResult.isSuccess &&
+                                BackupEnv.backupExists(dstFile.absolutePath) &&
+                                BackupEnv.backupSize(dstFile.absolutePath) > 0) {
+                                totalFiles++; totalSize += BackupEnv.backupSize(dstFile.absolutePath); newFiles++
                             }
                         }
                     } catch (e: Exception) {
@@ -283,17 +314,18 @@ object BackupOrchestrator {
                 }
             }
 
-            // 3. Save state and update manifest
-            BackupManifest.saveState(tag, totalFiles, totalSize)
-
+            // 3. Collect incremental DB files per user (not from root dir)
             val incrFiles = mutableListOf<String>()
-            val incList = dir.listFiles()
-                ?.filter { it.name.startsWith("incr_") && it.name.endsWith(BackupEnv.ext()) }
-                ?.sortedBy { it.name } ?: emptyList()
-            for (f in incList) incrFiles.add(f.name)
+            for (wxBasePath in wxPaths) {
+                val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                val userDir = File(dir, userHash)
+                userDir.listFiles()
+                    ?.filter { it.name.startsWith("incr_") && it.name.endsWith(BackupEnv.ext()) }
+                    ?.sortedBy { it.name }
+                    ?.forEach { incrFiles.add(it.name) }
+            }
 
-            // Update source manifest with current WeChat attachment state.
-            val oldManifest = FileManifest.load(dir)
+            // 4. Update source manifest with current WeChat attachment state.
             val currentSourceFiles = wxPaths.flatMap { wxBasePath ->
                 FileManifest.scanWeChatAttachments(
                     wxBasePath,
@@ -312,8 +344,11 @@ object BackupOrchestrator {
                 )
             }
 
-            // 4. Cloud sync
+            // 5. Cloud sync (after all data committed)
             cloudSync(callback)
+
+            // 6. Save state LAST (after all data/manifest committed)
+            BackupManifest.saveState(tag, totalFiles, totalSize)
 
             val rec = BackupManifest.createRecord(
                 tag, "incremental", totalFiles, totalSize,
@@ -331,21 +366,18 @@ object BackupOrchestrator {
         }
     }
 
-
-
-    // ── Remote sync via WebDAV (incremental) ──
+    // ── Remote sync via WebDAV ──
 
     fun cloudSync(callback: BackupHookLocal.ProgressCallback?, archivePath: String? = null, tarFiles: List<String> = emptyList()) {
         try {
             val configFile = File(BackupEnv.backupDir, "remote_config.json")
             if (!configFile.exists()) return
             val config = JSONObject(
-                BackupEnv.suOut("cat \\\"${configFile.absolutePath}\\\" 2>/dev/null").ifBlank { "{}" }
+                BackupEnv.suOut("cat \"${configFile.absolutePath}\" 2>/dev/null").ifBlank { "{}" }
             )
             val enabled = config.optBoolean("enabled", false)
             if (!enabled) return
 
-            // Read WebDAV settings from settings_config.json
             val settingsCfg = try {
                 val settingsFile = File(BackupEnv.filesDirPath, "settings_config.json")
                 JSONObject(settingsFile.readText())
@@ -357,40 +389,34 @@ object BackupOrchestrator {
 
             if (webdavUrl.isBlank() || webdavUser.isBlank()) return
 
-            // Use provided archivePath or create new package
+            // Use provided archivePath or create new package from backup dir
             val pkgPath = if (archivePath != null && File(archivePath).exists()) {
                 archivePath
-            } else if (tarFiles.isNotEmpty()) {
-                // Tar directly from source directories
-                val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                val pkgName = "wxhook_backup_$tag.tar.gz"
-                val tmpPkg = "/data/local/tmp/$pkgName"
-                val tarCmd = tarFiles.joinToString(" ") { "\\\"$it\\\"" }
-                val tarResult = BackupEnv.su("tar czf \\\"$tmpPkg\\\" $tarCmd", 120_000)
-                if (!tarResult.isSuccess) {
-                    callback?.onProgress("打包失败", 0, 0); return
-                }
-                tmpPkg
             } else {
-                // Package backup files into tar.gz
+                // Package: all .sql.zst, .sql.gz, state files, manifest, and attachments
                 val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                val pkgName = "wxhook_backup_$tag.tar.gz"
+                val pkgName = "wxhook_backup_$tag.tar.zst"
                 val tmpPkg = "/data/local/tmp/$pkgName"
-                val findCmd = "find \\\"${BackupEnv.backupDir}\\\" -maxdepth 1 -type f -name \\\"backup_*.json\\\" 2>/dev/null; " +
-                    "find \\\"${BackupEnv.backupDir}\\\" -maxdepth 2 -type f \\\\( -name \\\"*.sql.gz\\\" -o -name \\\"*.sql.zst\\\" -o -name \\\"db_state.json\\\" \\\\) 2>/dev/null"
+                val findCmd = "find \"${BackupEnv.backupDir}\" -maxdepth 1 -type f " +
+                    "\\( -name '*.sql.zst' -o -name '*.sql.gz' -o -name 'attachments_*.tar.zst' -o -name '*.json' -o -name '.nomedia' \\) 2>/dev/null; " +
+                    "find \"${BackupEnv.backupDir}\" -maxdepth 3 -type f " +
+                    "\\( -name 'db_state.json' -o -name 'incr_*.sql.zst' -o -name 'incr_*.sql.gz' \\) 2>/dev/null"
                 val files = BackupEnv.suOut(findCmd).lines().filter { it.isNotBlank() }
                 if (files.isEmpty()) {
                     callback?.onProgress("无文件可同步", 0, 0); return
                 }
-                val tarCmd = files.joinToString(" ") { "\\\"$it\\\"" }
-                val tarResult = BackupEnv.su("tar czf \\\"$tmpPkg\\\" $tarCmd 2>/dev/null", 120_000)
+                val tarArgs = files.joinToString(" ") { "\"$it\"" }
+                val tarResult = BackupEnv.su(
+                    "tar cf - $tarArgs 2>/dev/null | ${BackupEnv.binDir}/zstd -c -3 > \"$tmpPkg\"",
+                    600_000
+                )
                 if (!tarResult.isSuccess) {
                     callback?.onProgress("打包失败", 0, 0); return
                 }
                 tmpPkg
             }
 
-            val pkgSize = BackupEnv.suOut("stat -c %s \\\"$pkgPath\\\" 2>/dev/null")
+            val pkgSize = BackupEnv.suOut("stat -c %s \"$pkgPath\" 2>/dev/null")
                 .trim().toLongOrNull() ?: 0L
             if (pkgSize < 100L) {
                 callback?.onProgress("打包失败", 0, 0); return
@@ -398,7 +424,6 @@ object BackupOrchestrator {
             val pkgName = File(pkgPath).name
             callback?.onProgress("上传 $pkgName (${BackupManifest.formatSize(pkgSize)})...", 0, pkgSize)
 
-            // Incremental upload via WebDavClient
             val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
             val testResult = kotlinx.coroutines.runBlocking { client.testConnection() }
             if (testResult.isFailure) {
@@ -408,12 +433,10 @@ object BackupOrchestrator {
 
             kotlinx.coroutines.runBlocking { client.ensureDirectory(remoteBase) }
 
-            // List remote files for incremental check
             val remoteFiles = kotlinx.coroutines.runBlocking { client.list(remoteBase) }.getOrNull() ?: emptyList()
             val localFile = File(pkgPath)
             val remoteMatch = remoteFiles.find { it.path.endsWith(localFile.name) }
 
-            // Upload if new or changed
             if (remoteMatch == null || remoteMatch.size != localFile.length()) {
                 val uploadResult = kotlinx.coroutines.runBlocking { client.upload(localFile, "$remoteBase/${localFile.name}") }
                 if (uploadResult.isFailure) {
@@ -425,7 +448,6 @@ object BackupOrchestrator {
                 callback?.onProgress("跳过: ${localFile.name} (远程已存在)", 1, pkgSize)
             }
 
-            // Cleanup local pkg
             BackupEnv.su("rm -f \"$pkgPath\"", 10_000)
             callback?.onProgress("同步完成: $pkgName", 1, pkgSize)
         } catch (e: Exception) {
@@ -436,7 +458,6 @@ object BackupOrchestrator {
     // ── Test remote (WebDAV) ──
 
     fun testRemoteConnection(remote: String, configPath: String = ""): String {
-        // Read WebDAV settings from settings_config.json
         val settingsCfg = try {
             val settingsFile = File(BackupEnv.filesDirPath, "settings_config.json")
             JSONObject(settingsFile.readText())
@@ -453,7 +474,6 @@ object BackupOrchestrator {
             val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
             val result = kotlinx.coroutines.runBlocking { client.testConnection() }
             if (result.isSuccess) {
-                // Try listing the remote path
                 val listResult = kotlinx.coroutines.runBlocking { client.list(remote.ifBlank { "." }) }
                 if (listResult.isSuccess) {
                     val dirs = listResult.getOrNull()?.take(10) ?: emptyList()
@@ -478,7 +498,7 @@ object BackupOrchestrator {
         return try {
             val usersOutput = RootGateways.runQuiet(
                 "find ${BackupEnv.backupDir} -mindepth 1 -maxdepth 1 -type d | " +
-                "grep -v '/\\\\.' | grep -v '/tmp$' | grep -v '/.git$'"
+                "grep -v '/\\.' | grep -v '/tmp$' | grep -v '/.git$'"
             )
             val userDirs = usersOutput.lines().filter { it.isNotBlank() }
             if (userDirs.isEmpty()) return "备份目录为空"
@@ -490,7 +510,6 @@ object BackupOrchestrator {
                 val state = JSONObject().apply { put("restoredAt", System.currentTimeMillis()) }
                 val previousRowId = previousState.optLong("lastMessageRowId", 0L)
 
-                // List files in user dir
                 val filesOutput = RootGateways.runQuiet(
                     "find \"$userPath\" -maxdepth 1 -type f"
                 )
@@ -569,7 +588,6 @@ object BackupOrchestrator {
                     } catch (_: Exception) {}
                 }
 
-                // Write state to user dir
                 val tmpState = File(BackupEnv.filesDirForWrite(), "db_state_${userDir.name}.json")
                 tmpState.writeText(state.toString())
                 RootGateways.run(
