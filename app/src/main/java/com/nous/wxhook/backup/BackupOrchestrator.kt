@@ -339,7 +339,10 @@ object BackupOrchestrator {
                     callback?.onProgress("无文件可同步", 0, 0); return
                 }
                 val tarCmd = files.joinToString(" ") { "\\\"$it\\\"" }
-                BackupEnv.su("tar czf \\\"$tmpPkg\\\" $tarCmd 2>/dev/null", 120_000)
+                val tarResult = BackupEnv.su("tar czf \\\"$tmpPkg\\\" $tarCmd 2>/dev/null", 120_000)
+                if (!tarResult.isSuccess) {
+                    callback?.onProgress("打包失败", 0, 0); return
+                }
                 tmpPkg
             }
 
