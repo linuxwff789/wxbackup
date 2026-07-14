@@ -91,10 +91,10 @@ object ArchiveService {
 
     // ── Full DB decrypt + dump ──
 
-    fun decryptAndDump(dbPath: String, outputPath: String? = null): String {
+    fun decryptAndDump(dbPath: String): String {
         val tmpDir = "/sdcard/Download/wxhook_backup/tmp"
         val shPath = "/data/local/tmp/decrypt_full.sh"
-        val gzFile = outputPath ?: ("$tmpDir/EnMicroMsg_baseline" + BackupEnv.ext())
+        val gzFile = "$tmpDir/EnMicroMsg_baseline" + BackupEnv.ext()
         return try {
             val pwd = getDbPassword()
             val sqlScript = "/data/local/tmp/decrypt_full.sql"
@@ -107,9 +107,8 @@ object ArchiveService {
                 ".output stdout\n" +
                 ".mode insert\n" +
                 "SELECT * FROM message;\n"
-            val gzDir = File(gzFile).parent ?: tmpDir
             val script = "#!/system/bin/sh\n" +
-                "mkdir -p $tmpDir\nmkdir -p $gzDir\n" +
+                "mkdir -p $tmpDir\n" +
                 "cp \"$dbPath\" $tmpDir/wxhook_dec.db 2>/dev/null\n" +
                 "printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript\n" +
                 "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6' " +

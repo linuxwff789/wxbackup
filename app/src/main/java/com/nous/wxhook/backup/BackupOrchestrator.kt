@@ -48,10 +48,12 @@ object BackupOrchestrator {
                 val dbSrc = "$wxBasePath/EnMicroMsg.db"
                 val dbGzFile = File(userDir, "EnMicroMsg_baseline" + BackupEnv.ext())
                 // Decrypt + compress — dump directly to final location
-                val decResult = ArchiveService.decryptAndDump(dbSrc, dbGzFile.absolutePath)
+                val decResult = ArchiveService.decryptAndDump(dbSrc)
                 if (decResult.startsWith("OK:")) {
-                    if (BackupEnv.backupExists(dbGzFile.absolutePath) && BackupEnv.backupSize(dbGzFile.absolutePath) > 0) {
-                        totalFiles++; totalSize += BackupEnv.backupSize(dbGzFile.absolutePath)
+                    val gzPath = decResult.substring(3)
+                    val gzFile = File(gzPath)
+                    if (gzFile.exists()) {
+                        BackupEnv.suCopy(gzFile, dbGzFile)
                     }
                 }
                 // Fallback: compress directly if decryptAndDump failed
