@@ -22,8 +22,8 @@ object BackupEnv {
         if (cfg.exists()) {
             val json = JSONObject(backupRead(cfg.absolutePath))
             json.optString("compression", "zstd") == "zstd"
-        } else false
-    } catch (_: Exception) { false }
+        } else true  // 默认 zstd
+    } catch (_: Exception) { true }
 
     fun ext(): String = if (useZstd()) ".sql.zst" else ".sql.gz"
 

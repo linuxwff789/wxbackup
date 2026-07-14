@@ -53,10 +53,10 @@ object BackupOrchestrator {
                     val gzPath = decResult.substring(3)
                     val gzFile = File(gzPath)
                     if (gzFile.exists()) {
-                        // 先尝试重命名
-                        val renamed = gzFile.renameTo(dbGzFile)
-                        if (renamed && dbGzFile.exists() && dbGzFile.length() > 0) {
-                            totalFiles++; totalSize += dbGzFile.length()
+                        // 用 suCopy 复制（避免 FUSE 问题）
+                        val copied = BackupEnv.suCopy(gzFile, dbGzFile)
+                        if (copied && BackupEnv.backupExists(dbGzFile.absolutePath) && BackupEnv.backupSize(dbGzFile.absolutePath) > 0) {
+                            totalFiles++; totalSize += BackupEnv.backupSize(dbGzFile.absolutePath)
                         }
                     }
                 }
