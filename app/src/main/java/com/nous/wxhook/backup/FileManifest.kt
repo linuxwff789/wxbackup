@@ -38,18 +38,19 @@ object FileManifest {
 
     fun scanFiles(dir: File, prefix: String = ""): List<FileEntry> {
         val entries = mutableListOf<FileEntry>()
-        if (!dir.exists()) return entries
-        dir.listFiles()?.forEach { f ->
-            val relPath = if (prefix.isEmpty()) f.name else "$prefix/${f.name}"
-            if (f.isDirectory) {
-                entries.addAll(scanFiles(f, relPath))
-            } else {
-                entries.add(FileEntry(
-                    path = relPath,
-                    size = f.length(),
-                    mtime = f.lastModified(),
-                ))
+        // 使用 su 列出文件（避免 FUSE 问题）
+        val path = dir.absolutePath
+        val output = RootGateways.runQuiet("find \\\"$path\\\" -type f 2>/dev/null")
+        output.lines().filter { it.isNotBlank() }.forEach { fullPath ->
+            val relPath = fullPath.removePrefix("$path/").let {
+                if (prefix.isEmpty()) it else "$prefix/$it"
             }
+            val size = RootGateways.fileSize(fullPath)
+            entries.add(FileEntry(
+                path = relPath,
+                size = size,
+                mtime = 0L,
+            ))
         }
         return entries
     }
