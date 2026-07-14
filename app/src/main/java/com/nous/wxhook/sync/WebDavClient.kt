@@ -44,15 +44,19 @@ class WebDavClient(
 
     override suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            val body = """<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>"""
             val fullUrl = "${url.trimEnd('/')}/"
+            val requestBody = body.toRequestBody("application/xml".toMediaType())
             val request = Request.Builder()
                 .url(fullUrl)
                 .header("Authorization", authHeader())
-                .get()
+                .header("Depth", "0")
+                .method("PROPFIND", requestBody)
                 .build()
             val response = client.newCall(request).execute()
-            if (response.code in 200..299) Result.success(Unit)
-            else Result.failure(Exception("WebDAV GET failed: ${response.code}"))
+            // 207 Multi-Status = PROPFIND success, 200 = OK
+            if (response.code in 200..299 || response.code == 207) Result.success(Unit)
+            else Result.failure(Exception("WebDAV PROPFIND failed: ${response.code}"))
         } catch (e: Exception) {
             Result.failure(e)
         }

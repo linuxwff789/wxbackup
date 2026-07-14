@@ -264,18 +264,6 @@ class SettingsAdapter(
                             File(ctx.filesDir, "settings_config.json").writeText(o.toString())
                         }
                     }
-                    // Also save on every text change so config is always current
-                    et.addTextChangedListener(object : android.text.TextWatcher {
-                        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                        override fun afterTextChanged(s: android.text.Editable?) {
-                            val o = runCatching { JSONObject(File(ctx.filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
-                            o.put(item.key, s?.toString() ?: "")
-                            File(ctx.filesDir, "settings_config.json").writeText(o.toString())
-                        }
-                    })
-                    // Prevent RecyclerView rebind from triggering text change again
-                    et.tag = "bound_${item.key}"
                 }
             }
             is SettingsItem.Button -> {
