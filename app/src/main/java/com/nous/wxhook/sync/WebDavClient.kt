@@ -6,6 +6,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
@@ -20,7 +21,6 @@ class WebDavClient(
 ) : CloudClient {
 
     private val client: OkHttpClient by lazy {
-        // Trust all certificates (self-signed / unknown CA)
         val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
             override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) {}
@@ -42,38 +42,17 @@ class WebDavClient(
         return "Basic ${java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())}"
     }
 
-    private fun request(method: String, path: String, body: String? = null, headers: Map<String, String> = emptyMap()): Int {
-        val fullUrl = "${url.trimEnd('/')}/$path"
-        val reqBuilder = Request.Builder()
-            .url(fullUrl)
-            .header("Authorization", authHeader())
-
-        for ((k, v) in headers) {
-            reqBuilder.header(k, v)
-        }
-
-        if (body != null) {
-            val requestBody = body.toRequestBody("application/xml".toMediaType())
-            reqBuilder.method(method, requestBody)
-        } else {
-            // GET/HEAD without body
-            when (method) {
-                "GET" -> reqBuilder.get()
-                "HEAD" -> reqBuilder.head()
-                "DELETE" -> reqBuilder.delete()
-                else -> reqBuilder.method(method, null)
-            }
-        }
-
-        val response = client.newCall(reqBuilder.build()).execute()
-        return response.code
-    }
-
     override suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val code = request("GET", "")
-            if (code in 200..299) Result.success(Unit)
-            else Result.failure(Exception("WebDAV GET failed: $code"))
+            val fullUrl = "${url.trimEnd('/')}/"
+            val request = Request.Builder()
+                .url(fullUrl)
+                .header("Authorization", authHeader())
+                .get()
+                .build()
+            val response = client.newCall(request).execute()
+            if (response.code in 200..299) Result.success(Unit)
+            else Result.failure(Exception("WebDAV GET failed: ${response.code}"))
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -81,15 +60,21 @@ class WebDavClient(
 
     override suspend fun ensureDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val code = request("MKCOL", path)
-            if (code in 200..299 || code == 405) Result.success(Unit) // 405 = already exists
-            else Result.failure(Exception("MKCOL failed: $code"))
+            val fullUrl = "${url.trimEnd('/')}/$path"
+            val request = Request.Builder()
+                .url(fullUrl)
+                .header("Authorization", authHeader())
+                .method("MKCOL", null)
+                .build()
+            val response = client.newCall(request).execute()
+            if (response.code in 200..299 || response.code == 405) Result.success(Unit)
+            else Result.failure(Exception("MKCOL failed: ${response.code}"))
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    override suspend fun list(path: String): Result<List<CloudFile>> = withContext(Dispatchers.IO) {
+    override suspend fun list(remote: String): Result<List<RemoteObject>> = withContext(Dispatchers.IO) {
         try {
             val body = """
                 <?xml version="1.0" encoding="utf-8"?>
@@ -98,8 +83,7 @@ class WebDavClient(
                 </D:propfind>
             """.trimIndent()
 
-            // OkHttp supports PROPFIND via method()
-            val fullUrl = "${url.trimEnd('/')}/$path"
+            val fullUrl = "${url.trimEnd('/')}/$remote"
             val requestBody = body.toRequestBody("application/xml".toMediaType())
             val request = Request.Builder()
                 .url(fullUrl)
@@ -115,16 +99,14 @@ class WebDavClient(
                 return@withContext Result.failure(Exception("PROPFIND failed: ${response.code}"))
             }
 
-            // Simple XML parsing for href elements
-            val files = mutableListOf<CloudFile>()
+            val files = mutableListOf<RemoteObject>()
             val hrefRegex = Regex("<[dD]:href>([^<]+)</[dD]:href>")
             val matches = hrefRegex.findAll(responseBody)
             for (match in matches) {
                 val href = match.groupValues[1]
-                // Skip the directory itself (last segment)
                 val name = href.trimEnd('/').substringAfterLast('/')
-                if (name.isNotEmpty() && name != path.trimEnd('/').substringAfterLast('/')) {
-                    files.add(CloudFile(href, name, 0))
+                if (name.isNotEmpty()) {
+                    files.add(RemoteObject(href, 0, 0))
                 }
             }
             Result.success(files)
@@ -133,30 +115,54 @@ class WebDavClient(
         }
     }
 
-    override suspend fun upload(localFile: java.io.File, remotePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun upload(local: File, remote: String): Result<RemoteObject> = withContext(Dispatchers.IO) {
         try {
-            val body = localFile.readBytes().toRequestBody("application/octet-stream".toMediaType())
-            val code = request("PUT", remotePath, null)
-            // Re-do with body
-            val fullUrl = "${url.trimEnd('/')}/$remotePath"
+            val body = local.readBytes().toRequestBody("application/octet-stream".toMediaType())
+            val fullUrl = "${url.trimEnd('/')}/$remote"
             val request = Request.Builder()
                 .url(fullUrl)
                 .header("Authorization", authHeader())
                 .put(body)
                 .build()
             val response = client.newCall(request).execute()
-            if (response.code in 200..299) Result.success(Unit)
+            if (response.code in 200..299) Result.success(RemoteObject(remote, local.length(), 0))
             else Result.failure(Exception("PUT failed: ${response.code}"))
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    override suspend fun delete(remotePath: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun download(remote: String, local: File): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val code = request("DELETE", remotePath)
-            if (code in 200..299) Result.success(Unit)
-            else Result.failure(Exception("DELETE failed: $code"))
+            val fullUrl = "${url.trimEnd('/')}/$remote"
+            val request = Request.Builder()
+                .url(fullUrl)
+                .header("Authorization", authHeader())
+                .get()
+                .build()
+            val response = client.newCall(request).execute()
+            if (response.code in 200..299) {
+                response.body?.bytes()?.let { local.writeBytes(it) }
+                Result.success(Unit)
+            } else {
+                Result.failure(Exception("GET failed: ${response.code}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun delete(remote: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val fullUrl = "${url.trimEnd('/')}/$remote"
+            val request = Request.Builder()
+                .url(fullUrl)
+                .header("Authorization", authHeader())
+                .delete()
+                .build()
+            val response = client.newCall(request).execute()
+            if (response.code in 200..299) Result.success(Unit)
+            else Result.failure(Exception("DELETE failed: ${response.code}"))
         } catch (e: Exception) {
             Result.failure(e)
         }
