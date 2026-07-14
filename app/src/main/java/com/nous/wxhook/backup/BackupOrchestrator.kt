@@ -68,16 +68,16 @@ object BackupOrchestrator {
                     }
                 }
 
-                // Save DB state - use dynamic password, not hardcoded
+                // Save DB state - query rowid from the already-decrypted DB
                 val maxRowId = runCatching {
                     val pwd = ArchiveService.getDbPassword()
-                    val workDb = "/data/local/tmp/wxhook_backup/wxhook_dec.db"
-                    // Copy DB to ext4 for SQLCipher
-                    RootGateways.run("mkdir -p /data/local/tmp/wxhook_backup && dd if=\"$dbSrc\" of=\"$workDb\" bs=4M status=none", 300_000)
-                    val copiedSize = RootGateways.runQuiet("stat -c %s \"$workDb\" 2>/dev/null").trim().toLongOrNull() ?: 0L
-                    if (copiedSize < 1_000_000L) return@runCatching 0L
+                    // Use the decrypted DB that decryptAndDump() already created
+                    val decDb = "/sdcard/Download/wxhook_backup/tmp/wxhook_dec.db"
+                    val exists = RootGateways.runQuiet("test -e \"$decDb\" && echo 1").trim() == "1"
+                    if (!exists || pwd.isEmpty()) return@runCatching 0L
 
                     val sqlScript = "/data/local/tmp/wxhook_backup/rowid_query.sql"
+                    RootGateways.run("mkdir -p /data/local/tmp/wxhook_backup", 5_000)
                     val scriptContent = ".output /dev/null\n" +
                         "PRAGMA key = '$pwd';\n" +
                         "PRAGMA cipher_compatibility = 3;\n" +
@@ -88,8 +88,8 @@ object BackupOrchestrator {
                         "SELECT coalesce(max(rowid), 0) FROM message;\n"
                     RootGateways.runQuiet("printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript")
                     val ld = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
-                    val result = RootGateways.run("$ld ${BackupEnv.binDir}/sqlcipher \"$workDb\" < $sqlScript 2>/dev/null", 30_000)
-                    RootGateways.run("rm -f $workDb $workDb-shm $workDb-wal $sqlScript", 10_000)
+                    val result = RootGateways.run("$ld ${BackupEnv.binDir}/sqlcipher \"$decDb\" < $sqlScript 2>/dev/null", 30_000)
+                    RootGateways.run("rm -f $sqlScript", 5_000)
                     result.stdout.lines().lastOrNull { it.all { c -> c.isDigit() } }?.toLong() ?: 0L
                 }.getOrDefault(0L)
                 BackupManifest.saveDbState(userDir, tag, maxRowId)
