@@ -47,9 +47,10 @@ class WebDavClient(
 
     override suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val code = request("PROPFIND", "")
+            // Use GET instead of PROPFIND — HttpURLConnection doesn't support PROPFIND
+            val code = request("GET", "")
             if (code in 200..299) Result.success(Unit)
-            else Result.failure(Exception("WebDAV PROPFIND failed: $code"))
+            else Result.failure(Exception("WebDAV GET failed: $code"))
         } catch (e: Exception) {
             Result.failure(e)
         }

@@ -274,6 +274,8 @@ class SettingsAdapter(
                             File(ctx.filesDir, "settings_config.json").writeText(o.toString())
                         }
                     })
+                    // Prevent RecyclerView rebind from triggering text change again
+                    et.tag = "bound_${item.key}"
                 }
             }
             is SettingsItem.Button -> {
