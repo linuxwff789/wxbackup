@@ -246,10 +246,10 @@ object BackupOrchestrator {
                                 val rel = fp.removePrefix("$src/")
                                 val dstFile = File(dst, rel)
                                 dstFile.parentFile?.mkdirs()
-                                BackupEnv.su(
-                                    "cp \"$fp\" \"${dstFile.absolutePath}\" && chmod 644 \"${dstFile.absolutePath}\""
+                                val cpResult = BackupEnv.su(
+                                    "cp \\\"$fp\\\" \\\"${dstFile.absolutePath}\\\" && chmod 644 \\\"${dstFile.absolutePath}\\\""
                                 )
-                                if (dstFile.exists()) {
+                                if (cpResult.isSuccess && dstFile.exists()) {
                                     totalFiles++; totalSize += dstFile.length(); newFiles++
                                 }
                             }
