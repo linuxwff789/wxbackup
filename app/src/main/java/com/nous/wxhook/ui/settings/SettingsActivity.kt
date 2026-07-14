@@ -93,9 +93,11 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun handleAction(action: String, data: Any?) {
+        android.util.Log.d("wxhook:Settings", "handleAction: $action")
         when {
             action == "save_webdav" -> {
                 val cfg = runCatching { JSONObject(File(filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
+                android.util.Log.d("wxhook:Settings", "config: $cfg")
                 val url = cfg.optString("webdav_url", "")
                 val user = cfg.optString("webdav_user", "")
                 val pass = cfg.optString("webdav_pass", "")
@@ -108,6 +110,7 @@ class SettingsActivity : AppCompatActivity() {
             }
             action == "test_webdav" -> {
                 val cfg = runCatching { JSONObject(File(filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
+                android.util.Log.d("wxhook:Settings", "test_webdav config: $cfg")
                 val url = cfg.optString("webdav_url", "")
                 val user = cfg.optString("webdav_user", "")
                 val pass = cfg.optString("webdav_pass", "")
