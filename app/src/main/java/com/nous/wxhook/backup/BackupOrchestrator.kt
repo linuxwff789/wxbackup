@@ -93,8 +93,8 @@ object BackupOrchestrator {
 
                 for (attDir in ATT_DIRS) {
                     val src = "$wxBasePath/$attDir"
-                    // 检查源目录是否存在
-                    val exists = BackupEnv.suOut("test -d \\\"$src\\\" && echo 1").trim() == "1"
+                    // /proc source path: pass ordinary shell quotes, not literal backslashes.
+                    val exists = BackupEnv.suOut("test -d \"$src\" && echo 1").trim() == "1"
                     if (!exists) continue
 
                     callback?.onProgress("[$userHash] $attDir...", totalFiles, totalSize)
@@ -102,10 +102,10 @@ object BackupOrchestrator {
 
                     // 统计文件数和大小
                     val countResult = BackupEnv.suOut(
-                        "find \\\"$src\\\" -type f 2>/dev/null | wc -l"
+                        "find \"$src\" -type f 2>/dev/null | wc -l"
                     ).trim().toLongOrNull() ?: 0L
                     val sizeResult = BackupEnv.suOut(
-                        "du -sb \\\"$src\\\" 2>/dev/null | cut -f1"
+                        "du -sb \"$src\" 2>/dev/null | cut -f1"
                     ).trim().toLongOrNull() ?: 0L
                     totalFiles += countResult
                     totalSize += sizeResult
@@ -117,11 +117,26 @@ object BackupOrchestrator {
                 BackupManifest.saveDbState(userDir, tag, 0)
             }
 
-            // 4. Scan files and save manifest
-            android.util.Log.d("wxhook:Backup", "scanFiles: dir=${dir.absolutePath}, exists=${BackupEnv.backupExists(dir.absolutePath)}")
+            // 4. Archive attachments locally. toybox tar has no zstd support, so pipe it to bundled zstd.
+            if (tarFiles.isNotEmpty()) {
+                val archiveFile = File(dir, "attachments_$tag.tar.zst")
+                val tmpArchive = "/data/local/tmp/${archiveFile.name}"
+                val tarArgs = tarFiles.joinToString(" ") { "\"$it\"" }
+                val archiveResult = BackupEnv.su(
+                    "tar cf - $tarArgs 2>/dev/null | ${BackupEnv.binDir}/zstd -c -3 > \"$tmpArchive\"",
+                    600_000,
+                )
+                val archiveSize = BackupEnv.suOut("stat -c %s \"$tmpArchive\" 2>/dev/null").trim().toLongOrNull() ?: 0L
+                if (!archiveResult.isSuccess || archiveSize <= 0L || !BackupEnv.suCopyResult(tmpArchive, archiveFile.absolutePath)) {
+                    return BackupHookLocal.Result(false, "附件归档失败")
+                }
+                totalFiles++
+                totalSize += BackupEnv.backupSize(archiveFile.absolutePath)
+                BackupEnv.su("rm -f \"$tmpArchive\"")
+            }
+
+            // 5. Scan final backup artifacts and save manifest.
             val allFiles = FileManifest.scanFiles(dir)
-            android.util.Log.d("wxhook:Backup", "scanFiles: found ${allFiles.size} files")
-            allFiles.forEach { android.util.Log.d("wxhook:Backup", "  file: ${it.path} (${it.size} bytes)") }
             val manifest = FileManifest.toManifest(allFiles, tag)
             FileManifest.save(dir, manifest)
             callback?.onProgress("清单已保存: ${allFiles.size}个文件", totalFiles, totalSize)

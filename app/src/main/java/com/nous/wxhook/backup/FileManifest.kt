@@ -39,25 +39,29 @@ object FileManifest {
 
     fun scanFiles(dir: File, prefix: String = ""): List<FileEntry> {
         val entries = mutableListOf<FileEntry>()
-        // 使用 su 列出文件（避免 FUSE 问题）
         val path = dir.absolutePath
-        val cmd = "find \"$path\" -type f 2>/dev/null"
-        android.util.Log.d("wxhook:Manifest", "scanFiles cmd: $cmd")
-        val output = RootGateways.runQuiet(cmd)
-        android.util.Log.d("wxhook:Manifest", "scanFiles output: '${output.take(200)}'")
-        output.lines().filter { it.isNotBlank() }.forEach { fullPath ->
-            val relPath = fullPath.removePrefix("$path/").let {
-                if (prefix.isEmpty()) it else "$prefix/$it"
-            }
-            val size = RootGateways.fileSize(fullPath)
+        val output = RootGateways.runQuiet("find \"$path\" -type f 2>/dev/null")
+        output.lineSequence().filter { it.isNotBlank() }.forEach { fullPath ->
+            val relPath = fullPath.removePrefix("$path/")
+            if (isRuntimeFile(relPath)) return@forEach
             entries.add(FileEntry(
-                path = relPath,
-                size = size,
+                path = if (prefix.isEmpty()) relPath else "$prefix/$relPath",
+                size = RootGateways.fileSize(fullPath),
                 mtime = 0L,
             ))
         }
         return entries
     }
+
+    private fun isRuntimeFile(path: String): Boolean =
+        path.startsWith("tmp/") ||
+            path == MANIFEST_FILE ||
+            path == "backup_live.log" ||
+            path == "sync_live.log" ||
+            path == "backup_state.json" ||
+            path == "backup_records.json" ||
+            path == "db_config.json" ||
+            path == ".nomedia"
 
     fun diff(oldManifest: JSONObject, newFiles: List<FileEntry>): FileDiff {
         val oldEntries = mutableMapOf<String, FileEntry>()
