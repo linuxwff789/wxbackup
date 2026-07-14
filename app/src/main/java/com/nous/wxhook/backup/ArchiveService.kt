@@ -68,9 +68,9 @@ object ArchiveService {
                 return false
             }
 
-            // 验证文件头
-            val header = BackupEnv.suOut("xxd -l 2 \\\"$dstPath\\\" 2>/dev/null").trim()
-            val expectedHeader = if (BackupEnv.useZstd()) "28b52ffd" else "1f8b"
+            // 验证文件头 (用 od 替代 xxd，更通用)
+            val header = BackupEnv.suOut("od -A n -t x1 -N 2 \\\"$dstPath\\\" 2>/dev/null | head -1").trim()
+            val expectedHeader = if (BackupEnv.useZstd()) "28 b5" else "1f 8b"
             if (!header.contains(expectedHeader)) {
                 BackupEnv.su("rm -f \\\"$dstPath\\\"")
                 return false

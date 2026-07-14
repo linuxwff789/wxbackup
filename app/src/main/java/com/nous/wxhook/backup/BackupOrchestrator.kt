@@ -97,12 +97,20 @@ object BackupOrchestrator {
                     val src = "$wxBasePath/$attDir"
                     val dst = "${userDir.absolutePath}/$attDir"
                     try {
-                        BackupEnv.su("mkdir -p $dst")
-                        BackupEnv.su(
+                        val mkResult = BackupEnv.su("mkdir -p $dst")
+                        if (!mkResult.isSuccess) {
+                            callback?.onProgress("创建目录失败: $dst", totalFiles, totalSize)
+                            continue
+                        }
+                        val cpResult = BackupEnv.su(
                             "cp -r $src $dst 2>/dev/null && " +
                             "find \\\"$dst\\\" -type d -exec chmod 755 {} + && " +
                             "find \\\"$dst\\\" -type f -exec chmod 644 {} +"
                         )
+                        if (!cpResult.isSuccess) {
+                            callback?.onProgress("复制失败: $src → $dst", totalFiles, totalSize)
+                            continue
+                        }
                         val d = File(dst)
                         if (d.exists()) {
                             totalFiles += d.walkTopDown().filter { it.isFile }.count()
