@@ -30,8 +30,10 @@ object FileManifest {
 
     fun save(backupDir: File, manifest: JSONObject) {
         val f = File(backupDir, MANIFEST_FILE)
-        f.parentFile?.mkdirs()
-        f.writeText(manifest.toString(2))
+        // 先写到临时文件，再用 su 复制（避免 FUSE 问题）
+        val tmp = File(BackupEnv.filesDirForWrite(), MANIFEST_FILE)
+        tmp.writeText(manifest.toString(2))
+        BackupEnv.suCopy(tmp, f)
     }
 
     fun scanFiles(dir: File, prefix: String = ""): List<FileEntry> {
