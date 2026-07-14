@@ -24,6 +24,7 @@ class SyncService : Service() {
         const val ACTION_FINISH = "com.nous.wxhook.SYNC_FINISH"
         const val EXTRA_OK = "ok"
         const val EXTRA_MSG = "msg"
+        private const val BACKUP_DIR = "/sdcard/Download/wxhook_backup"
 
         fun start(ctx: Context) {
             val i = Intent(ctx, SyncService::class.java).apply { action = ACTION_SYNC }
@@ -41,16 +42,12 @@ class SyncService : Service() {
     private fun startSync() {
         try { startForeground(NOTIFICATION_ID, createNotification("同步中...")) } catch (_: Exception) {}
         Thread {
-            val BACKUP_DIR = "/sdcard/Download/wxhook_backup"
             var result = "同步失败"
             try {
                 appendLog("同步服务启动")
-                updateNotification("读取配置...")
 
-                // Read WebDAV config from settings_config.json
-                val settingsCfgRaw = try {
-                    File(filesDir, "settings_config.json").readText()
-                } catch (_: Exception) { "{}" }
+                // Read WebDAV config
+                val settingsCfgRaw = try { File(filesDir, "settings_config.json").readText() } catch (_: Exception) { "{}" }
                 val settingsCfg = org.json.JSONObject(settingsCfgRaw)
                 val webdavUrl = settingsCfg.optString("webdav_url", "")
                 val webdavUser = settingsCfg.optString("webdav_user", "")
@@ -58,68 +55,58 @@ class SyncService : Service() {
                 val remotePath = settingsCfg.optString("remote_path", "wxhook-backup")
 
                 if (webdavUrl.isBlank() || webdavUser.isBlank()) {
-                    result = "WebDAV未配置"; appendLog(result); updateNotification(result)
-                    sendResult(false, result); return@Thread
+                    result = "WebDAV未配置"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
                 }
 
-                // Read remote config
+                // Check remote config enabled
                 val remoteCfgRaw = RootGateways.runQuiet("cat \"$BACKUP_DIR/remote_config.json\" 2>/dev/null").ifBlank { "{}" }
                 val remoteCfg = org.json.JSONObject(remoteCfgRaw)
                 if (!remoteCfg.optBoolean("enabled", false)) {
-                    result = "同步未启用"; appendLog(result); updateNotification(result)
-                    sendResult(false, result); return@Thread
+                    result = "同步未启用"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
                 }
 
-                // Package backup files into .wxhook
-                val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                val pkgName = "wxhook_backup_$tag.wxhook"
-                val pkgPath = "/data/local/tmp/$pkgName"
+                // Find latest wxbackup_full_*.tar.zst
+                updateNotification("查找备份包...")
+                val findResult = RootGateways.runQuiet("ls -t $BACKUP_DIR/wxbackup_full_*.tar.zst 2>/dev/null | head -1")
+                val pkgPath = findResult.trim()
+                if (pkgPath.isBlank()) {
+                    result = "无备份包可同步"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
+                }
+                val pkgName = File(pkgPath).name
+                val pkgSize = RootGateways.runQuiet("stat -c %s \"$pkgPath\" 2>/dev/null").trim().toLongOrNull() ?: 0L
+                appendLog("找到备份包: $pkgName (${formatSize(pkgSize)})")
 
-                updateNotification("打包备份文件...")
-                appendLog("打包: $pkgName")
-                val findCmd = "find \"$BACKUP_DIR\" -maxdepth 1 -type f -name \"backup_*.json\" 2>/dev/null; " +
-                    "find \"$BACKUP_DIR\" -maxdepth 2 -type f \\( -name \"*.sql.gz\" -o -name \"*.sql.zst\" -o -name \"db_state.json\" \\) 2>/dev/null"
-                val files = RootGateways.runQuiet(findCmd).lines().filter { it.isNotBlank() }
-                if (files.isEmpty()) { result = "无备份文件可同步"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
-
-                val pkgInfo = BackupPackage.create(files, pkgPath, tag, "incremental")
-                if (pkgInfo == null) { result = "打包失败"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread }
-                appendLog("打包完成: ${pkgInfo.totalSize} bytes (${pkgInfo.fileCount} files)")
-
-                // Incremental upload via WebDAV
-                updateNotification("上传中...")
+                // Connect and upload
+                updateNotification("连接 WebDAV...")
                 val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
                 val testResult = kotlinx.coroutines.runBlocking { client.testConnection() }
                 if (testResult.isFailure) {
                     result = "WebDAV连接失败: ${testResult.exceptionOrNull()?.message}"
-                    appendLog(result); updateNotification(result); sendResult(false, result)
-                    return@Thread
+                    appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
                 }
 
-                // Ensure remote directory exists
+                updateNotification("确保远端目录存在...")
                 kotlinx.coroutines.runBlocking { client.ensureDirectory(remotePath) }
 
-                // List remote files for incremental check
+                // Check if already uploaded
                 val remoteFiles = kotlinx.coroutines.runBlocking { client.list(remotePath) }.getOrNull() ?: emptyList()
-                val localFile = File(pkgPath)
-                val remoteMatch = remoteFiles.find { it.path.endsWith(localFile.name) }
-
-                // Upload if new or changed
-                if (remoteMatch == null || remoteMatch.size != localFile.length()) {
-                    val uploadResult = kotlinx.coroutines.runBlocking { client.upload(localFile, "$remotePath/${localFile.name}") }
-                    if (uploadResult.isFailure) {
-                        result = "上传失败: ${uploadResult.exceptionOrNull()?.message}"
-                        appendLog(result); updateNotification(result); sendResult(false, result)
-                        return@Thread
-                    }
-                    appendLog("已上传: ${localFile.name} (${formatSize(localFile.length())})")
-                } else {
-                    appendLog("跳过: ${localFile.name} (远程已存在且大小一致)")
+                val remoteMatch = remoteFiles.find { it.path.endsWith(pkgName) }
+                if (remoteMatch != null && remoteMatch.size == pkgSize) {
+                    result = "跳过: $pkgName (远程已存在)"
+                    appendLog(result); updateNotification(result); sendResult(true, result); return@Thread
                 }
 
-                // Cleanup local pkg
-                RootGateways.run("rm -f \"$pkgPath\"", 10_000)
-                result = "同步完成: $pkgName (${formatSize(pkgInfo.totalSize)})"
+                // Upload
+                updateNotification("上传 $pkgName (${formatSize(pkgSize)})...")
+                appendLog("上传: $pkgName")
+                val localFile = File(pkgPath)
+                val uploadResult = kotlinx.coroutines.runBlocking { client.upload(localFile, "$remotePath/$pkgName") }
+                if (uploadResult.isFailure) {
+                    result = "上传失败: ${uploadResult.exceptionOrNull()?.message}"
+                    appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
+                }
+
+                result = "同步完成: $pkgName (${formatSize(pkgSize)})"
                 appendLog(result)
                 updateNotification(result)
                 sendResult(true, result)
@@ -143,10 +130,10 @@ class SyncService : Service() {
 
     private fun appendLog(msg: String) {
         try {
-            val line = "[" + SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date()) + "] " + msg
+            val line = "[" + SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date()) + "] $msg"
             val tmp = File(filesDir, "sync_live.log")
-            tmp.appendText(line + "\n")
-            RootGateways.run("cat \"${tmp.absolutePath}\" >> /sdcard/Download/wxhook_backup/sync_live.log && chmod 644 /sdcard/Download/wxhook_backup/sync_live.log")
+            tmp.appendText("$line\n")
+            RootGateways.run("cat \"${tmp.absolutePath}\" >> $BACKUP_DIR/sync_live.log && chmod 644 $BACKUP_DIR/sync_live.log")
             tmp.writeText("")
         } catch (_: Exception) {}
     }

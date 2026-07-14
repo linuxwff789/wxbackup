@@ -388,84 +388,49 @@ object BackupOrchestrator {
         try {
             val configFile = File(BackupEnv.backupDir, "remote_config.json")
             if (!configFile.exists()) return
-            val config = JSONObject(
-                BackupEnv.suOut("cat \"${configFile.absolutePath}\" 2>/dev/null").ifBlank { "{}" }
-            )
-            val enabled = config.optBoolean("enabled", false)
-            if (!enabled) return
+            val config = JSONObject(BackupEnv.suOut("cat \"${configFile.absolutePath}\" 2>/dev/null").ifBlank { "{}" })
+            if (!config.optBoolean("enabled", false)) return
 
-            val settingsCfg = try {
-                val settingsFile = File(BackupEnv.filesDirPath, "settings_config.json")
-                JSONObject(settingsFile.readText())
-            } catch (_: Exception) { JSONObject() }
+            val settingsCfg = try { JSONObject(File(BackupEnv.filesDirPath, "settings_config.json").readText()) } catch (_: Exception) { JSONObject() }
             val webdavUrl = settingsCfg.optString("webdav_url", "")
             val webdavUser = settingsCfg.optString("webdav_user", "")
             val webdavPass = settingsCfg.optString("webdav_pass", "")
             val remoteBase = config.optString("remote", "wxhook-backup")
-
             if (webdavUrl.isBlank() || webdavUser.isBlank()) return
 
-            // Use provided archivePath or create new package from backup dir
-            val pkgPath = if (archivePath != null && File(archivePath).exists()) {
+            // Find the latest wxbackup_full_*.tar.zst
+            val pkgPath = if (archivePath != null && BackupEnv.backupExists(archivePath)) {
                 archivePath
             } else {
-                // Package: all .sql.zst, .sql.gz, state files, manifest, and attachments
-                val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                val pkgName = "wxhook_backup_$tag.tar.zst"
-                val tmpPkg = "/data/local/tmp/$pkgName"
-                val findCmd = "find \"${BackupEnv.backupDir}\" -maxdepth 1 -type f " +
-                    "\\( -name '*.sql.zst' -o -name '*.sql.gz' -o -name 'attachments_*.tar.zst' -o -name '*.json' -o -name '.nomedia' \\) 2>/dev/null; " +
-                    "find \"${BackupEnv.backupDir}\" -maxdepth 3 -type f " +
-                    "\\( -name 'db_state.json' -o -name 'incr_*.sql.zst' -o -name 'incr_*.sql.gz' \\) 2>/dev/null"
-                val files = BackupEnv.suOut(findCmd).lines().filter { it.isNotBlank() }
-                if (files.isEmpty()) {
-                    callback?.onProgress("无文件可同步", 0, 0); return
-                }
-                val tarArgs = files.joinToString(" ") { "\"$it\"" }
-                val tarResult = BackupEnv.su(
-                    "tar cf - $tarArgs 2>/dev/null | ${BackupEnv.binDir}/zstd -c -3 > \"$tmpPkg\"",
-                    600_000
-                )
-                if (!tarResult.isSuccess) {
-                    callback?.onProgress("打包失败", 0, 0); return
-                }
-                tmpPkg
+                val found = BackupEnv.suOut("ls -t ${BackupEnv.backupDir}/wxbackup_full_*.tar.zst 2>/dev/null | head -1").trim()
+                if (found.isBlank()) { callback?.onProgress("无备份包可同步", 0, 0); return }
+                found
             }
 
-            val pkgSize = BackupEnv.suOut("stat -c %s \"$pkgPath\" 2>/dev/null")
-                .trim().toLongOrNull() ?: 0L
-            if (pkgSize < 100L) {
-                callback?.onProgress("打包失败", 0, 0); return
-            }
+            val pkgSize = BackupEnv.backupSize(pkgPath)
+            if (pkgSize < 100L) { callback?.onProgress("备份包为空", 0, 0); return }
             val pkgName = File(pkgPath).name
             callback?.onProgress("上传 $pkgName (${BackupManifest.formatSize(pkgSize)})...", 0, pkgSize)
 
             val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
             val testResult = kotlinx.coroutines.runBlocking { client.testConnection() }
             if (testResult.isFailure) {
-                callback?.onProgress("WebDAV连接失败: ${testResult.exceptionOrNull()?.message}", 0, 0)
-                return
+                callback?.onProgress("WebDAV连接失败: ${testResult.exceptionOrNull()?.message}", 0, 0); return
             }
-
             kotlinx.coroutines.runBlocking { client.ensureDirectory(remoteBase) }
 
             val remoteFiles = kotlinx.coroutines.runBlocking { client.list(remoteBase) }.getOrNull() ?: emptyList()
-            val localFile = File(pkgPath)
-            val remoteMatch = remoteFiles.find { it.path.endsWith(localFile.name) }
-
-            if (remoteMatch == null || remoteMatch.size != localFile.length()) {
-                val uploadResult = kotlinx.coroutines.runBlocking { client.upload(localFile, "$remoteBase/${localFile.name}") }
-                if (uploadResult.isFailure) {
-                    callback?.onProgress("上传失败: ${uploadResult.exceptionOrNull()?.message}", 0, 0)
-                    return
-                }
-                callback?.onProgress("已上传: ${localFile.name}", 1, pkgSize)
+            val remoteMatch = remoteFiles.find { it.path.endsWith(pkgName) }
+            if (remoteMatch != null && remoteMatch.size == pkgSize) {
+                callback?.onProgress("跳过: $pkgName (远程已存在)", 1, pkgSize)
             } else {
-                callback?.onProgress("跳过: ${localFile.name} (远程已存在)", 1, pkgSize)
+                val uploadResult = kotlinx.coroutines.runBlocking { client.upload(File(pkgPath), "$remoteBase/$pkgName") }
+                if (uploadResult.isFailure) {
+                    callback?.onProgress("上传失败: ${uploadResult.exceptionOrNull()?.message}", 0, 0); return
+                }
+                callback?.onProgress("已上传: $pkgName", 1, pkgSize)
             }
-
-            BackupEnv.su("rm -f \"$pkgPath\"", 10_000)
-            callback?.onProgress("同步完成: $pkgName", 1, pkgSize)
+            callback?.onProgress("同步完成", 1, pkgSize)
         } catch (e: Exception) {
             callback?.onProgress("同步异常: ${e.message}", 0, 0)
         }
