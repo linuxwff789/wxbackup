@@ -10,7 +10,12 @@ class App : Application() {
         instance = this
 
         // 初始化 RootGateway (带 context，支持 libsu)
-        RootGateways.set(RootGatewayImpl(this))
+        val gateway = RootGatewayImpl(this)
+        RootGateways.set(gateway)
+        // 异步初始化 libsu 连接
+        kotlinx.coroutines.GlobalScope.launch {
+            gateway.initialize()
+        }
     }
 
     companion object {
