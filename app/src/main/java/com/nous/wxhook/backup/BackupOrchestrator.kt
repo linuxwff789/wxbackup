@@ -86,7 +86,7 @@ object BackupOrchestrator {
                 BackupManifest.saveDbState(userDir, tag, maxRowId)
             }
 
-            // 3. Backup attachments 
+            // 3. Backup attachments
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val userDir = File(dir, userHash)
@@ -99,7 +99,9 @@ object BackupOrchestrator {
                     try {
                         BackupEnv.su("mkdir -p $dst")
                         BackupEnv.su(
-                            "cp -r $src $dst 2>/dev/null && find "$dst" -type d -exec chmod 755 {} + && find "$dst" -type f -exec chmod 644 {} + 2>/dev/null"
+                            "cp -r $src $dst 2>/dev/null && " +
+                            "find \\\"$dst\\\" -type d -exec chmod 755 {} + && " +
+                            "find \\\"$dst\\\" -type f -exec chmod 644 {} +"
                         )
                         val d = File(dst)
                         if (d.exists()) {
@@ -493,9 +495,6 @@ object BackupOrchestrator {
                         if (rowId != null && rowId > 0) state.put("lastMessageRowId", rowId)
                     } catch (_: Exception) {}
                 }
-
-                try {
-                    val pResult = RootGateways.run(
 
                 // Write state to user dir
                 val tmpState = File(BackupEnv.filesDirForWrite(), "db_state_${userDir.name}.json")
