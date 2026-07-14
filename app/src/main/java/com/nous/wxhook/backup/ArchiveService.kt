@@ -49,31 +49,31 @@ object ArchiveService {
     fun compressFileSu(srcPath: String, dstPath: String): Boolean {
         return try {
             // 先验证源文件存在且大小合理
-            val srcSize = suOut("stat -c %s \\\"$srcPath\\\" 2>/dev/null").trim().toLongOrNull() ?: 0L
+            val srcSize = BackupEnv.suOut("stat -c %s \\\"$srcPath\\\" 2>/dev/null").trim().toLongOrNull() ?: 0L
             if (srcSize < 1000L) return false
 
             val compressor = if (BackupEnv.useZstd()) "${BackupEnv.binDir}/zstd -c -3" else "gzip -c"
-            val result = su(
+            val result = BackupEnv.su(
                 "$compressor \\\"$srcPath\\\" > \\\"$dstPath\\\" && chmod 644 \\\"$dstPath\\\"",
                 600_000
             )
 
             // 验证压缩结果
-            val dstSize = suOut("stat -c %s \\\"$dstPath\\\" 2>/dev/null").trim().toLongOrNull() ?: 0L
+            val dstSize = BackupEnv.suOut("stat -c %s \\\"$dstPath\\\" 2>/dev/null").trim().toLongOrNull() ?: 0L
             if (dstSize <= 0L) return false
 
             // 验证压缩比合理（压缩后应该比源文件小）
             if (dstSize >= srcSize) {
                 // 压缩失败，删除无效文件
-                su("rm -f \\\"$dstPath\\\"")
+                BackupEnv.su("rm -f \\\"$dstPath\\\"")
                 return false
             }
 
             // 验证文件头
-            val header = suOut("xxd -l 2 \\\"$dstPath\\\" 2>/dev/null").trim()
+            val header = BackupEnv.suOut("xxd -l 2 \\\"$dstPath\\\" 2>/dev/null").trim()
             val expectedHeader = if (BackupEnv.useZstd()) "28b52ffd" else "1f8b"
             if (!header.contains(expectedHeader)) {
-                su("rm -f \\\"$dstPath\\\"")
+                BackupEnv.su("rm -f \\\"$dstPath\\\"")
                 return false
             }
 
