@@ -37,31 +37,30 @@ object FileManifest {
         BackupEnv.suCopy(tmp, f)
     }
 
-    fun scanFiles(dir: File, prefix: String = ""): List<FileEntry> {
+    fun scanWeChatAttachments(
+        wxBasePath: String,
+        userHash: String,
+        attachmentDirs: List<String>,
+    ): List<FileEntry> {
         val entries = mutableListOf<FileEntry>()
-        val path = dir.absolutePath
-        val output = RootGateways.runQuiet("find \"$path\" -type f 2>/dev/null")
-        output.lineSequence().filter { it.isNotBlank() }.forEach { fullPath ->
-            val relPath = fullPath.removePrefix("$path/")
-            if (isRuntimeFile(relPath)) return@forEach
-            entries.add(FileEntry(
-                path = if (prefix.isEmpty()) relPath else "$prefix/$relPath",
-                size = RootGateways.fileSize(fullPath),
-                mtime = 0L,
-            ))
+        for (dir in attachmentDirs) {
+            val sourceDir = "$wxBasePath/$dir"
+            val output = RootGateways.runQuiet(
+                "find \"$sourceDir\" -type f -exec stat -c '%s\\t%Y\\t%n' {} + 2>/dev/null"
+            )
+            output.lineSequence().filter { it.isNotBlank() }.forEach { line ->
+                val parts = line.split('\t', limit = 3)
+                if (parts.size != 3) return@forEach
+                val relativePath = parts[2].removePrefix("$wxBasePath/")
+                entries.add(FileEntry(
+                    path = "$userHash/$relativePath",
+                    size = parts[0].toLongOrNull() ?: return@forEach,
+                    mtime = parts[1].toLongOrNull() ?: return@forEach,
+                ))
+            }
         }
         return entries
     }
-
-    private fun isRuntimeFile(path: String): Boolean =
-        path.startsWith("tmp/") ||
-            path == MANIFEST_FILE ||
-            path == "backup_live.log" ||
-            path == "sync_live.log" ||
-            path == "backup_state.json" ||
-            path == "backup_records.json" ||
-            path == "db_config.json" ||
-            path == ".nomedia"
 
     fun diff(oldManifest: JSONObject, newFiles: List<FileEntry>): FileDiff {
         val oldEntries = mutableMapOf<String, FileEntry>()

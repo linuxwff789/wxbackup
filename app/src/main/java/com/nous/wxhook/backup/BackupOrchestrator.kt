@@ -135,11 +135,17 @@ object BackupOrchestrator {
                 BackupEnv.su("rm -f \"$tmpArchive\"")
             }
 
-            // 5. Scan final backup artifacts and save manifest.
-            val allFiles = FileManifest.scanFiles(dir)
-            val manifest = FileManifest.toManifest(allFiles, tag)
+            // 5. Snapshot WeChat attachment sources for incremental change detection.
+            val sourceFiles = wxPaths.flatMap { wxBasePath ->
+                FileManifest.scanWeChatAttachments(
+                    wxBasePath,
+                    WeChatSourceResolver.extractUserHash(wxBasePath),
+                    ATT_DIRS,
+                )
+            }
+            val manifest = FileManifest.toManifest(sourceFiles, tag)
             FileManifest.save(dir, manifest)
-            callback?.onProgress("清单已保存: ${allFiles.size}个文件", totalFiles, totalSize)
+            callback?.onProgress("清单已保存: ${sourceFiles.size}个文件", totalFiles, totalSize)
 
             // 5. Save config and records
             BackupManifest.saveDbConfig()
@@ -282,14 +288,24 @@ object BackupOrchestrator {
                 ?.sortedBy { it.name } ?: emptyList()
             for (f in incList) incrFiles.add(f.name)
 
-            // Update manifest with new files
+            // Update source manifest with current WeChat attachment state.
             val oldManifest = FileManifest.load(dir)
-            val newFilesList = FileManifest.scanFiles(dir)
-            val diff = FileManifest.diff(oldManifest, newFilesList)
-            if (diff.added.isNotEmpty() || diff.modified.isNotEmpty()) {
-                val updatedManifest = FileManifest.toManifest(newFilesList, tag)
+            val currentSourceFiles = wxPaths.flatMap { wxBasePath ->
+                FileManifest.scanWeChatAttachments(
+                    wxBasePath,
+                    WeChatSourceResolver.extractUserHash(wxBasePath),
+                    ATT_DIRS,
+                )
+            }
+            val diff = FileManifest.diff(oldManifest, currentSourceFiles)
+            if (diff.added.isNotEmpty() || diff.modified.isNotEmpty() || diff.deleted.isNotEmpty()) {
+                val updatedManifest = FileManifest.toManifest(currentSourceFiles, tag)
                 FileManifest.save(dir, updatedManifest)
-                callback?.onProgress("清单已更新: +${diff.added.size} ~${diff.modified.size}", totalFiles, totalSize)
+                callback?.onProgress(
+                    "清单已更新: +${diff.added.size} ~${diff.modified.size} -${diff.deleted.size}",
+                    totalFiles,
+                    totalSize,
+                )
             }
 
             // 4. Cloud sync
