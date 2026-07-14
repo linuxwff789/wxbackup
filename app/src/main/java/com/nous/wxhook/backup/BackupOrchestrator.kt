@@ -114,11 +114,7 @@ object BackupOrchestrator {
                 }
             }
 
-            // 4. Git commit
-            
-            cloudSync(callback)
-
-            // 5. Save config and records
+            // 4. Save config and records
             BackupManifest.saveDbConfig()
             BackupManifest.saveState(tag, totalFiles, totalSize)
             BackupManifest.addRecord(
@@ -127,6 +123,9 @@ object BackupOrchestrator {
                     durationMs = System.currentTimeMillis() - startTime
                 )
             )
+
+            // 5. Cloud sync
+            cloudSync(callback)
             
             BackupHookLocal.Result(
                 true,
@@ -247,10 +246,7 @@ object BackupOrchestrator {
                 }
             }
 
-            // 3. Git commit
-            
-            cloudSync(callback)
-
+            // 3. Save state
             BackupManifest.saveState(tag, totalFiles, totalSize)
 
             val incrFiles = mutableListOf<String>()
@@ -258,6 +254,9 @@ object BackupOrchestrator {
                 ?.filter { it.name.startsWith("incr_") && it.name.endsWith(BackupEnv.ext()) }
                 ?.sortedBy { it.name } ?: emptyList()
             for (f in incList) incrFiles.add(f.name)
+
+            // 4. Cloud sync
+            cloudSync(callback)
 
             val rec = BackupManifest.createRecord(
                 tag, "incremental", totalFiles, totalSize,

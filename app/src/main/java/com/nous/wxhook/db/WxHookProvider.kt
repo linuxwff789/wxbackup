@@ -55,7 +55,7 @@ class WxHookProvider : ContentProvider() {
                         ?.putInt("last_key_len", key.length / 2)
                         ?.putLong("last_key_time", System.currentTimeMillis())
                         ?.commit()  // commit() is synchronous, apply() is async
-                    Log.d(TAG, "Key saved to shared_prefs: $key (commit=$success)")
+                    Log.d(TAG, "Key saved")
                 } catch (e: Exception) {
                     Log.e(TAG, "Save to prefs failed: ${e.message}")
                 }
