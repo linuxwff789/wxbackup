@@ -99,7 +99,9 @@ object BackupOrchestrator {
                     try {
                         BackupEnv.su("mkdir -p $dst")
                         BackupEnv.su(
-                            "cp -r $src $dst 2>/dev/null && find "$dst" -type d -exec chmod 755 {} + && find "$dst" -type f -exec chmod 644 {} + 2>/dev/null"
+                            "cp -r $src $dst 2>/dev/null && " +
+                            "find \\\"$dst\\\" -type d -exec chmod 755 {} + && " +
+                            "find \\\"$dst\\\" -type f -exec chmod 644 {} +"
                         )
                         val d = File(dst)
                         if (d.exists()) {
