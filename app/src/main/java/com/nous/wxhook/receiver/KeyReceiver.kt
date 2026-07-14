@@ -18,7 +18,7 @@ class KeyReceiver : BroadcastReceiver() {
         val version = intent.getStringExtra("version") ?: "?"
         val time = intent.getStringExtra("time") ?: ""
 
-        Log.d(TAG, "Received key: $key (len=$keyLen)")
+        Log.d(TAG, "Key received")
 
         // Save to wxhook's shared_preferences
         val prefs = context.getSharedPreferences("wxhook", Context.MODE_PRIVATE)
@@ -30,6 +30,6 @@ class KeyReceiver : BroadcastReceiver() {
             .putString("cipher_version", version)
             .apply()
 
-        Log.d(TAG, "Key saved to shared_prefs: $key")
+        Log.d(TAG, "Key saved")
     }
 }
