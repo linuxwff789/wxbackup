@@ -99,9 +99,7 @@ object BackupOrchestrator {
                     try {
                         BackupEnv.su("mkdir -p $dst")
                         BackupEnv.su(
-                            "cp -r $src $dst 2>/dev/null && " +
-                            "find \\\"$dst\\\" -type d -exec chmod 755 {} + && " +
-                            "find \\\"$dst\\\" -type f -exec chmod 644 {} +"
+                            "cp -r $src $dst 2>/dev/null && find "$dst" -type d -exec chmod 755 {} + && find "$dst" -type f -exec chmod 644 {} + 2>/dev/null"
                         )
                         val d = File(dst)
                         if (d.exists()) {
@@ -456,6 +454,14 @@ object BackupOrchestrator {
                     val dec = if (lastFile.name.endsWith(".zst"))
                         "${BackupEnv.binDir}/zstd -dc" else "gzip -dc"
                     try {
+                        val pResult = RootGateways.run(
+                            "$dec \"${lastFile.absolutePath}\" 2>/dev/null | tail -1 | cut -d'(' -f2 | cut -d',' -f1",
+                            30_000
+                        )
+                        val rowId = pResult.stdout.trim().toLongOrNull()
+                        if (rowId != null && rowId > previousRowId) state.put("lastMessageRowId", rowId)
+                        else if (previousRowId > 0) state.put("lastMessageRowId", previousRowId)
+                    } catch (_: Exception) {}
                     for (f in incrFiles) {
                         val m = Regex("incr_(\\d+)_to_(\\d+)\\.sql\\.(gz|zst)").find(f.name)
                         val from = m?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
@@ -479,9 +485,17 @@ object BackupOrchestrator {
                     val dec = if (baseline.name.endsWith(".zst"))
                         "${BackupEnv.binDir}/zstd -dc" else "gzip -dc"
                     try {
+                        val pResult = RootGateways.run(
+                            "$dec \"${baseline.absolutePath}\" 2>/dev/null | tail -1 | cut -d'(' -f2 | cut -d',' -f1",
+                            30_000
+                        )
+                        val rowId = pResult.stdout.trim().toLongOrNull()
+                        if (rowId != null && rowId > 0) state.put("lastMessageRowId", rowId)
+                    } catch (_: Exception) {}
                 }
 
                 try {
+                    val pResult = RootGateways.run(
 
                 // Write state to user dir
                 val tmpState = File(BackupEnv.filesDirForWrite(), "db_state_${userDir.name}.json")
