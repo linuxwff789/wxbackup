@@ -67,9 +67,11 @@ class SyncService : Service() {
                     result = "同步未启用"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
                 }
 
-                // Find latest wxbackup_full_*.tar.zst
+                // Find latest wxbackup_full_*.tar.zst (backupdata or legacy)
                 updateNotification("查找备份包...")
-                val findResult = RootGateways.runQuiet("ls -t $BACKUP_DIR/wxbackup_full_*.tar.zst 2>/dev/null | head -1")
+                val findResult = RootGateways.runQuiet(
+                    "ls -t $BACKUP_DIR/wxbackup_full_*.tar.zst ${BackupEnv.backupDir}/wxbackup_full_*.tar.zst 2>/dev/null | head -1"
+                )
                 val pkgPath = findResult.trim()
                 if (pkgPath.isBlank()) {
                     result = "无备份包可同步"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
