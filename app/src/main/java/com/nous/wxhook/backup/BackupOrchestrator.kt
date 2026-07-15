@@ -106,40 +106,41 @@ object BackupOrchestrator {
                     durationMs = System.currentTimeMillis() - startTime)
             )
 
-            // 5. Package everything into one wxbackup_full_<tag>.cpio.zst
-            //    Use cpio (supports multiple source dirs, clean relative paths)
-            val pkgFile = File(dir, "wxbackup_full_$tag.cpio.zst")
+            // 5. Package everything into one wxbackup_full_<tag>.tar.zst
+            //    Use GNU tar with --zstd and multi -C
+            val pkgFile = File(dir, "wxbackup_full_$tag.tar.zst")
             val tmpPkg = "/data/local/tmp/${pkgFile.name}"
 
-            // Build find commands for cpio: DB/state from backup dir
-            val backupFind = mutableListOf<String>()
+            // Collect DB/state files from backup dir
+            val backupFiles = mutableListOf<String>()
             for (wxBasePath in wxPaths) {
                 val h = WeChatSourceResolver.extractUserHash(wxBasePath)
-                backupFind.add("\"$h/EnMicroMsg_baseline${BackupEnv.ext()}\"")
-                backupFind.add("\"$h/db_state.json\"")
+                backupFiles.add("\"$h/EnMicroMsg_baseline${BackupEnv.ext()}\"")
+                backupFiles.add("\"$h/db_state.json\"")
             }
-            backupFind.add("\"file_manifest.json\"")
-            backupFind.add("\"db_config.json\"")
+            backupFiles.add("\"file_manifest.json\"")
+            backupFiles.add("\"db_config.json\"")
 
-            // Build find commands for cpio: attachments from WeChat source
-            val attFind = mutableListOf<String>()
+            // Collect attachment dirs from WeChat source
+            val attFiles = mutableListOf<String>()
             for (wxBasePath in wxPaths) {
                 val h = WeChatSourceResolver.extractUserHash(wxBasePath)
                 for (attDir in ATT_DIRS) {
                     val src = "$wxBasePath/$attDir"
                     if (BackupEnv.suOut("test -d \"$src\" && echo 1").trim() == "1") {
-                        attFind.add("\"$h/$attDir\"")
+                        attFiles.add("\"$h/$attDir\"")
                     }
                 }
             }
 
-            // Two cpio streams merged, piped to zstd
-            // DB from backupDir, attachments from MicroMsg dir
+            // GNU tar: -C backupDir for DB, -C MicroMsg for attachments, --zstd
             val microMsgDir = wxPaths.first().substringBeforeLast("/MicroMsg") + "/MicroMsg"
-            val cpioCmd = "(cd ${BackupEnv.backupDir} && find ${backupFind.joinToString(" ")} -type f 2>/dev/null | cpio -o 2>/dev/null; " +
-                "cd $microMsgDir && find ${attFind.joinToString(" ")} -type f 2>/dev/null | cpio -o 2>/dev/null) " +
-                "| ${BackupEnv.binDir}/zstd -c -3 > \"$tmpPkg\""
-            val pkgResult = BackupEnv.su(cpioCmd, 600_000)
+            val tarCmd = "PATH=${BackupEnv.binDir}:\$PATH " +
+                "LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib " +
+                "/data/data/com.termux/files/usr/bin/tar --zstd -cf \"$tmpPkg\" " +
+                "-C \"${BackupEnv.backupDir}\" ${backupFiles.joinToString(" ")} " +
+                "-C \"$microMsgDir\" ${attFiles.joinToString(" ")}"
+            val pkgResult = BackupEnv.su(tarCmd, 600_000)
             val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
             if (!pkgResult.isSuccess || pkgSize <= 0L || !BackupEnv.suCopyResult(tmpPkg, pkgFile.absolutePath)) {
                 return BackupHookLocal.Result(false, "打包失败")
@@ -394,11 +395,11 @@ object BackupOrchestrator {
             val remoteBase = config.optString("remote", "wxhook-backup")
             if (webdavUrl.isBlank() || webdavUser.isBlank()) return
 
-            // Find the latest wxbackup_full_*.cpio.zst
+            // Find the latest wxbackup_full_*.tar.zst
             val pkgPath = if (archivePath != null && BackupEnv.backupExists(archivePath)) {
                 archivePath
             } else {
-                val found = BackupEnv.suOut("ls -t ${BackupEnv.backupDir}/wxbackup_full_*.cpio.zst 2>/dev/null | head -1").trim()
+                val found = BackupEnv.suOut("ls -t ${BackupEnv.backupDir}/wxbackup_full_*.tar.zst 2>/dev/null | head -1").trim()
                 if (found.isBlank()) { callback?.onProgress("无备份包可同步", 0, 0); return }
                 found
             }
