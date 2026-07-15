@@ -496,9 +496,6 @@ object BackupOrchestrator {
             if (userDirs.isEmpty()) return "备份目录为空"
             for (userPath in userDirs) {
                 val userDir = File(userPath)
-                val previousState = runCatching {
-                    JSONObject(BackupEnv.backupRead(File(userDir, DB_STATE_FILE).absolutePath))
-                }.getOrDefault(JSONObject())
                 val state = JSONObject().apply { put("restoredAt", System.currentTimeMillis()) }
 
                 // Read db_state.json for rowid (single file at backup root)
@@ -571,13 +568,12 @@ object BackupOrchestrator {
                     }
                 }
 
-                // Save db_state.json
-                val tmpState = File(BackupEnv.filesDirPath, "db_state_${userDir.name}.json")
-                tmpState.writeText(state.toString())
-                RootGateways.copy(
-                    tmpState.absolutePath,
-                    File(userDir, DB_STATE_FILE).absolutePath
-                )
+                // Update centralized db_state.json at backup root
+                val newAll = if (dbStateFile.exists())
+                    runCatching { JSONObject(dbStateFile.readText()) }.getOrDefault(JSONObject())
+                else JSONObject()
+                newAll.put(userDir.name, state)
+                RootGateways.writeFile(dbStateFile.absolutePath, newAll.toString())
                 results.add(
                     "${userDir.name}: rowId=${state.optLong("lastMessageRowId", 0)}"
                 )
@@ -587,12 +583,7 @@ object BackupOrchestrator {
                 .sortedBy { it.optLong("time", 0L) }
             val outArr = JSONArray()
             for (rec in sorted) outArr.put(rec)
-            val tmpRecords = File(BackupEnv.filesDirPath, WxHookPaths.RECORDS_FILE)
-            tmpRecords.writeText(outArr.toString())
-            RootGateways.copy(
-                tmpRecords.absolutePath,
-                File(BackupEnv.backupDir, WxHookPaths.RECORDS_FILE).absolutePath
-            )
+            RootGateways.writeFile(File(BackupEnv.backupDir, WxHookPaths.RECORDS_FILE).absolutePath, outArr.toString())
             results.joinToString("\n") + "\nrecords=" + sorted.size
         } catch (e: Exception) {
             "重建失败: ${e.message}"

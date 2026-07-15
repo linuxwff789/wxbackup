@@ -1,5 +1,6 @@
 package com.nous.wxhook.backup
 
+import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.storage.WxHookPaths
 import org.json.JSONArray
 import org.json.JSONObject
@@ -20,22 +21,26 @@ object BackupManifest {
     private fun dbStateFile(): File = File(BackupEnv.backupDir, "db_state.json")
 
     fun saveDbState(userHash: String, tag: String, maxRowId: Long = 0) {
-        val all = runCatching { JSONObject(dbStateFile().readText()) }.getOrDefault(JSONObject())
+        val f = dbStateFile()
+        val all = runCatching { JSONObject(BackupEnv.backupRead(f.absolutePath)) }.getOrDefault(JSONObject())
         val u = all.optJSONObject(userHash) ?: JSONObject()
         u.put("lastBackupTag", tag)
         u.put("lastBackupTime", System.currentTimeMillis())
         if (maxRowId > 0) u.put("lastMessageRowId", maxRowId)
         all.put(userHash, u)
-        dbStateFile().writeText(all.toString())
+        RootGateways.writeFile(f.absolutePath, all.toString())
     }
 
     fun loadDbState(userHash: String): JSONObject {
-        val all = runCatching { JSONObject(dbStateFile().readText()) }.getOrDefault(JSONObject())
+        val all = runCatching {
+            JSONObject(BackupEnv.backupRead(dbStateFile().absolutePath))
+        }.getOrDefault(JSONObject())
         return all.optJSONObject(userHash) ?: JSONObject()
     }
 
     fun updateDbState(userHash: String, tag: String, newRowId: String) {
-        val all = runCatching { JSONObject(dbStateFile().readText()) }.getOrDefault(JSONObject())
+        val f = dbStateFile()
+        val all = runCatching { JSONObject(BackupEnv.backupRead(f.absolutePath)) }.getOrDefault(JSONObject())
         val u = all.optJSONObject(userHash) ?: JSONObject()
         u.put("lastBackupTag", tag)
         u.put("lastBackupTime", System.currentTimeMillis())
@@ -43,7 +48,7 @@ object BackupManifest {
         val rowId = newRowId.toLongOrNull()
         if (rowId != null && rowId > 0) u.put("lastMessageRowId", rowId)
         all.put(userHash, u)
-        dbStateFile().writeText(all.toString())
+        RootGateways.writeFile(f.absolutePath, all.toString())
     }
 
     // ── Backup State ──
