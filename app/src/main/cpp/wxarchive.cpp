@@ -291,7 +291,7 @@ static int detect_compression(const char* path) {
     return 0; // raw
 }
 
-// ── verify: decompress + count tar entries ──
+// ── verify: streaming decompress + count tar entries ──
 extern "C" JNIEXPORT jint JNICALL
 Java_com_nous_wxhook_backup_NativeArchive_verifyTar(JNIEnv* env, jobject, jstring input_) {
     const char* input = env->GetStringUTFChars(input_, nullptr);
@@ -303,11 +303,47 @@ Java_com_nous_wxhook_backup_NativeArchive_verifyTar(JNIEnv* env, jobject, jstrin
     FILE* f = fopen(input, "rb");
     if (!f) { env->ReleaseStringUTFChars(input_, input); return -1; }
 
-    // Decompress to memory
-    std::vector<char> decompressed;
+    // Streaming decompress: count entries by scanning decompressed 512-byte blocks
     const size_t BUF = 256 * 1024;
     char inbuf[BUF];
     char outbuf[2 * BUF];
+
+    // We'll pass decompressed blocks through a 512-byte block scanner
+    bool ok = true;
+    int entries = 0;
+    unsigned char partial[512] = {};
+    size_t partial_len = 0;
+
+    auto scan_tar_blocks = [&](const char* data, size_t size) {
+        size_t off = 0;
+        // If we have a partial block from before, complete it
+        if (partial_len > 0) {
+            size_t need = 512 - partial_len;
+            if (size < need) {
+                memcpy(partial + partial_len, data, size);
+                partial_len += size;
+                return;
+            }
+            memcpy(partial + partial_len, data, need);
+            off = need;
+            partial_len = 0;
+            // Process the completed block
+            const ustar_header* h = reinterpret_cast<const ustar_header*>(partial);
+            if (h->name[0] != '\0' && memcmp(h->magic, "ustar", 5) == 0) entries++;
+        }
+        // Scan full 512-byte blocks
+        while (off + 512 <= size) {
+            const ustar_header* h = reinterpret_cast<const ustar_header*>(data + off);
+            if (h->name[0] == '\0') return; // EOT
+            if (memcmp(h->magic, "ustar", 5) == 0) entries++;
+            off += 512;
+        }
+        // Save remaining partial block
+        if (off < size) {
+            memcpy(partial, data + off, size - off);
+            partial_len = size - off;
+        }
+    };
 
     if (comp == 1) { // zstd
         ZSTD_DCtx* dctx = ZSTD_createDCtx();
@@ -317,16 +353,17 @@ Java_com_nous_wxhook_backup_NativeArchive_verifyTar(JNIEnv* env, jobject, jstrin
         while (true) {
             ib.size = fread(inbuf, 1, sizeof(inbuf), f);
             ib.pos = 0;
-            if (ferror(f)) break;
+            if (ferror(f)) { ok = false; break; }
             bool last = feof(f) != 0;
             while (true) {
                 ob.pos = 0;
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
-                if (ZSTD_isError(err)) { ZSTD_freeDCtx(dctx); fclose(f); env->ReleaseStringUTFChars(input_, input); return -4; }
-                if (ob.pos > 0) decompressed.insert(decompressed.end(), outbuf, outbuf + ob.pos);
+                if (ZSTD_isError(err)) { ok = false; break; }
+                if (ob.pos > 0) scan_tar_blocks(outbuf, ob.pos);
                 if (last && err == 0) break;
-                if (!last && ib.pos >= ib.size) break;
+                if (ob.pos == 0 && ib.pos >= ib.size) break;
             }
+            if (!ok) break;
             if (last) break;
         }
         ZSTD_freeDCtx(dctx);
@@ -337,43 +374,30 @@ Java_com_nous_wxhook_backup_NativeArchive_verifyTar(JNIEnv* env, jobject, jstrin
         while (true) {
             strm.avail_in = fread(inbuf, 1, sizeof(inbuf), f);
             strm.next_in = (Bytef*)inbuf;
-            if (ferror(f)) break;
+            if (ferror(f)) { ok = false; break; }
             bool last = feof(f) != 0;
             do {
                 strm.avail_out = sizeof(outbuf);
                 strm.next_out = (Bytef*)outbuf;
                 int ret = inflate(&strm, Z_NO_FLUSH);
-                if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR) { inflateEnd(&strm); fclose(f); env->ReleaseStringUTFChars(input_, input); return -4; }
+                if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR) { ok = false; break; }
                 size_t produced = sizeof(outbuf) - strm.avail_out;
-                if (produced > 0) decompressed.insert(decompressed.end(), outbuf, outbuf + produced);
+                if (produced > 0) scan_tar_blocks(outbuf, produced);
                 if (ret == Z_STREAM_END) { last = true; break; }
             } while (strm.avail_out == 0);
+            if (!ok) break;
             if (last) break;
         }
         inflateEnd(&strm);
     } else { // raw tar
-        // Read whole file
         while (true) {
             size_t n = fread(inbuf, 1, sizeof(inbuf), f);
             if (n == 0) break;
-            decompressed.insert(decompressed.end(), inbuf, inbuf + n);
+            scan_tar_blocks(inbuf, n);
         }
     }
     fclose(f);
-
-    // Count tar entries
-    int entries = 0;
-    size_t pos = 0;
-    while (pos + 512 <= decompressed.size()) {
-        const ustar_header* h = reinterpret_cast<const ustar_header*>(decompressed.data() + pos);
-        if (h->name[0] == '\0') break; // EOT
-        if (memcmp(h->magic, "ustar", 5) != 0 && h->typeflag != '0' && h->typeflag != '5') break;
-        entries++;
-        uint64_t sz = 0;
-        for (int i = 0; i < 12 && h->size[i]; i++) sz = (sz << 3) | (h->size[i] - '0');
-        pos += 512;
-        if (sz > 0) pos += ((sz + 511) / 512) * 512;
-    }
     env->ReleaseStringUTFChars(input_, input);
+    if (!ok) return -4;
     return entries > 0 ? entries : -5;
 }
