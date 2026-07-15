@@ -53,7 +53,7 @@ class BackupService : Service() {
         Thread {
             try {
                 val gateway = RootGateways.gateway as? RootGatewayImpl
-                if (gateway == null || !runBlocking { gateway.initialize().available }) {
+                if (gateway == null || !runBlocking { gateway.ensureRootService() }) {
                     appendLog("失败: RootService 未连接")
                     updateNotification("RootService 未连接")
                     return@Thread

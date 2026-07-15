@@ -11,14 +11,21 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
 
     private var useLibsu = false
 
+    suspend fun ensureRootService(): Boolean {
+        if (useLibsu) return true
+        val appContext = context ?: return false
+        return try {
+            com.nous.wxhook.root.libsu.RootManager.ensureConnected(appContext).also { connected ->
+                useLibsu = connected
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     suspend fun initialize(): RootStatus {
         val status = check()
-        if (status.available && context != null) {
-            try {
-                val connected = com.nous.wxhook.root.libsu.RootManager.ensureConnected(context)
-                if (connected) useLibsu = true
-            } catch (_: Exception) {}
-        }
+        if (status.available) ensureRootService()
         return status
     }
 
