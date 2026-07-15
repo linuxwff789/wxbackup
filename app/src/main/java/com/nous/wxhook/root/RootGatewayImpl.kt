@@ -104,11 +104,11 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
         }
     }
 
-    override suspend fun writeTarZstd(outputPath: String, sourceArchivePairs: Array<String>): Int =
+    override suspend fun writeTarZstd(outputPath: String, pairsPath: String): Int =
         withContext(Dispatchers.IO) {
             val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder()
                 ?: return@withContext -1
-            com.nous.wxhook.root.libsu.WxRootBinder.writeTarZstd(binder, outputPath, sourceArchivePairs)
+            com.nous.wxhook.root.libsu.WxRootBinder.writeTarZstd(binder, outputPath, pairsPath)
         }
 
     override suspend fun verifyTarZstd(archivePath: String): Int = withContext(Dispatchers.IO) {

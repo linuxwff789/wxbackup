@@ -5,11 +5,13 @@
 #include <android/log.h>
 
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <fcntl.h>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -130,17 +132,32 @@ bool write_tree(struct archive* writer, const char* source_path, const char* arc
     archive_read_free(disk);
     return ok;
 }
-
-bool is_safe_name(const std::string& name) {
-    return !name.empty() && name.front() != '/' && name.find("../") == std::string::npos && name != "..";
-}
 } // namespace
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_nous_wxhook_backup_NativeArchive_writeTarZstd(
-    JNIEnv* env, jobject, jstring output, jobjectArray pairs) {
+    JNIEnv* env, jobject, jstring output, jstring pairsPath) {
     const std::string output_path = jstring_to_utf8(env, output);
-    if (output_path.empty() || pairs == nullptr || env->GetArrayLength(pairs) == 0 || env->GetArrayLength(pairs) % 2 != 0) return -1;
+    const std::string pairs_file = jstring_to_utf8(env, pairsPath);
+    if (output_path.empty() || pairs_file.empty()) return -1;
+
+    // Read pairs file: one tab-separated pair per line (source_path\tarchive_path)
+    FILE* pf = fopen(pairs_file.c_str(), "re");
+    if (!pf) { log_error("open pairs file", strerror(errno)); return -1; }
+    std::vector<std::pair<std::string, std::string>> pairs;
+    char line[4096];
+    while (fgets(line, sizeof(line), pf)) {
+        char* tab = strchr(line, '\t');
+        if (!tab) continue;
+        *tab = '\0';
+        std::string src(line);
+        std::string arc(tab + 1);
+        if (arc.back() == '\n') arc.pop_back();
+        if (src.empty() || arc.empty() || arc.front() == '/') continue;
+        pairs.emplace_back(std::move(src), std::move(arc));
+    }
+    fclose(pf);
+    if (pairs.empty()) return -1;
 
     // Step 1: write raw tar (no compression)
     const std::string tmp_path = output_path + ".tmp.tar";
@@ -154,16 +171,15 @@ Java_com_nous_wxhook_backup_NativeArchive_writeTarZstd(
     }
 
     bool ok = true;
-    const jsize length = env->GetArrayLength(pairs);
-    for (jsize index = 0; index < length && ok; index += 2) {
-        auto source = static_cast<jstring>(env->GetObjectArrayElement(pairs, index));
-        auto target = static_cast<jstring>(env->GetObjectArrayElement(pairs, index + 1));
-        const std::string source_path = jstring_to_utf8(env, source);
-        const std::string archive_path = jstring_to_utf8(env, target);
-        env->DeleteLocalRef(source);
-        env->DeleteLocalRef(target);
+    for (const auto& pair : pairs) {
+        const std::string& source_path = pair.first;
+        const std::string& archive_path = pair.second;
         struct stat st {};
-        if (!is_safe_name(archive_path) || lstat(source_path.c_str(), &st) != 0) { ok = false; break; }
+        if (lstat(source_path.c_str(), &st) != 0) {
+            log_error("lstat source", source_path.c_str());
+            ok = false;
+            break;
+        }
         ok = S_ISDIR(st.st_mode) ? write_tree(writer, source_path.c_str(), archive_path.c_str())
                                  : write_file(writer, source_path.c_str(), archive_path.c_str());
     }

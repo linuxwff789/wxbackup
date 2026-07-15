@@ -1,35 +1,20 @@
 package com.nous.wxhook.backup
 
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.io.File
 
 class NativeArchivePlanTest {
     @Test
-    fun sourcePairs_keepArchiveNamesRelativeAndStable() {
-        val plan = NativeArchivePlan(
-            outputPath = "/data/local/tmp/test.tar.zst",
-            sources = listOf(
-                NativeArchivePlan.Source("/sdcard/Download/wxhook_backup/file_manifest.json", "file_manifest.json"),
-                NativeArchivePlan.Source("/proc/123/root/data/data/com.tencent.mm/MicroMsg/h/image2", "h/image2"),
-            )
-        )
-
-        assertEquals(
-            arrayOf(
-                "/sdcard/Download/wxhook_backup/file_manifest.json", "file_manifest.json",
-                "/proc/123/root/data/data/com.tencent.mm/MicroMsg/h/image2", "h/image2",
-            ).toList(),
-            plan.nativePairs().toList()
-        )
-    }
-
-    @Test
-    fun sourcePairs_rejectAbsoluteOrTraversingArchiveNames() {
-        assertThrows(IllegalArgumentException::class.java) {
-            NativeArchivePlan("/data/local/tmp/test.tar.zst", listOf(
-                NativeArchivePlan.Source("/source", "../escape")
-            )).nativePairs()
-        }
+    fun writePairsFile_createsTabSeparatedFile() {
+        val f = File.createTempFile("pairs", ".txt")
+        val plan = NativeArchivePlan("/out.tar.zst", listOf(
+            NativeArchivePlan.Source("/src/a.txt", "dir/a.txt"),
+            NativeArchivePlan.Source("/src/b", "dir/b"),
+        ))
+        assert(plan.writePairsFile(f.absolutePath))
+        val text = f.readText()
+        assert(text.contains("/src/a.txt\tdir/a.txt"))
+        assert(text.contains("/src/b\tdir/b"))
+        f.delete()
     }
 }

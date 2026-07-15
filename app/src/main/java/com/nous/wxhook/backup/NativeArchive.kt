@@ -7,9 +7,7 @@ object NativeArchive {
     }
 
     @JvmStatic
-    external fun writeTarZstd(outputPath: String, sourceArchivePairs: Array<String>): Int
-
-    /** @return positive entry count on success; negative error code otherwise. */
+    external fun writeTarZstd(outputPath: String, pairsFilePath: String): Int
     @JvmStatic
     external fun verifyTarZstd(archivePath: String): Int
 }

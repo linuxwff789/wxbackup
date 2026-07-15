@@ -25,7 +25,7 @@ interface RootGateway {
     suspend fun mkdirs(path: String): Boolean
     suspend fun copy(src: String, dst: String): Boolean
     suspend fun delete(path: String): Boolean
-    suspend fun writeTarZstd(outputPath: String, sourceArchivePairs: Array<String>): Int
+    suspend fun writeTarZstd(outputPath: String, pairsPath: String): Int
     suspend fun verifyTarZstd(archivePath: String): Int
     suspend fun run(command: String, timeoutMs: Long = 60_000): CommandResult
     suspend fun runQuiet(command: String, timeoutMs: Long = 60_000): String
