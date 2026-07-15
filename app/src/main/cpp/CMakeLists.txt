@@ -36,6 +36,7 @@ set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(zstd)
+add_library(zstd_static ALIAS libzstd_static)
 
 FetchContent_Declare(
     libarchive
