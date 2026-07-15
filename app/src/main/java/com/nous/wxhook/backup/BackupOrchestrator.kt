@@ -501,10 +501,11 @@ object BackupOrchestrator {
                 }.getOrDefault(JSONObject())
                 val state = JSONObject().apply { put("restoredAt", System.currentTimeMillis()) }
 
-                // Read db_state.json for rowid (still written separately)
-                val dbState = runCatching {
-                    JSONObject(BackupEnv.backupRead(File(userDir, DB_STATE_FILE).absolutePath))
-                }.getOrDefault(JSONObject())
+                // Read db_state.json for rowid (now in filesDir, not sdcard)
+                val dbStateFile = File(BackupEnv.filesDirPath, "db_state_${userDir.name}.json")
+                val dbState = if (dbStateFile.exists())
+                    runCatching { JSONObject(dbStateFile.readText()) }.getOrDefault(JSONObject())
+                else JSONObject()
                 if (dbState.has("lastMessageRowId")) {
                     state.put("lastMessageRowId", dbState.getLong("lastMessageRowId"))
                 }

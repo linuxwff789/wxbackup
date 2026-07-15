@@ -23,16 +23,13 @@ object BackupManifest {
             put("lastBackupTime", System.currentTimeMillis())
             if (maxRowId > 0) put("lastMessageRowId", maxRowId)
         }
-        val tmp = File(BackupEnv.filesDirForWrite(), "db_state_${userDir.name}.json")
-        tmp.writeText(state.toString())
-        BackupEnv.suCopy(tmp, File(userDir, DB_STATE_FILE))
+        File(BackupEnv.filesDirPath, "db_state_${userDir.name}.json").writeText(state.toString())
     }
 
     fun loadDbState(userDir: File): JSONObject {
-        val f = File(userDir, DB_STATE_FILE)
         return try {
-            val txt = BackupEnv.suOut("cat \"${f.absolutePath}\" 2>/dev/null").trim()
-            if (txt.isNotEmpty()) JSONObject(txt) else JSONObject()
+            val f = File(BackupEnv.filesDirPath, "db_state_${userDir.name}.json")
+            if (f.exists()) JSONObject(f.readText()) else JSONObject()
         } catch (e: Exception) {
             android.util.Log.e("wxhook:INCR", "loadDbState failed: $e")
             JSONObject()
@@ -46,9 +43,7 @@ object BackupManifest {
         state.put("incrCount", state.optInt("incrCount", 0) + 1)
         val rowId = newRowId.toLongOrNull()
         if (rowId != null && rowId > 0) state.put("lastMessageRowId", rowId)
-        val tmp = File(BackupEnv.filesDirForWrite(), "db_state_${userDir.name}.json")
-        tmp.writeText(state.toString())
-        BackupEnv.suCopy(tmp, File(userDir, DB_STATE_FILE))
+        File(BackupEnv.filesDirPath, "db_state_${userDir.name}.json").writeText(state.toString())
     }
 
     // ── Backup State ──
