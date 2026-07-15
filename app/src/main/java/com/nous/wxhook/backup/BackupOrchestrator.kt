@@ -104,15 +104,25 @@ object BackupOrchestrator {
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 sources += NativeArchivePlan.Source(File(dir, "$hash/db_state.json").absolutePath, "$hash/db_state.json")
-                for (attDir in ATT_DIRS) {
-                    val sourcePath = "$wxBasePath/$attDir"
-                    if (BackupEnv.suOut("test -d \"$sourcePath\" && echo 1").trim() == "1") {
-                        sources += NativeArchivePlan.Source(sourcePath, "$hash/$attDir")
-                    }
-                }
             }
             sources += NativeArchivePlan.Source(File(dir, "file_manifest.json").absolutePath, "file_manifest.json")
             sources += NativeArchivePlan.Source(File(dir, "db_config.json").absolutePath, "db_config.json")
+
+            // Add files from manifest only (not whole directory trees)
+            val manifestObj = FileManifest.load(dir)
+            val filesArr = manifestObj.optJSONArray("files") ?: org.json.JSONArray()
+            for (i in 0 until filesArr.length()) {
+                val entry = filesArr.getJSONObject(i)
+                val arcPath = entry.getString("path")
+                val slashIdx = arcPath.indexOf('/')
+                if (slashIdx < 0) continue
+                val fileHash = arcPath.substring(0, slashIdx)
+                val relPath = arcPath.substring(slashIdx + 1)
+                val base = wxPaths.firstOrNull {
+                    WeChatSourceResolver.extractUserHash(it) == fileHash
+                } ?: continue
+                sources += NativeArchivePlan.Source("$base/$relPath", arcPath)
+            }
 
             val plan = NativeArchivePlan(tmpPkg, sources)
             // Write pairs file to backup dir via RootService Binder

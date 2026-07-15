@@ -147,10 +147,20 @@ static void fill_header(ustar_header* h, const char* name, uint64_t size, mode_t
     if (nl <= 100) {
         memcpy(h->name, name, nl);
     } else {
-        // prefix + "/" + name (up to 255 total per ustar)
-        size_t pl = nl > 255 ? 155 : nl - 100;
-        memcpy(h->prefix, name, pl);
-        memcpy(h->name, name + pl + 1, nl - pl - 1);
+        // POSIX ustar: prefix(155) + "/" + name(100), split at a '/' boundary
+        // Find the last '/' within the first 100 chars for the name part
+        size_t split = nl > 255 ? 255 : nl - 100;
+        // Back up to a '/' boundary
+        while (split > 0 && name[split - 1] != '/') split--;
+        if (split == 0) { split = nl > 255 ? 155 : nl - 100; } // fallback
+        size_t prefix_len = split;
+        if (prefix_len > 155) prefix_len = 155;
+        // If no good split, truncate the name part
+        size_t name_len = nl - prefix_len;
+        if (name[prefix_len] == '/') { prefix_len++; name_len--; }
+        if (name_len > 100) name_len = 100;
+        if (prefix_len > 0) memcpy(h->prefix, name, prefix_len);
+        if (name_len > 0) memcpy(h->name, name + prefix_len, name_len);
     }
     oct(mode & 07777, h->mode, 8);
     oct(0, h->uid, 8);
