@@ -135,9 +135,9 @@ object BackupOrchestrator {
 
             // GNU tar: -C backupDir for DB, -C MicroMsg for attachments, --zstd
             val microMsgDir = wxPaths.first().substringBeforeLast("/MicroMsg") + "/MicroMsg"
-            val tarCmd = "PATH=${BackupEnv.binDir}:\$PATH " +
-                "LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib " +
-                "/data/data/com.termux/files/usr/bin/tar --zstd -cf \"$tmpPkg\" " +
+            val zstdBin = "${BackupEnv.binDir}/zstd"
+            val tarCmd = "export LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib && " +
+                "/data/data/com.termux/files/usr/bin/tar --use-compress-program=\"$zstdBin -3\" -cf \"$tmpPkg\" " +
                 "-C \"${BackupEnv.backupDir}\" ${backupFiles.joinToString(" ")} " +
                 "-C \"$microMsgDir\" ${attFiles.joinToString(" ")}"
             val pkgResult = BackupEnv.su(tarCmd, 600_000)
