@@ -28,12 +28,13 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Download native binaries
+      - name: Prepare native assets
         run: |
           mkdir -p app/src/main/assets/bin
-          curl -sL "https://github.com/linuxwff789/wxhook/releases/download/native-binaries/rclone" -o app/src/main/assets/bin/rclone
-          curl -sL "https://github.com/linuxwff789/wxhook/releases/download/native-binaries/zstd" -o app/src/main/assets/bin/zstd
-          chmod +x app/src/main/assets/bin/rclone app/src/main/assets/bin/zstd
+          # zstd remains for SQL dump and legacy .zst read paths. tar is now libarchive JNI.
+          curl -fsSL "https://github.com/linuxwff789/wxhook/releases/download/native-binaries/zstd" \
+            -o app/src/main/assets/bin/zstd
+          chmod 755 app/src/main/assets/bin/zstd
           ls -lh app/src/main/assets/bin/
 
       - name: Setup signing
