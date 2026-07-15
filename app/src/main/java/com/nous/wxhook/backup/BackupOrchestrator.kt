@@ -135,13 +135,17 @@ object BackupOrchestrator {
 
             // GNU tar: -C backupDir for DB, -C MicroMsg for attachments, --zstd
             val microMsgDir = wxPaths.first().substringBeforeLast("/MicroMsg") + "/MicroMsg"
+            android.util.Log.d("wxhook:PKG", "backupFiles: ${backupFiles.size}, attFiles: ${attFiles.size}, microMsgDir: $microMsgDir")
             val zstdBin = "${BackupEnv.binDir}/zstd"
             val tarCmd = "export LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib && " +
                 "/data/data/com.termux/files/usr/bin/tar --use-compress-program=\"$zstdBin -3\" -cf \"$tmpPkg\" " +
                 "-C \"${BackupEnv.backupDir}\" ${backupFiles.joinToString(" ")} " +
                 "-C \"$microMsgDir\" ${attFiles.joinToString(" ")}"
+            android.util.Log.d("wxhook:PKG", "tarCmd: $tarCmd")
             val pkgResult = BackupEnv.su(tarCmd, 600_000)
-            val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
+            android.util.Log.d("wxhook:PKG", "result: ok=${pkgResult.isSuccess}, err=${pkgResult.stderr.take(300)}")
+            val pkgSize = BackupEnv.suOut("stat -c %s \\\"$tmpPkg\\\" 2>/dev/null").trim().toLongOrNull() ?: 0L
+            android.util.Log.d("wxhook:PKG", "pkgSize: $pkgSize, tmpPkg: $tmpPkg")
             if (!pkgResult.isSuccess || pkgSize <= 0L || !BackupEnv.suCopyResult(tmpPkg, pkgFile.absolutePath)) {
                 return BackupHookLocal.Result(false, "打包失败")
             }
