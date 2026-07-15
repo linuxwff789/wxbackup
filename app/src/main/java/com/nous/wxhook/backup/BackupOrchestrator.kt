@@ -125,15 +125,22 @@ object BackupOrchestrator {
             }
 
             val plan = NativeArchivePlan(tmpPkg, sources)
-            // Write pairs file to backup dir via RootService Binder
+            // Write pairs file locally, then root-copy (Binder content too large for direct writeFile)
             val pairsFile = File(dir, "archive_pairs.txt").absolutePath
+            val localPairs = File(BackupEnv.filesDirPath, "archive_pairs.txt")
             val pairsContent = plan.toPairsContent()
-            if (pairsContent.isEmpty() ||
-                !RootGateways.writeFile(pairsFile, pairsContent)) {
+            try {
+                localPairs.writeText(pairsContent)
+            } catch (_: Exception) {
                 RootGateways.delete(tmpPkg)
-                RootGateways.delete(pairsFile)
                 return BackupHookLocal.Result(false, "写入源文件清单失败")
             }
+            if (!RootGateways.copy(localPairs.absolutePath, pairsFile)) {
+                RootGateways.delete(tmpPkg)
+                localPairs.delete()
+                return BackupHookLocal.Result(false, "写入源文件清单失败")
+            }
+            localPairs.delete()
             val writeResult = RootGateways.writeTarZstd(tmpPkg, pairsFile, BackupEnv.useZstd())
             val verifyResult = if (writeResult == 0) RootGateways.verifyTarZstd(tmpPkg) else -1
             val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
