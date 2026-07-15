@@ -3,6 +3,7 @@ package com.nous.wxhook.root.libsu
 import android.os.IBinder
 import android.os.IInterface
 import android.os.Parcel
+import android.util.Log
 import com.nous.wxhook.backup.NativeArchive
 import com.topjohnwu.superuser.Shell
 import java.io.File
@@ -114,7 +115,8 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 val pairs = data.createStringArray()
                 val result = try {
                     NativeArchive.writeTarZstd(outputPath ?: "", pairs ?: emptyArray())
-                } catch (_: Throwable) {
+                } catch (e: Throwable) {
+                    Log.e("wxhook:archive", "write JNI failed", e)
                     -1
                 }
                 reply?.writeNoException()
@@ -125,7 +127,8 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 val archivePath = data.readString()
                 val result = try {
                     NativeArchive.verifyTarZstd(archivePath ?: "")
-                } catch (_: Throwable) {
+                } catch (e: Throwable) {
+                    Log.e("wxhook:archive", "verify JNI failed", e)
                     -1
                 }
                 reply?.writeNoException()
