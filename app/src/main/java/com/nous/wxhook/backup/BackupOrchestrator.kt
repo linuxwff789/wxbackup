@@ -134,8 +134,10 @@ object BackupOrchestrator {
             }
 
             // Two cpio streams merged, piped to zstd
+            // DB from backupDir, attachments from MicroMsg dir
+            val microMsgDir = wxPaths.first().substringBeforeLast("/MicroMsg") + "/MicroMsg"
             val cpioCmd = "(cd ${BackupEnv.backupDir} && find ${backupFind.joinToString(" ")} -type f 2>/dev/null | cpio -o 2>/dev/null; " +
-                "cd ${wxPaths.first().substringBeforeLast("/MicroMsg")} && find ${attFind.joinToString(" ")} -type f 2>/dev/null | cpio -o 2>/dev/null) " +
+                "cd $microMsgDir && find ${attFind.joinToString(" ")} -type f 2>/dev/null | cpio -o 2>/dev/null) " +
                 "| ${BackupEnv.binDir}/zstd -c -3 > \"$tmpPkg\""
             val pkgResult = BackupEnv.su(cpioCmd, 600_000)
             val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
