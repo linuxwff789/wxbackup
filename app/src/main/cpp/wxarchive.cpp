@@ -256,17 +256,24 @@ static int do_write_tar(const char* output, const char* pairs_path, int mode) {
 
     TarWriter tw;
     if (!tw.open(output, mode)) { return -2; }
-    bool ok = true;
+    int skipped = 0;
     for (const auto& p : pairs) {
         struct stat st;
-        if (lstat(p.first.c_str(), &st) != 0) { __android_log_print(ANDROID_LOG_WARN, "wxhook:archive", "skip %s: %s", p.first.c_str(), strerror(errno)); continue; }
-        ok = S_ISDIR(st.st_mode) ? write_tree(&tw, p.first.c_str(), p.second.c_str()) : write_entry(&tw, p.first.c_str(), p.second.c_str());
-        if (!ok) break;
+        if (lstat(p.first.c_str(), &st) != 0) {
+            __android_log_print(ANDROID_LOG_WARN, "wxhook:archive", "skip missing %s", p.first.c_str());
+            skipped++;
+            continue;
+        }
+        bool ok = S_ISDIR(st.st_mode) ? write_tree(&tw, p.first.c_str(), p.second.c_str()) : write_entry(&tw, p.first.c_str(), p.second.c_str());
+        if (!ok) {
+            __android_log_print(ANDROID_LOG_WARN, "wxhook:archive", "write failed %s", p.first.c_str());
+            skipped++;
+        }
     }
-    if (ok) tw.write_zero_blocks(2);
+    tw.write_zero_blocks(2);
     bool closed = tw.close();
-    if (!ok) return -3;
     if (!closed) return -4;
+    __android_log_print(ANDROID_LOG_INFO, "wxhook:archive", "done: %zu entries, %d skipped", pairs.size(), skipped);
     return 0;
 }
 
