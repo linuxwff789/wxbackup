@@ -1,6 +1,7 @@
 #include <archive.h>
 #include <archive_entry.h>
 #include <jni.h>
+#include <zstd.h>
 #include <android/log.h>
 
 #include <cerrno>
@@ -9,6 +10,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
 
 namespace {
 constexpr const char* TAG = "wxhook:archive";
@@ -140,12 +142,13 @@ Java_com_nous_wxhook_backup_NativeArchive_writeTarZstd(
     const std::string output_path = jstring_to_utf8(env, output);
     if (output_path.empty() || pairs == nullptr || env->GetArrayLength(pairs) == 0 || env->GetArrayLength(pairs) % 2 != 0) return -1;
 
+    // Step 1: write raw tar (no compression)
+    const std::string tmp_path = output_path + ".tmp.tar";
     archive* writer = archive_write_new();
     archive_write_set_format_pax_restricted(writer);
-    archive_write_add_filter_zstd(writer);
-    archive_write_set_filter_option(writer, "zstd", "compression-level", "3");
-    if (archive_write_open_filename(writer, output_path.c_str()) != ARCHIVE_OK) {
-        log_error("open output", archive_error_string(writer));
+    archive_write_add_filter_none(writer);
+    if (archive_write_open_filename(writer, tmp_path.c_str()) != ARCHIVE_OK) {
+        log_error("open tmp tar", archive_error_string(writer));
         archive_write_free(writer);
         return -2;
     }
@@ -165,24 +168,105 @@ Java_com_nous_wxhook_backup_NativeArchive_writeTarZstd(
                                  : write_file(writer, source_path.c_str(), archive_path.c_str());
     }
 
-    const int close_result = archive_write_close(writer);
+    int close_result = archive_write_close(writer);
     archive_write_free(writer);
     if (!ok || close_result != ARCHIVE_OK) {
-        unlink(output_path.c_str());
+        unlink(tmp_path.c_str());
         return -3;
     }
+
+    // Step 2: compress tar with static libzstd
+    FILE* in = fopen(tmp_path.c_str(), "rb");
+    if (!in) { unlink(tmp_path.c_str()); return -4; }
+
+    ZSTD_CCtx* cctx = ZSTD_createCCtx();
+    if (!cctx) { fclose(in); unlink(tmp_path.c_str()); return -5; }
+    ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, 3);
+    ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1);
+
+    FILE* out = fopen(output_path.c_str(), "wb");
+    if (!out) { ZSTD_freeCCtx(cctx); fclose(in); unlink(tmp_path.c_str()); return -6; }
+
+    void* obuf_dst = malloc(ZSTD_CStreamOutSize());
+    if (!obuf_dst) { ZSTD_freeCCtx(cctx); fclose(out); fclose(in); unlink(tmp_path.c_str()); return -6; }
+
+    std::vector<char> inbuf(128 * 1024);
+    ZSTD_outBuffer obuf = {obuf_dst, ZSTD_CStreamOutSize(), 0};
+    bool compress_ok = true;
+
+    ZSTD_inBuffer ibuf = {inbuf.data(), 0, 0};
+    while (compress_ok) {
+        ibuf.size = fread(inbuf.data(), 1, inbuf.size(), in);
+        ibuf.pos = 0;
+        if (ferror(in)) { compress_ok = false; break; }
+        bool last_chunk = feof(in) != 0;
+        ZSTD_EndDirective mode = last_chunk ? ZSTD_e_end : ZSTD_e_continue;
+        size_t remaining = ZSTD_compressStream2(cctx, &obuf, &ibuf, mode);
+        if (ZSTD_isError(remaining)) { compress_ok = false; break; }
+        if (obuf.pos > 0) {
+            if (fwrite(obuf.dst, 1, obuf.pos, out) != obuf.pos) { compress_ok = false; break; }
+            obuf.pos = 0;
+        }
+        if (last_chunk && remaining == 0) break;
+    }
+
+    free(obuf_dst);
+    ZSTD_freeCCtx(cctx);
+    fclose(out);
+    fclose(in);
+    unlink(tmp_path.c_str());
+
+    if (!compress_ok) { unlink(output_path.c_str()); return -7; }
     return 0;
 }
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_nous_wxhook_backup_NativeArchive_verifyTarZstd(JNIEnv* env, jobject, jstring input) {
     const std::string input_path = jstring_to_utf8(env, input);
+
+    // Decompress .zst into memory with libzstd
+    FILE* f = fopen(input_path.c_str(), "rb");
+    if (!f) return -1;
+
+    ZSTD_DCtx* dctx = ZSTD_createDCtx();
+    if (!dctx) { fclose(f); return -1; }
+
+    std::vector<char> inbuf(256 * 1024);
+    std::vector<char> outbuf(ZSTD_DStreamOutSize());
+    ZSTD_outBuffer obuf = {outbuf.data(), outbuf.size(), 0};
+    ZSTD_inBuffer ibuf = {inbuf.data(), 0, 0};
+
+    // Read the entire compressed file into a buffer
+    std::vector<char> compressed;
+    while (true) {
+        size_t n = fread(inbuf.data(), 1, inbuf.size(), f);
+        if (n == 0) break;
+        compressed.insert(compressed.end(), inbuf.data(), inbuf.data() + n);
+    }
+    fclose(f);
+
+    // Decompress into memory
+    std::vector<char> decompressed;
+    ZSTD_outBuffer zobuf = {outbuf.data(), outbuf.size(), 0};
+    ZSTD_inBuffer zibuf = {compressed.data(), compressed.size(), 0};
+
+    while (zibuf.pos < zibuf.size) {
+        zobuf.pos = 0;
+        size_t err = ZSTD_decompressStream(dctx, &zobuf, &zibuf);
+        if (ZSTD_isError(err)) { ZSTD_freeDCtx(dctx); return -4; }
+        if (zobuf.pos > 0)
+            decompressed.insert(decompressed.end(), outbuf.data(), outbuf.data() + zobuf.pos);
+        if (err == 0) break;
+    }
+    ZSTD_freeDCtx(dctx);
+
+    // Read tar from memory
     archive* reader = archive_read_new();
-    archive_read_support_filter_zstd(reader);
     archive_read_support_format_tar(reader);
-    if (archive_read_open_filename(reader, input_path.c_str(), BUFFER_SIZE) != ARCHIVE_OK) {
+    archive_read_support_filter_none(reader);
+    if (archive_read_open_memory(reader, decompressed.data(), decompressed.size()) != ARCHIVE_OK) {
         archive_read_free(reader);
-        return -1;
+        return -3;
     }
     archive_entry* entry = nullptr;
     int entries = 0;
@@ -192,5 +276,5 @@ Java_com_nous_wxhook_backup_NativeArchive_verifyTarZstd(JNIEnv* env, jobject, js
     }
     const int result = archive_read_close(reader);
     archive_read_free(reader);
-    return result == ARCHIVE_OK && entries > 0 ? entries : -3;
+    return result == ARCHIVE_OK && entries > 0 ? entries : -5;
 }
