@@ -7,6 +7,7 @@ import java.io.File
 
 object BackupEnv {
     val backupDir = WxHookPaths.BACKUP_DIR
+    val backupDataDir = WxHookPaths.BACKUP_DATA_DIR
     var binDir = "/data/local/tmp/wxhook_bin"
     var filesDirPath = "/data/local/tmp"
     var rcloneConfigPath = ""

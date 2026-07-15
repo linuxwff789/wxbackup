@@ -3,6 +3,7 @@ package com.nous.wxhook.storage
 object WxHookPaths {
     const val DOWNLOAD_DIR = "/sdcard/Download"
     const val BACKUP_DIR = "/sdcard/Download/wxhook_backup"
+    const val BACKUP_DATA_DIR = "/sdcard/Download/wxhook_backup/backupdata"
     const val TEMP_DIR = "/data/local/tmp/wxhook"
     const val RECORDS_FILE = "backup_records.json"
     const val STATE_FILE = "backup_state.json"
@@ -14,6 +15,9 @@ object WxHookPaths {
 
     fun backupPath(vararg parts: String): String =
         listOf(BACKUP_DIR, *parts).joinToString("/")
+
+    fun backupDataPath(vararg parts: String): String =
+        listOf(BACKUP_DATA_DIR, *parts).joinToString("/")
 
     fun tempPath(vararg parts: String): String =
         listOf(TEMP_DIR, *parts).joinToString("/")

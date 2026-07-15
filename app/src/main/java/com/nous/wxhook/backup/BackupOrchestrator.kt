@@ -30,7 +30,7 @@ object BackupOrchestrator {
         val startTime = System.currentTimeMillis()
         return try {
             val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val dir = File(BackupEnv.backupDir); if (!dir.exists()) dir.mkdirs()
+            val dir = File(BackupEnv.backupDataDir); if (!dir.exists()) dir.mkdirs()
             var totalFiles = 0L; var totalSize = 0L
             val databaseSources = mutableListOf<NativeArchivePlan.Source>()
 
@@ -171,7 +171,7 @@ object BackupOrchestrator {
             val state = BackupManifest.loadState()
             val lastTime = state.optLong("lastBackupTime", 0L)
             val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val dir = File(BackupEnv.backupDir)
+            val dir = File(BackupEnv.backupDataDir)
             var totalFiles = 0L; var totalSize = 0L; var newFiles = 0L
 
             val wxPaths = WeChatSourceResolver.findWxPaths()
@@ -489,7 +489,7 @@ object BackupOrchestrator {
         val rebuiltRecords = JSONArray()
         return try {
             val usersOutput = RootGateways.runQuiet(
-                "find ${BackupEnv.backupDir} -mindepth 1 -maxdepth 1 -type d | " +
+                "find ${BackupEnv.backupDataDir} -mindepth 1 -maxdepth 1 -type d | " +
                 "grep -v '/\\.' | grep -v '/tmp$' | grep -v '/.git$'"
             )
             val userDirs = usersOutput.lines().filter { it.isNotBlank() }
@@ -498,19 +498,19 @@ object BackupOrchestrator {
                 val userDir = File(userPath)
                 val state = JSONObject().apply { put("restoredAt", System.currentTimeMillis()) }
 
-                // Read db_state.json for rowid (single file at backup root)
-                val dbStateFile = File(BackupEnv.backupDir, "db_state.json")
+                // Read db_state.json for rowid (single file at backup data dir)
+                val dbStateFile = File(BackupEnv.backupDataDir, "db_state.json")
                 val allStates = if (dbStateFile.exists())
-                    runCatching { JSONObject(dbStateFile.readText()) }.getOrDefault(JSONObject())
+                    runCatching { JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath)) }.getOrDefault(JSONObject())
                 else JSONObject()
                 val dbState = allStates.optJSONObject(userDir.name) ?: JSONObject()
                 if (dbState.has("lastMessageRowId")) {
                     state.put("lastMessageRowId", dbState.getLong("lastMessageRowId"))
                 }
 
-                // Full backup archives (new format: inside .tar.zst)
+                // Full backup archives
                 val fullArchives = RootGateways.runQuiet(
-                    "ls ${BackupEnv.backupDir}/wxbackup_full_*.tar.zst 2>/dev/null"
+                    "ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null"
                 ).lines().filter { it.isNotBlank() && it.endsWith(".tar.zst") }
                 for (arc in fullArchives) {
                     val f = File(arc)
@@ -528,7 +528,7 @@ object BackupOrchestrator {
                     })
                 }
 
-                // Incremental DB dumps (still separate .sql.zst files)
+                // Incremental DB dumps (still separate .sql.zst files in user dir)
                 val incrFiles = RootGateways.runQuiet(
                     "ls ${userDir.absolutePath}/incr_*.sql.zst 2>/dev/null"
                 ).lines().filter { it.isNotBlank() }.sorted()
@@ -583,7 +583,7 @@ object BackupOrchestrator {
                 .sortedBy { it.optLong("time", 0L) }
             val outArr = JSONArray()
             for (rec in sorted) outArr.put(rec)
-            RootGateways.writeFile(File(BackupEnv.backupDir, WxHookPaths.RECORDS_FILE).absolutePath, outArr.toString())
+            RootGateways.writeFile(File(BackupEnv.backupDataDir, WxHookPaths.RECORDS_FILE).absolutePath, outArr.toString())
             results.joinToString("\n") + "\nrecords=" + sorted.size
         } catch (e: Exception) {
             "重建失败: ${e.message}"

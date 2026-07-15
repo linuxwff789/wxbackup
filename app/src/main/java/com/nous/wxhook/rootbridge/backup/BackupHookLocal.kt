@@ -25,9 +25,10 @@ object BackupHookLocal {
     fun init(ctx: android.content.Context) {
         BackupEnv.binDir = "/data/local/tmp/wxhook_bin"
         BackupEnv.filesDirPath = ctx.filesDir.absolutePath
-        // Ensure backup dir exists (app process, not root)
+        // Ensure backup dirs exist
         try { File(WxHookPaths.BACKUP_DIR).mkdirs() } catch (_: Exception) {}
-        try { File("${WxHookPaths.BACKUP_DIR}/tmp").mkdirs() } catch (_: Exception) {}
+        try { File(WxHookPaths.BACKUP_DATA_DIR).mkdirs() } catch (_: Exception) {}
+        try { File("${WxHookPaths.BACKUP_DATA_DIR}/tmp").mkdirs() } catch (_: Exception) {}
         // Prevent Android MediaStore from scanning backup images
         RootGateways.run(
             "touch ${WxHookPaths.BACKUP_DIR}/.nomedia && chmod 644 ${WxHookPaths.BACKUP_DIR}/.nomedia",

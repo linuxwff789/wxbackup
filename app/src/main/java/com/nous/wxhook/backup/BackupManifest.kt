@@ -18,7 +18,7 @@ object BackupManifest {
 
     // ── DB State (single file at backup root) ──
 
-    private fun dbStateFile(): File = File(BackupEnv.backupDir, "db_state.json")
+    private fun dbStateFile(): File = File(BackupEnv.backupDataDir, "db_state.json")
 
     fun saveDbState(userHash: String, tag: String, maxRowId: Long = 0) {
         val f = dbStateFile()
