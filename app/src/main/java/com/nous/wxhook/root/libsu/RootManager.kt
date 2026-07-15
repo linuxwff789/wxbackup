@@ -11,13 +11,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 object RootManager {
-    private var service: WxRootBinder? = null
+    private var service: IBinder? = null
     private var bound = false
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            service = binder as? WxRootBinder
-            bound = true
+            service = binder
+            bound = binder != null
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
@@ -37,14 +37,13 @@ object RootManager {
         bound
     }
 
-    fun currentBinder(): android.os.IBinder? = service as? android.os.IBinder
+    fun currentBinder(): IBinder? = service
 
     suspend fun exec(command: String, timeoutMs: Long = 60_000): CommandResult =
         withContext(Dispatchers.IO) {
             val binder = service ?: return@withContext CommandResult(-1, "", "RootService not bound")
             try {
-                val shell = (binder as IBinder)
-                val result = WxRootBinder.exec(shell, command)
+                val result = WxRootBinder.exec(binder, command)
                 CommandResult(
                     exitCode = result.code,
                     stdout = result.out.joinToString("\n"),
