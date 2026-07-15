@@ -233,8 +233,6 @@ Java_com_nous_wxhook_backup_NativeArchive_verifyTarZstd(JNIEnv* env, jobject, js
 
     std::vector<char> inbuf(256 * 1024);
     std::vector<char> outbuf(ZSTD_DStreamOutSize());
-    ZSTD_outBuffer obuf = {outbuf.data(), outbuf.size(), 0};
-    ZSTD_inBuffer ibuf = {inbuf.data(), 0, 0};
 
     // Read the entire compressed file into a buffer
     std::vector<char> compressed;
