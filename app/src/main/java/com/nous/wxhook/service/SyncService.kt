@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.nous.wxhook.backup.BackupEnv
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.sync.WebDavClient
 import java.io.File
@@ -24,7 +25,8 @@ class SyncService : Service() {
         const val ACTION_FINISH = "com.nous.wxhook.SYNC_FINISH"
         const val EXTRA_OK = "ok"
         const val EXTRA_MSG = "msg"
-        private const val BACKUP_DIR = "/sdcard/Download/wxhook_backup"
+        private const val BACKUP_DIR = "/sdcard/Download/wxhook_backup/backupdata"
+        private const val INTERVAL_KEY = "sync_interval_min"
 
         fun start(ctx: Context) {
             val i = Intent(ctx, SyncService::class.java).apply { action = ACTION_SYNC }
@@ -59,7 +61,7 @@ class SyncService : Service() {
                 }
 
                 // Check remote config enabled
-                val remoteCfgRaw = RootGateways.runQuiet("cat \"$BACKUP_DIR/remote_config.json\" 2>/dev/null").ifBlank { "{}" }
+                val remoteCfgRaw = RootGateways.runQuiet("cat \"${BackupEnv.backupDir}/remote_config.json\" 2>/dev/null").ifBlank { "{}" }
                 val remoteCfg = org.json.JSONObject(remoteCfgRaw)
                 if (!remoteCfg.optBoolean("enabled", false)) {
                     result = "同步未启用"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
@@ -110,11 +112,32 @@ class SyncService : Service() {
                 appendLog(result)
                 updateNotification(result)
                 sendResult(true, result)
+                // Schedule next sync if interval configured
+                val intervalMin = settingsCfg.optInt(INTERVAL_KEY, 0)
+                if (intervalMin > 0) {
+                    appendLog("下次同步: ${intervalMin}分钟后")
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        startSync()
+                    }, intervalMin * 60_000L)
+                } else {
+                    stopSelfAfter(3000)
+                }
             } catch (e: Exception) {
                 result = "同步异常: ${e.message}"
                 appendLog(result)
                 updateNotification(result)
                 sendResult(false, result)
+                // On error, retry after 30 min if interval is set
+                val intervalMin = try {
+                    org.json.JSONObject(try { File(filesDir, "settings_config.json").readText() } catch (_: Exception) { "{}" }).optInt(INTERVAL_KEY, 0)
+                } catch (_: Exception) { 0 }
+                if (intervalMin > 0) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        startSync()
+                    }, 30 * 60_000L)
+                } else {
+                    stopSelfAfter(3000)
+                }
             }
         }.start()
     }
@@ -125,7 +148,10 @@ class SyncService : Service() {
             putExtra(EXTRA_OK, ok)
             putExtra(EXTRA_MSG, msg)
         })
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ stopSelf() }, 3000)
+    }
+
+    private fun stopSelfAfter(delayMs: Long) {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ stopSelf() }, delayMs)
     }
 
     private fun appendLog(msg: String) {
@@ -133,7 +159,7 @@ class SyncService : Service() {
             val line = "[" + SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date()) + "] $msg"
             val tmp = File(filesDir, "sync_live.log")
             tmp.appendText("$line\n")
-            RootGateways.run("cat \"${tmp.absolutePath}\" >> $BACKUP_DIR/sync_live.log && chmod 644 $BACKUP_DIR/sync_live.log")
+            RootGateways.run("cat \"${tmp.absolutePath}\" >> ${BackupEnv.backupDir}/sync_live.log && chmod 644 ${BackupEnv.backupDir}/sync_live.log")
             tmp.writeText("")
         } catch (_: Exception) {}
     }
