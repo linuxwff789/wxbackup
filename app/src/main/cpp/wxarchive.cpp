@@ -1,5 +1,3 @@
-#include <archive.h>
-#include <archive_entry.h>
 #include <jni.h>
 #include <zstd.h>
 #include <android/log.h>
@@ -7,6 +5,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
 #include <string>
 #include <sys/stat.h>
@@ -14,136 +13,231 @@
 #include <utility>
 #include <vector>
 
-namespace {
-constexpr const char* TAG = "wxhook:archive";
-constexpr size_t BUFFER_SIZE = 128 * 1024;
+// POSIX ustar header (512 bytes)
+struct ustar_header {
+    char name[100];
+    char mode[8];
+    char uid[8];
+    char gid[8];
+    char size[12];
+    char mtime[12];
+    char chksum[8];
+    char typeflag;
+    char linkname[100];
+    char magic[6];      // "ustar\0"
+    char version[2];    // "00"
+    char uname[32];
+    char gname[32];
+    char devmajor[8];
+    char devminor[8];
+    char prefix[155];
+    char padding[12];   // pad to 512
+};
 
-void log_error(const char* stage, const char* detail) {
-    __android_log_print(ANDROID_LOG_ERROR, TAG, "%s: %s", stage, detail != nullptr ? detail : "unknown");
-}
+static_assert(sizeof(ustar_header) == 512, "ustar header must be 512 bytes");
 
-std::string jstring_to_utf8(JNIEnv* env, jstring value) {
-    if (value == nullptr) return {};
-    const char* chars = env->GetStringUTFChars(value, nullptr);
-    std::string result(chars ?: "");
-    if (chars != nullptr) env->ReleaseStringUTFChars(value, chars);
-    return result;
-}
+// Write-optimized tar + zstd streaming
+class TarZstdWriter {
+    FILE* out_ = nullptr;
+    ZSTD_CCtx* cctx_ = nullptr;
+    std::vector<char> blocks_;  // 512-byte block buffer
+    static constexpr size_t RECORD_BYTES = 20 * 512; // 10KB per flush (GNU tar default)
 
-bool write_file(struct archive* writer, const char* source_path, const char* archive_path) {
-    struct stat st {};
-    if (lstat(source_path, &st) != 0) {
-        log_error("lstat", strerror(errno));
-        return false;
+public:
+    ~TarZstdWriter() { close(); }
+
+    bool open(const char* path) {
+        out_ = fopen(path, "wb");
+        if (!out_) return false;
+        cctx_ = ZSTD_createCCtx();
+        if (!cctx_) { fclose(out_); out_ = nullptr; return false; }
+        ZSTD_CCtx_setParameter(cctx_, ZSTD_c_compressionLevel, 3);
+        ZSTD_CCtx_setParameter(cctx_, ZSTD_c_checksumFlag, 1);
+        blocks_.reserve(RECORD_BYTES * 2);
+        return true;
     }
 
-    archive_entry* entry = archive_entry_new();
-    archive_entry_set_pathname(entry, archive_path);
-    archive_entry_copy_stat(entry, &st);
-    archive_entry_set_uid(entry, 0);
-    archive_entry_set_gid(entry, 0);
-
-    if (archive_write_header(writer, entry) != ARCHIVE_OK) {
-        log_error("write header", archive_error_string(writer));
-        archive_entry_free(entry);
-        return false;
+    // Emit one 512-byte block (buffered, flushes when record is full)
+    void write_block(const char* data) {
+        blocks_.insert(blocks_.end(), data, data + 512);
+        if (blocks_.size() >= RECORD_BYTES) flush_blocks();
     }
 
-    if (S_ISREG(st.st_mode)) {
-        int input = open(source_path, O_RDONLY | O_CLOEXEC);
-        if (input < 0) {
-            log_error("open", strerror(errno));
-            archive_entry_free(entry);
-            return false;
-        }
-        char buffer[BUFFER_SIZE];
-        bool ok = true;
-        ssize_t read_bytes;
-        while ((read_bytes = read(input, buffer, sizeof(buffer))) > 0) {
-            if (archive_write_data(writer, buffer, static_cast<size_t>(read_bytes)) < 0) {
-                log_error("write data", archive_error_string(writer));
-                ok = false;
-                break;
+    // Write zero blocks (for EOT: two zero blocks)
+    void write_zero_blocks(int count) {
+        static const char zero[512] = {};
+        for (int i = 0; i < count; i++) write_block(zero);
+    }
+
+    // Write file data, padded to 512
+    bool write_file_data(int fd, off_t size) {
+        char buf[128 * 1024];
+        off_t remaining = size;
+        while (remaining > 0) {
+            ssize_t n = read(fd, buf, sizeof(buf) < remaining ? sizeof(buf) : remaining);
+            if (n <= 0) return false;
+            remaining -= n;
+            // Write full 512-byte chunks
+            const char* p = buf;
+            ssize_t written = n;
+            while (written >= 512) {
+                write_block(p);
+                p += 512;
+                written -= 512;
+            }
+            // Write partial last block, padded with zeros
+            if (written > 0) {
+                char pad[512] = {};
+                memcpy(pad, p, written);
+                write_block(pad);
             }
         }
-        if (read_bytes < 0) {
-            log_error("read", strerror(errno));
-            ok = false;
+        return true;
+    }
+
+    // Flush buffered blocks through zstd
+    bool flush_blocks() {
+        if (blocks_.empty()) return true;
+        ZSTD_inBuffer ibuf = {blocks_.data(), blocks_.size(), 0};
+        while (ibuf.pos < ibuf.size) {
+            char obuf[ZSTD_CStreamOutSize()];
+            ZSTD_outBuffer ob = {obuf, sizeof(obuf), 0};
+            size_t err = ZSTD_compressStream2(cctx_, &ob, &ibuf, ZSTD_e_continue);
+            if (ZSTD_isError(err)) { __android_log_print(ANDROID_LOG_ERROR, "wxhook:archive", "zstd flush: %s", ZSTD_getErrorName(err)); return false; }
+            if (ob.pos > 0 && fwrite(obuf, 1, ob.pos, out_) != ob.pos) { __android_log_print(ANDROID_LOG_ERROR, "wxhook:archive", "write: %s", strerror(errno)); return false; }
         }
-        close(input);
-        archive_entry_free(entry);
+        blocks_.clear();
+        return true;
+    }
+
+    // Flush all + end zstd frame
+    bool close() {
+        if (!out_) return true;
+        bool ok = true;
+        if (cctx_) {
+            ok = flush_blocks();
+            if (ok) {
+                ZSTD_inBuffer ibuf = {nullptr, 0, 0};
+                while (true) {
+                    char obuf[ZSTD_CStreamOutSize()];
+                    ZSTD_outBuffer ob = {obuf, sizeof(obuf), 0};
+                    size_t err = ZSTD_compressStream2(cctx_, &ob, &ibuf, ZSTD_e_end);
+                    if (ZSTD_isError(err)) { ok = false; break; }
+                    if (ob.pos > 0 && fwrite(obuf, 1, ob.pos, out_) != ob.pos) { ok = false; break; }
+                    if (err == 0) break;
+                }
+            }
+            ZSTD_freeCCtx(cctx_); cctx_ = nullptr;
+        }
+        fclose(out_); out_ = nullptr;
         return ok;
     }
+};
 
-    archive_entry_free(entry);
-    return true;
+// ── ustar helpers ──
+
+static void oct(uint64_t v, char* p, size_t n) {
+    p[--n] = '\0';
+    while (n--) { p[n] = '0' + (v & 7); v >>= 3; }
 }
 
-bool write_tree(struct archive* writer, const char* source_path, const char* archive_path) {
-    archive* disk = archive_read_disk_new();
-    archive_read_disk_set_standard_lookup(disk);
-    if (archive_read_disk_open(disk, source_path) != ARCHIVE_OK) {
-        log_error("open source", archive_error_string(disk));
-        archive_read_free(disk);
-        return false;
+static void fill_header(ustar_header* h, const char* name, uint64_t size, mode_t mode, char type) {
+    memset(h, 0, sizeof(*h));
+    size_t nl = strlen(name);
+    if (nl <= 100) {
+        memcpy(h->name, name, nl);
+    } else {
+        // prefix + "/" + name (up to 255 total per ustar)
+        size_t pl = nl > 255 ? 155 : nl - 100;
+        memcpy(h->prefix, name, pl);
+        memcpy(h->name, name + pl + 1, nl - pl - 1);
     }
+    oct(mode & 07777, h->mode, 8);
+    oct(0, h->uid, 8);
+    oct(0, h->gid, 8);
+    oct(size, h->size, 12);
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    oct((uint64_t)ts.tv_sec, h->mtime, 12);
+    h->typeflag = type;
+    memcpy(h->magic, "ustar", 5); h->magic[5] = '\0';
+    h->version[0] = '0'; h->version[1] = '0';
+    unsigned ck = 0;
+    for (size_t i = 0; i < 512; i++) ck += (i >= 148 && i < 156) ? ' ' : ((const unsigned char*)h)[i];
+    oct(ck, h->chksum, 7); h->chksum[7] = ' ';
+}
 
-    archive_entry* entry = nullptr;
-    const std::string root(source_path);
-    const std::string destination_root(archive_path);
-    bool ok = true;
-    while (archive_read_next_header2(disk, entry) == ARCHIVE_OK) {
-        const char* full_path = archive_entry_sourcepath(entry);
-        if (full_path == nullptr) {
-            ok = false;
-            break;
-        }
-        std::string relative(full_path);
-        if (relative.rfind(root, 0) != 0) {
-            ok = false;
-            break;
-        }
-        relative.erase(0, root.size());
-        if (!relative.empty() && relative.front() == '/') relative.erase(0, 1);
-        const std::string archive_name = relative.empty() ? destination_root : destination_root + "/" + relative;
-        archive_entry_set_pathname(entry, archive_name.c_str());
-        archive_entry_set_uid(entry, 0);
-        archive_entry_set_gid(entry, 0);
-        if (archive_write_header(writer, entry) != ARCHIVE_OK) {
-            log_error("write tree header", archive_error_string(writer));
-            ok = false;
-            break;
-        }
-        if (archive_entry_filetype(entry) == AE_IFDIR && archive_read_disk_descend(disk) != ARCHIVE_OK) {
-            log_error("descend", archive_error_string(disk));
-            ok = false;
-            break;
-        }
-        if (archive_entry_size(entry) > 0) {
-            char buffer[BUFFER_SIZE];
-            ssize_t n;
-            while ((n = archive_read_data(disk, buffer, sizeof(buffer))) > 0) {
-                if (archive_write_data(writer, buffer, static_cast<size_t>(n)) < 0) { ok = false; break; }
-            }
-            if (!ok || n < 0) { ok = false; break; }
-        }
-    }
-    archive_read_close(disk);
-    archive_read_free(disk);
+// ── file entry ──
+
+static bool write_entry(TarZstdWriter* tw, const char* src, const char* arc) {
+    struct stat st;
+    if (lstat(src, &st) != 0) { __android_log_print(ANDROID_LOG_ERROR, "wxhook:archive", "lstat %s: %s", src, strerror(errno)); return false; }
+    ustar_header hdr;
+    char type = S_ISDIR(st.st_mode) ? '5' : '0';
+    fill_header(&hdr, arc, type == '5' ? 0 : (uint64_t)st.st_size, st.st_mode, type);
+    tw->write_block((const char*)&hdr);
+
+    if (type == '5') return true; // dirs have no data
+    int fd = open(src, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) { __android_log_print(ANDROID_LOG_ERROR, "wxhook:archive", "open %s: %s", src, strerror(errno)); return false; }
+    bool ok = tw->write_file_data(fd, st.st_size);
+    close(fd);
     return ok;
 }
-} // namespace
+
+// ── directory tree (GNU tar style: opendir/readdir) ──
+
+static bool write_tree(TarZstdWriter* tw, const char* dir_src, const char* dir_arc) {
+    // Write the directory entry itself first
+    ustar_header hdr;
+    fill_header(&hdr, dir_arc, 0, S_IFDIR | 0755, '5');
+    tw->write_block((const char*)&hdr);
+
+    DIR* d = opendir(dir_src);
+    if (!d) { __android_log_print(ANDROID_LOG_ERROR, "wxhook:archive", "opendir %s: %s", dir_src, strerror(errno)); return false; }
+
+    // Collect entries (skip . and ..)
+    std::vector<std::string> entries;
+    struct dirent* de;
+    while ((de = readdir(d))) {
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+        entries.push_back(de->d_name);
+    }
+    closedir(d);
+
+    // Sort for deterministic order
+    std::sort(entries.begin(), entries.end());
+
+    bool ok = true;
+    for (const auto& name : entries) {
+        std::string full_src = std::string(dir_src) + "/" + name;
+        std::string full_arc = std::string(dir_arc) + "/" + name;
+        struct stat st;
+        if (lstat(full_src.c_str(), &st) != 0) continue; // skip broken
+        if (S_ISDIR(st.st_mode)) {
+            ok = write_tree(tw, full_src.c_str(), full_arc.c_str());
+        } else if (S_ISREG(st.st_mode)) {
+            ok = write_entry(tw, full_src.c_str(), full_arc.c_str());
+        } // skip non-regular, non-dir
+        if (!ok) break;
+    }
+    return ok;
+}
+
+// ── JNI ──
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_nous_wxhook_backup_NativeArchive_writeTarZstd(
-    JNIEnv* env, jobject, jstring output, jstring pairsPath) {
-    const std::string output_path = jstring_to_utf8(env, output);
-    const std::string pairs_file = jstring_to_utf8(env, pairsPath);
-    if (output_path.empty() || pairs_file.empty()) return -1;
+    JNIEnv* env, jobject, jstring output_, jstring pairsPath_) {
 
-    // Read pairs file: one tab-separated pair per line (source_path\tarchive_path)
-    FILE* pf = fopen(pairs_file.c_str(), "re");
-    if (!pf) { log_error("open pairs file", strerror(errno)); return -1; }
+    const char* output = env->GetStringUTFChars(output_, nullptr);
+    const char* pairs_path = env->GetStringUTFChars(pairsPath_, nullptr);
+    if (!output || !pairs_path) { if (output) env->ReleaseStringUTFChars(output_, output); return -1; }
+
+    FILE* pf = fopen(pairs_path, "re");
+    if (!pf) { __android_log_print(ANDROID_LOG_ERROR, "wxhook:archive", "open pairs: %s", strerror(errno)); env->ReleaseStringUTFChars(output_, output); env->ReleaseStringUTFChars(pairsPath_, pairs_path); return -1; }
+
+    // Read all pairs into memory
     std::vector<std::pair<std::string, std::string>> pairs;
     char line[4096];
     while (fgets(line, sizeof(line), pf)) {
@@ -152,157 +246,117 @@ Java_com_nous_wxhook_backup_NativeArchive_writeTarZstd(
         *tab = '\0';
         std::string src(line);
         std::string arc(tab + 1);
-        if (arc.back() == '\n') arc.pop_back();
+        if (!arc.empty() && arc.back() == '\n') arc.pop_back();
         if (src.empty() || arc.empty() || arc.front() == '/') continue;
         pairs.emplace_back(std::move(src), std::move(arc));
     }
     fclose(pf);
-    if (pairs.empty()) return -1;
+    env->ReleaseStringUTFChars(pairsPath_, pairs_path);
 
-    // Step 1: write raw tar (no compression)
-    const std::string tmp_path = output_path + ".tmp.tar";
-    archive* writer = archive_write_new();
-    archive_write_set_format_pax_restricted(writer);
-    archive_write_add_filter_none(writer);
-    if (archive_write_open_filename(writer, tmp_path.c_str()) != ARCHIVE_OK) {
-        log_error("open tmp tar", archive_error_string(writer));
-        archive_write_free(writer);
-        return -2;
-    }
+    if (pairs.empty()) { env->ReleaseStringUTFChars(output_, output); return -1; }
+
+    TarZstdWriter tw;
+    if (!tw.open(output)) { env->ReleaseStringUTFChars(output_, output); return -2; }
 
     bool ok = true;
-    for (const auto& pair : pairs) {
-        const std::string& source_path = pair.first;
-        const std::string& archive_path = pair.second;
-        struct stat st {};
-        if (lstat(source_path.c_str(), &st) != 0) {
-            log_error("lstat source", source_path.c_str());
-            ok = false;
-            break;
+    for (const auto& p : pairs) {
+        struct stat st;
+        if (lstat(p.first.c_str(), &st) != 0) {
+            __android_log_print(ANDROID_LOG_WARN, "wxhook:archive", "skip %s: %s", p.first.c_str(), strerror(errno));
+            continue;
         }
-        ok = S_ISDIR(st.st_mode) ? write_tree(writer, source_path.c_str(), archive_path.c_str())
-                                 : write_file(writer, source_path.c_str(), archive_path.c_str());
-    }
-
-    int close_result = archive_write_close(writer);
-    archive_write_free(writer);
-    if (!ok || close_result != ARCHIVE_OK) {
-        unlink(tmp_path.c_str());
-        return -3;
-    }
-
-    // Step 2: compress tar with static libzstd (simplified streaming)
-    FILE* in = fopen(tmp_path.c_str(), "rb");
-    if (!in) { log_error("compress open input", strerror(errno)); unlink(tmp_path.c_str()); return -4; }
-
-    ZSTD_CCtx* cctx = ZSTD_createCCtx();
-    if (!cctx) { log_error("zstd create cctx", "OOM"); fclose(in); unlink(tmp_path.c_str()); return -5; }
-    ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, 3);
-    ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1);
-
-    FILE* out = fopen(output_path.c_str(), "wb");
-    if (!out) { log_error("compress open output", strerror(errno)); ZSTD_freeCCtx(cctx); fclose(in); unlink(tmp_path.c_str()); return -6; }
-
-    bool compress_ok = true;
-    std::vector<char> inbuf(256 * 1024);
-    std::vector<char> obuf(ZSTD_CStreamOutSize());
-    ZSTD_inBuffer zibuf = {inbuf.data(), 0, 0};
-    ZSTD_outBuffer zobuf = {obuf.data(), obuf.size(), 0};
-
-    while (true) {
-        zibuf.size = fread(inbuf.data(), 1, inbuf.size(), in);
-        zibuf.pos = 0;
-        if (ferror(in)) { log_error("compress read input", strerror(errno)); compress_ok = false; break; }
-        bool last = feof(in) != 0;
-        ZSTD_EndDirective mode = last ? ZSTD_e_end : ZSTD_e_continue;
-
-        while (true) {
-            zobuf.pos = 0;
-            size_t remaining = ZSTD_compressStream2(cctx, &zobuf, &zibuf, mode);
-            if (ZSTD_isError(remaining)) {
-                log_error("zstd compress", ZSTD_getErrorName(remaining));
-                compress_ok = false;
-                break;
-            }
-            if (zobuf.pos > 0 && fwrite(obuf.data(), 1, zobuf.pos, out) != zobuf.pos) {
-                log_error("compress write output", strerror(errno));
-                compress_ok = false;
-                break;
-            }
-            if (!last) break;
-            if (remaining == 0) break;
+        if (S_ISDIR(st.st_mode)) {
+            ok = write_tree(&tw, p.first.c_str(), p.second.c_str());
+        } else {
+            ok = write_entry(&tw, p.first.c_str(), p.second.c_str());
         }
-        if (!compress_ok) break;
-        if (last) break;
+        if (!ok) break;
     }
 
-    int cerr = ferror(out);
-    ZSTD_freeCCtx(cctx);
-    fclose(out);
-    fclose(in);
-    unlink(tmp_path.c_str());
-
-    if (!compress_ok || cerr) {
-        log_error("compress failed", cerr ? "write error" : "compression error");
-        unlink(output_path.c_str());
-        return -7;
+    // End-of-archive: two zero blocks
+    if (ok) {
+        tw.write_zero_blocks(2);
     }
+
+    bool closed = tw.close();
+    env->ReleaseStringUTFChars(output_, output);
+
+    if (!ok) return -3;
+    if (!closed) return -4;
     return 0;
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_nous_wxhook_backup_NativeArchive_verifyTarZstd(JNIEnv* env, jobject, jstring input) {
-    const std::string input_path = jstring_to_utf8(env, input);
+Java_com_nous_wxhook_backup_NativeArchive_verifyTarZstd(JNIEnv* env, jobject, jstring input_) {
+    const char* input = env->GetStringUTFChars(input_, nullptr);
+    if (!input) return -1;
 
-    // Decompress .zst into memory with libzstd
-    FILE* f = fopen(input_path.c_str(), "rb");
-    if (!f) return -1;
+    FILE* f = fopen(input, "rb");
+    if (!f) { env->ReleaseStringUTFChars(input_, input); return -1; }
 
     ZSTD_DCtx* dctx = ZSTD_createDCtx();
-    if (!dctx) { fclose(f); return -1; }
+    if (!dctx) { fclose(f); env->ReleaseStringUTFChars(input_, input); return -1; }
 
     std::vector<char> inbuf(256 * 1024);
     std::vector<char> outbuf(ZSTD_DStreamOutSize());
 
-    // Read the entire compressed file into a buffer
-    std::vector<char> compressed;
-    while (true) {
-        size_t n = fread(inbuf.data(), 1, inbuf.size(), f);
-        if (n == 0) break;
-        compressed.insert(compressed.end(), inbuf.data(), inbuf.data() + n);
-    }
-    fclose(f);
-
-    // Decompress into memory
+    // Decompress to memory
     std::vector<char> decompressed;
-    ZSTD_outBuffer zobuf = {outbuf.data(), outbuf.size(), 0};
-    ZSTD_inBuffer zibuf = {compressed.data(), compressed.size(), 0};
+    ZSTD_outBuffer ob = {outbuf.data(), outbuf.size(), 0};
+    ZSTD_inBuffer ib = {inbuf.data(), 0, 0};
 
-    while (zibuf.pos < zibuf.size) {
-        zobuf.pos = 0;
-        size_t err = ZSTD_decompressStream(dctx, &zobuf, &zibuf);
-        if (ZSTD_isError(err)) { ZSTD_freeDCtx(dctx); return -4; }
-        if (zobuf.pos > 0)
-            decompressed.insert(decompressed.end(), outbuf.data(), outbuf.data() + zobuf.pos);
-        if (err == 0) break;
+    while (true) {
+        ib.size = fread(inbuf.data(), 1, inbuf.size(), f);
+        ib.pos = 0;
+        if (ferror(f)) break;
+        bool last = feof(f) != 0;
+        while (true) {
+            ob.pos = 0;
+            size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
+            if (ZSTD_isError(err)) { ZSTD_freeDCtx(dctx); fclose(f); env->ReleaseStringUTFChars(input_, input); return -4; }
+            if (ob.pos > 0) decompressed.insert(decompressed.end(), outbuf.data(), outbuf.data() + ob.pos);
+            if (last && err == 0) break;
+            if (!last && ib.pos >= ib.size) break;
+        }
+        if (last) break;
     }
     ZSTD_freeDCtx(dctx);
+    fclose(f);
 
-    // Read tar from memory
-    archive* reader = archive_read_new();
-    archive_read_support_format_tar(reader);
-    archive_read_support_filter_none(reader);
-    if (archive_read_open_memory(reader, decompressed.data(), decompressed.size()) != ARCHIVE_OK) {
-        archive_read_free(reader);
-        return -3;
-    }
-    archive_entry* entry = nullptr;
+    // Count tar entries from decompressed data
     int entries = 0;
-    while (archive_read_next_header(reader, &entry) == ARCHIVE_OK) {
-        ++entries;
-        if (archive_read_data_skip(reader) != ARCHIVE_OK) { archive_read_free(reader); return -2; }
+    size_t pos = 0;
+    while (pos + 512 <= decompressed.size()) {
+        const ustar_header* h = reinterpret_cast<const ustar_header*>(decompressed.data() + pos);
+        // Check if this is a valid-looking header (magic or zero block)
+        if (h->name[0] == '\0') {
+            // Count consecutive zero blocks for EOT detection
+            int zeros = 1;
+            while (pos + (zeros + 1) * 512 <= decompressed.size()) {
+                const char* next = decompressed.data() + pos + zeros * 512;
+                if (next[0] != '\0') break;
+                zeros++;
+            }
+            // Two zero blocks = EOT
+            break;
+        }
+        if (memcmp(h->magic, "ustar", 5) != 0 && h->typeflag != '0' && h->typeflag != '5') {
+            // Corrupt or non-standard header
+            break;
+        }
+        entries++;
+
+        // Parse size
+        uint64_t size = 0;
+        for (int i = 0; i < 12 && h->size[i]; i++) size = (size << 3) | (h->size[i] - '0');
+        // Move past header + data (padded to 512)
+        pos += 512;
+        if (size > 0) {
+            size_t data_blocks = (size + 511) / 512;
+            pos += data_blocks * 512;
+        }
     }
-    const int result = archive_read_close(reader);
-    archive_read_free(reader);
-    return result == ARCHIVE_OK && entries > 0 ? entries : -5;
+
+    env->ReleaseStringUTFChars(input_, input);
+    return entries > 0 ? entries : -5;
 }
