@@ -133,39 +133,16 @@ object BackupOrchestrator {
                 }
             }
 
-            // GNU tar: use ProcessBuilder to avoid shell escaping issues
+            // Package via JNI (fork+execvp, no shell)
             val microMsgDir = wxPaths.first().substringBeforeLast("/MicroMsg") + "/MicroMsg"
-            android.util.Log.d("wxhook:PKG", "backupFiles: ${backupFiles.size}, attFiles: ${attFiles.size}, microMsgDir: $microMsgDir")
-
-            // Build argument list directly — no shell involved
-            val tarArgs = mutableListOf(
-                "/data/data/com.termux/files/usr/bin/tar",
-                "--use-compress-program", "${BackupEnv.binDir}/zstd",
-                "-cf", tmpPkg,
-                "-C", BackupEnv.backupDir
-            )
-            // Add DB/state files (relative to backupDir)
-            for (f in backupFiles) tarArgs.add(f.removeSurrounding("\""))
-            tarArgs.add("-C")
-            tarArgs.add(microMsgDir)
-            // Add attachment dirs (relative to MicroMsg dir)
-            for (f in attFiles) tarArgs.add(f.removeSurrounding("\""))
-
-            android.util.Log.d("wxhook:PKG", "args: $tarArgs")
-
-            // Execute via ProcessBuilder (no shell, no escaping)
-            val pb = ProcessBuilder(tarArgs)
-            pb.environment()["LD_LIBRARY_PATH"] = "/data/data/com.termux/files/usr/lib"
-            pb.environment()["ZSTD_CLEVEL"] = "3"
-            pb.redirectErrorStream(true)
-            val process = pb.start()
-            val output = process.inputStream.bufferedReader().readText()
-            val exited = process.waitFor(600, java.util.concurrent.TimeUnit.SECONDS)
-            val exitCode = if (exited) process.exitValue() else -1
-            android.util.Log.d("wxhook:PKG", "exit=$exitCode, output=${output.take(300)}")
+            val cleanBackupFiles = backupFiles.map { it.removeSurrounding("\"") }
+            val cleanAttDirs = attFiles.map { it.removeSurrounding("\"") }
+            android.util.Log.d("wxhook:PKG", "files=${cleanBackupFiles.size}, dirs=${cleanAttDirs.size}")
+            val exitCode = NativePackager.packageFiles(tmpPkg, BackupEnv.backupDir, cleanBackupFiles, microMsgDir, cleanAttDirs)
+            android.util.Log.d("wxhook:PKG", "exit=$exitCode")
 
             val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
-            android.util.Log.d("wxhook:PKG", "pkgSize: $pkgSize")
+            android.util.Log.d("wxhook:PKG", "size=$pkgSize")
 
             if (exitCode != 0 || pkgSize <= 0L || !BackupEnv.suCopyResult(tmpPkg, pkgFile.absolutePath)) {
                 return BackupHookLocal.Result(false, "打包失败: exit=$exitCode")
