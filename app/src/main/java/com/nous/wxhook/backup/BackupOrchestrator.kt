@@ -76,7 +76,7 @@ object BackupOrchestrator {
                     RootGateways.run("rm -f $sqlScript", 5_000)
                     result.stdout.lines().lastOrNull { it.all { c -> c.isDigit() } }?.toLong() ?: 0L
                 }.getOrDefault(0L)
-                BackupManifest.saveDbState(userDir, tag, maxRowId)
+                BackupManifest.saveDbState(userHash, tag, maxRowId)
             }
 
             // 3. Scan source files for manifest
@@ -186,7 +186,7 @@ object BackupOrchestrator {
                 val userDir = File(dir, userHash)
                 userDir.mkdirs()
 
-                val dbState = BackupManifest.loadDbState(userDir)
+                val dbState = BackupManifest.loadDbState(userHash)
                 val lastRowId = dbState.optLong("lastMessageRowId", 0)
                 if (lastRowId <= 0) {
                     callback?.onProgress(
@@ -238,7 +238,7 @@ object BackupOrchestrator {
                         val ok = BackupEnv.suCopyResult(gzPath, incrPath)
                         if (ok && BackupEnv.backupExists(incrPath) && BackupEnv.backupSize(incrPath) > 0) {
                             totalFiles++; totalSize += BackupEnv.backupSize(incrPath); newFiles++
-                            BackupManifest.updateDbState(userDir, tag, incrTo.toString())
+                            BackupManifest.updateDbState(userHash, tag, incrTo.toString())
                             callback?.onProgress(
                                 "[$userHash] DB增量: ${incrTo - incrFrom}条新消息",
                                 totalFiles, totalSize
@@ -501,11 +501,12 @@ object BackupOrchestrator {
                 }.getOrDefault(JSONObject())
                 val state = JSONObject().apply { put("restoredAt", System.currentTimeMillis()) }
 
-                // Read db_state.json for rowid (now in filesDir, not sdcard)
-                val dbStateFile = File(BackupEnv.filesDirPath, "db_state_${userDir.name}.json")
-                val dbState = if (dbStateFile.exists())
+                // Read db_state.json for rowid (single file at backup root)
+                val dbStateFile = File(BackupEnv.backupDir, "db_state.json")
+                val allStates = if (dbStateFile.exists())
                     runCatching { JSONObject(dbStateFile.readText()) }.getOrDefault(JSONObject())
                 else JSONObject()
+                val dbState = allStates.optJSONObject(userDir.name) ?: JSONObject()
                 if (dbState.has("lastMessageRowId")) {
                     state.put("lastMessageRowId", dbState.getLong("lastMessageRowId"))
                 }

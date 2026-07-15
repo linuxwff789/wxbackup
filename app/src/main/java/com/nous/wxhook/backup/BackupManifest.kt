@@ -15,35 +15,35 @@ object BackupManifest {
     private const val DB_STATE_FILE = WxHookPaths.DB_STATE_FILE
     private const val DB_CONFIG_FILE = WxHookPaths.DB_CONFIG_FILE
 
-    // ── DB State ──
+    // ── DB State (single file at backup root) ──
 
-    fun saveDbState(userDir: File, tag: String, maxRowId: Long = 0) {
-        val state = JSONObject().apply {
-            put("lastBackupTag", tag)
-            put("lastBackupTime", System.currentTimeMillis())
-            if (maxRowId > 0) put("lastMessageRowId", maxRowId)
-        }
-        File(BackupEnv.filesDirPath, "db_state_${userDir.name}.json").writeText(state.toString())
+    private fun dbStateFile(): File = File(BackupEnv.backupDir, "db_state.json")
+
+    fun saveDbState(userHash: String, tag: String, maxRowId: Long = 0) {
+        val all = runCatching { JSONObject(dbStateFile().readText()) }.getOrDefault(JSONObject())
+        val u = all.optJSONObject(userHash) ?: JSONObject()
+        u.put("lastBackupTag", tag)
+        u.put("lastBackupTime", System.currentTimeMillis())
+        if (maxRowId > 0) u.put("lastMessageRowId", maxRowId)
+        all.put(userHash, u)
+        dbStateFile().writeText(all.toString())
     }
 
-    fun loadDbState(userDir: File): JSONObject {
-        return try {
-            val f = File(BackupEnv.filesDirPath, "db_state_${userDir.name}.json")
-            if (f.exists()) JSONObject(f.readText()) else JSONObject()
-        } catch (e: Exception) {
-            android.util.Log.e("wxhook:INCR", "loadDbState failed: $e")
-            JSONObject()
-        }
+    fun loadDbState(userHash: String): JSONObject {
+        val all = runCatching { JSONObject(dbStateFile().readText()) }.getOrDefault(JSONObject())
+        return all.optJSONObject(userHash) ?: JSONObject()
     }
 
-    fun updateDbState(userDir: File, tag: String, newRowId: String) {
-        val state = loadDbState(userDir)
-        state.put("lastBackupTag", tag)
-        state.put("lastBackupTime", System.currentTimeMillis())
-        state.put("incrCount", state.optInt("incrCount", 0) + 1)
+    fun updateDbState(userHash: String, tag: String, newRowId: String) {
+        val all = runCatching { JSONObject(dbStateFile().readText()) }.getOrDefault(JSONObject())
+        val u = all.optJSONObject(userHash) ?: JSONObject()
+        u.put("lastBackupTag", tag)
+        u.put("lastBackupTime", System.currentTimeMillis())
+        u.put("incrCount", u.optInt("incrCount", 0) + 1)
         val rowId = newRowId.toLongOrNull()
-        if (rowId != null && rowId > 0) state.put("lastMessageRowId", rowId)
-        File(BackupEnv.filesDirPath, "db_state_${userDir.name}.json").writeText(state.toString())
+        if (rowId != null && rowId > 0) u.put("lastMessageRowId", rowId)
+        all.put(userHash, u)
+        dbStateFile().writeText(all.toString())
     }
 
     // ── Backup State ──
