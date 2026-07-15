@@ -2,10 +2,12 @@ package com.nous.wxhook.ui.cloud
 
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -18,6 +20,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import com.nous.wxhook.service.SyncService
 import kotlinx.coroutines.launch
+import java.io.File
 
 class CloudConfigActivity : AppCompatActivity() {
 
