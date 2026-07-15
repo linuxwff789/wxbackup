@@ -500,91 +500,81 @@ object BackupOrchestrator {
                     JSONObject(BackupEnv.backupRead(File(userDir, DB_STATE_FILE).absolutePath))
                 }.getOrDefault(JSONObject())
                 val state = JSONObject().apply { put("restoredAt", System.currentTimeMillis()) }
-                val previousRowId = previousState.optLong("lastMessageRowId", 0L)
 
-                val filesOutput = RootGateways.runQuiet(
-                    "find \"$userPath\" -maxdepth 1 -type f"
-                )
-                val files = filesOutput.lines().filter { it.isNotBlank() }.map { File(it) }
-
-                val baseline = files.find {
-                    it.name.startsWith("EnMicroMsg_baseline") &&
-                    (it.name.endsWith(".sql.gz") || it.name.endsWith(".sql.zst"))
+                // Read db_state.json for rowid (still written separately)
+                val dbState = runCatching {
+                    JSONObject(BackupEnv.backupRead(File(userDir, DB_STATE_FILE).absolutePath))
+                }.getOrDefault(JSONObject())
+                if (dbState.has("lastMessageRowId")) {
+                    state.put("lastMessageRowId", dbState.getLong("lastMessageRowId"))
                 }
-                if (baseline != null) {
-                    state.put("baseline", baseline.name)
-                    state.put("baselineSize", baseline.length())
-                    state.put("lastBackupTime", baseline.lastModified())
+
+                // Full backup archives (new format: inside .tar.zst)
+                val fullArchives = RootGateways.runQuiet(
+                    "ls ${BackupEnv.backupDir}/wxbackup_full_*.tar.zst 2>/dev/null"
+                ).lines().filter { it.isNotBlank() && it.endsWith(".tar.zst") }
+                for (arc in fullArchives) {
+                    val f = File(arc)
+                    val size = BackupEnv.backupSize(arc)
                     rebuiltRecords.put(JSONObject().apply {
                         put("tag", SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-                            .format(Date(baseline.lastModified())))
+                            .format(Date(f.lastModified())))
                         put("type", "full")
-                        put("time", baseline.lastModified())
+                        put("time", f.lastModified())
                         put("fileCount", 1)
-                        put("totalSize", baseline.length())
-                        put("compression", if (baseline.name.endsWith(".zst")) "zstd" else "gzip")
-                        put("message", "全量备份: ${baseline.name}")
-                        put("files", JSONArray().put(baseline.name))
+                        put("totalSize", size)
+                        put("compression", "zstd")
+                        put("message", "全量备份: ${f.name}")
+                        put("files", JSONArray().put(f.name))
                     })
                 }
 
-                val incrFiles = files.filter {
-                    it.name.startsWith("incr_") &&
-                    (it.name.endsWith(".sql.gz") || it.name.endsWith(".sql.zst"))
-                }.sortedBy { it.name }
+                // Incremental DB dumps (still separate .sql.zst files)
+                val incrFiles = RootGateways.runQuiet(
+                    "ls ${userDir.absolutePath}/incr_*.sql.zst 2>/dev/null"
+                ).lines().filter { it.isNotBlank() }.sorted()
 
                 if (incrFiles.isNotEmpty()) {
                     state.put("incrCount", incrFiles.size)
-                    state.put("incrFiles", JSONArray(incrFiles.map { it.name }))
-                    val lastFile = incrFiles.last()
-                    val dec = if (lastFile.name.endsWith(".zst"))
-                        "${BackupEnv.binDir}/zstd -dc" else "gzip -dc"
+                    state.put("incrFiles", JSONArray(incrFiles.map { File(it).name }))
+                    val lastFile = File(incrFiles.last())
                     try {
                         val pResult = RootGateways.run(
-                            "$dec \"${lastFile.absolutePath}\" 2>/dev/null | tail -1 | cut -d'(' -f2 | cut -d',' -f1",
+                            "${BackupEnv.binDir}/zstd -dc \"${lastFile.absolutePath}\" 2>/dev/null | tail -1 | cut -d'(' -f2 | cut -d',' -f1",
                             30_000
                         )
                         val rowId = pResult.stdout.trim().toLongOrNull()
-                        if (rowId != null && rowId > previousRowId) state.put("lastMessageRowId", rowId)
-                        else if (previousRowId > 0) state.put("lastMessageRowId", previousRowId)
+                        val prevRowId = state.optLong("lastMessageRowId", 0)
+                        if (rowId != null && rowId > prevRowId) state.put("lastMessageRowId", rowId)
+                        else if (prevRowId > 0) state.put("lastMessageRowId", prevRowId)
                     } catch (_: Exception) {}
                     for (f in incrFiles) {
-                        val m = Regex("incr_(\\d+)_to_(\\d+)\\.sql\\.(gz|zst)").find(f.name)
+                        val m = Regex("incr_(\\d+)_to_(\\d+)\\.sql\\.zst").find(File(f).name)
                         val from = m?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
                         val to = m?.groupValues?.getOrNull(2)?.toLongOrNull() ?: 0L
                         rebuiltRecords.put(JSONObject().apply {
                             put("tag", SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-                                .format(Date(f.lastModified())))
+                                .format(Date(File(f).lastModified())))
                             put("type", "incremental")
-                            put("time", f.lastModified())
+                            put("time", File(f).lastModified())
                             put("fileCount", 1)
-                            put("totalSize", f.length())
-                            put("compression", if (f.name.endsWith(".zst")) "zstd" else "gzip")
+                            put("totalSize", BackupEnv.backupSize(f))
+                            put("compression", "zstd")
                             put("newFiles", 1)
                             put("incrFrom", from)
                             put("incrTo", to)
                             put("message", "增量备份: DB:${from}→${to}")
-                            put("files", JSONArray().put(f.name))
+                            put("files", JSONArray().put(File(f).name))
                         })
                     }
-                } else if (baseline != null) {
-                    val dec = if (baseline.name.endsWith(".zst"))
-                        "${BackupEnv.binDir}/zstd -dc" else "gzip -dc"
-                    try {
-                        val pResult = RootGateways.run(
-                            "$dec \"${baseline.absolutePath}\" 2>/dev/null | tail -1 | cut -d'(' -f2 | cut -d',' -f1",
-                            30_000
-                        )
-                        val rowId = pResult.stdout.trim().toLongOrNull()
-                        if (rowId != null && rowId > 0) state.put("lastMessageRowId", rowId)
-                    } catch (_: Exception) {}
                 }
 
-                val tmpState = File(BackupEnv.filesDirForWrite(), "db_state_${userDir.name}.json")
+                // Save db_state.json
+                val tmpState = File(BackupEnv.filesDirPath, "db_state_${userDir.name}.json")
                 tmpState.writeText(state.toString())
-                RootGateways.run(
-                    "cp \"${tmpState.absolutePath}\" \"${File(userDir, DB_STATE_FILE).absolutePath}\" && chmod 664 \"${File(userDir, DB_STATE_FILE).absolutePath}\"",
-                    10_000
+                RootGateways.copy(
+                    tmpState.absolutePath,
+                    File(userDir, DB_STATE_FILE).absolutePath
                 )
                 results.add(
                     "${userDir.name}: rowId=${state.optLong("lastMessageRowId", 0)}"
@@ -595,11 +585,11 @@ object BackupOrchestrator {
                 .sortedBy { it.optLong("time", 0L) }
             val outArr = JSONArray()
             for (rec in sorted) outArr.put(rec)
-            val tmpRecords = File(BackupEnv.filesDirForWrite(), WxHookPaths.RECORDS_FILE)
+            val tmpRecords = File(BackupEnv.filesDirPath, WxHookPaths.RECORDS_FILE)
             tmpRecords.writeText(outArr.toString())
-            RootGateways.run(
-                "cp \"${tmpRecords.absolutePath}\" \"${File(BackupEnv.backupDir, WxHookPaths.RECORDS_FILE).absolutePath}\" && chmod 664 \"${File(BackupEnv.backupDir, WxHookPaths.RECORDS_FILE).absolutePath}\"",
-                10_000
+            RootGateways.copy(
+                tmpRecords.absolutePath,
+                File(BackupEnv.backupDir, WxHookPaths.RECORDS_FILE).absolutePath
             )
             results.joinToString("\n") + "\nrecords=" + sorted.size
         } catch (e: Exception) {
