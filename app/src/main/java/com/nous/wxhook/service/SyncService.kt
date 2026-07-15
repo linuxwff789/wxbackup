@@ -67,20 +67,16 @@ class SyncService : Service() {
                     result = "同步未启用"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
                 }
 
-                // Find latest wxbackup_full_*.tar.zst (backupdata or legacy)
-                updateNotification("查找备份包...")
-                val findResult = RootGateways.runQuiet(
-                    "ls -t $BACKUP_DIR/wxbackup_full_*.tar.zst ${BackupEnv.backupDir}/wxbackup_full_*.tar.zst 2>/dev/null | head -1"
-                )
-                val pkgPath = findResult.trim()
-                if (pkgPath.isBlank()) {
-                    result = "无备份包可同步"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
+                // Find all files in backupdata to sync
+                updateNotification("扫描备份文件...")
+                val allFiles = RootGateways.runQuiet(
+                    "find $BACKUP_DIR -maxdepth 2 -type f ! -path '*/tmp/*' 2>/dev/null"
+                ).lines().filter { it.isNotBlank() }
+                if (allFiles.isEmpty()) {
+                    result = "无备份文件可同步"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
                 }
-                val pkgName = File(pkgPath).name
-                val pkgSize = RootGateways.runQuiet("stat -c %s \"$pkgPath\" 2>/dev/null").trim().toLongOrNull() ?: 0L
-                appendLog("找到备份包: $pkgName (${formatSize(pkgSize)})")
 
-                // Connect and upload
+                // Connect to WebDAV
                 updateNotification("连接 WebDAV...")
                 val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
                 val testResult = kotlinx.coroutines.runBlocking { client.testConnection() }
@@ -88,29 +84,32 @@ class SyncService : Service() {
                     result = "WebDAV连接失败: ${testResult.exceptionOrNull()?.message}"
                     appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
                 }
-
                 updateNotification("确保远端目录存在...")
                 kotlinx.coroutines.runBlocking { client.ensureDirectory(remotePath) }
 
-                // Check if already uploaded
                 val remoteFiles = kotlinx.coroutines.runBlocking { client.list(remotePath) }.getOrNull() ?: emptyList()
-                val remoteMatch = remoteFiles.find { it.path.endsWith(pkgName) }
-                if (remoteMatch != null && remoteMatch.size == pkgSize) {
-                    result = "跳过: $pkgName (远程已存在)"
-                    appendLog(result); updateNotification(result); sendResult(true, result); return@Thread
-                }
 
-                // Upload
-                updateNotification("上传 $pkgName (${formatSize(pkgSize)})...")
-                appendLog("上传: $pkgName")
-                val localFile = File(pkgPath)
-                val uploadResult = kotlinx.coroutines.runBlocking { client.upload(localFile, "$remotePath/$pkgName") }
-                if (uploadResult.isFailure) {
-                    result = "上传失败: ${uploadResult.exceptionOrNull()?.message}"
-                    appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
+                for (pkgPath in allFiles) {
+                    val pkgName = File(pkgPath).name
+                    val pkgSize = RootGateways.runQuiet("stat -c %s \"$pkgPath\" 2>/dev/null").trim().toLongOrNull() ?: 0L
+                    if (pkgSize < 100L) continue
+                    val remoteMatch = remoteFiles.find { it.path.endsWith(pkgName) }
+                    if (remoteMatch != null && remoteMatch.size == pkgSize) {
+                        appendLog("跳过: $pkgName (远程已存在)")
+                        continue
+                    }
+                    updateNotification("上传 $pkgName (${formatSize(pkgSize)})...")
+                    appendLog("上传: $pkgName")
+                    val tmpForUpload = File(filesDir, pkgName)
+                    if (RootGateways.copy(pkgPath, tmpForUpload.absolutePath)) {
+                        val uploadResult = kotlinx.coroutines.runBlocking { client.upload(tmpForUpload, "$remotePath/$pkgName") }
+                        tmpForUpload.delete()
+                        if (uploadResult.isFailure) {
+                            appendLog("上传失败: ${uploadResult.exceptionOrNull()?.message}")
+                        }
+                    }
                 }
-
-                result = "同步完成: $pkgName (${formatSize(pkgSize)})"
+                result = "同步完成: ${allFiles.size}个文件"
                 appendLog(result)
                 updateNotification(result)
                 sendResult(true, result)
