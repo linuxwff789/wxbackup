@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.util.Log
 import com.nous.wxhook.core.command.CommandResult
 import com.topjohnwu.superuser.ipc.RootService
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +19,7 @@ object RootManager {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             service = binder
             bound = binder != null
+            Log.i("wxhook:Root", "onServiceConnected binder=$bound component=$name")
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
@@ -27,6 +29,7 @@ object RootManager {
 
     suspend fun ensureConnected(context: Context): Boolean = withContext(Dispatchers.IO) {
         if (bound && service != null) return@withContext true
+        Log.i("wxhook:Root", "binding RootService")
         val intent = Intent(context, WxRootService::class.java)
         RootService.bind(intent, connection)
         // 等待连接

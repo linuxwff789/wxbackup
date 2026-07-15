@@ -1,6 +1,7 @@
 package com.nous.wxhook.root
 
 import android.content.Context
+import android.util.Log
 import com.nous.wxhook.core.command.CommandResult
 import com.nous.wxhook.core.command.ShellEscaper
 import com.nous.wxhook.rootbridge.RootCommandRunner
@@ -12,13 +13,19 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
     private var useLibsu = false
 
     suspend fun ensureRootService(): Boolean {
-        if (useLibsu) return true
+        if (com.nous.wxhook.root.libsu.RootManager.currentBinder() != null) {
+            useLibsu = true
+            return true
+        }
         val appContext = context ?: return false
         return try {
             com.nous.wxhook.root.libsu.RootManager.ensureConnected(appContext).also { connected ->
-                useLibsu = connected
+                useLibsu = connected && com.nous.wxhook.root.libsu.RootManager.currentBinder() != null
+                Log.i("wxhook:Root", "RootService connected=$connected binder=${useLibsu}")
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            useLibsu = false
+            Log.e("wxhook:Root", "RootService bind failed", e)
             false
         }
     }
