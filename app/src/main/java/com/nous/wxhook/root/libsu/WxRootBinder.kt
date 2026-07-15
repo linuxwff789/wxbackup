@@ -116,8 +116,9 @@ class WxRootBinder : android.os.Binder(), IInterface {
             TRANSACTION_WRITE_TAR_ZSTD -> {
                 val outputPath = data.readString()
                 val pairsPath = data.readString()
+                val useZstd = data.readInt() != 0
                 val result = try {
-                    NativeArchive.writeTarZstd(outputPath ?: "", pairsPath ?: "")
+                    NativeArchive.writeTar(outputPath ?: "", pairsPath ?: "", useZstd)
                 } catch (e: Throwable) {
                     Log.e("wxhook:archive", "write JNI failed", e)
                     -1
@@ -129,7 +130,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
             TRANSACTION_VERIFY_TAR_ZSTD -> {
                 val archivePath = data.readString()
                 val result = try {
-                    NativeArchive.verifyTarZstd(archivePath ?: "")
+                    NativeArchive.verifyTar(archivePath ?: "")
                 } catch (e: Throwable) {
                     Log.e("wxhook:archive", "verify JNI failed", e)
                     -1
@@ -281,12 +282,13 @@ class WxRootBinder : android.os.Binder(), IInterface {
             }
         }
 
-        fun writeTarZstd(shell: android.os.IBinder, outputPath: String, pairsPath: String): Int = transactInt(
+        fun writeTarZstd(shell: android.os.IBinder, outputPath: String, pairsPath: String, useZstd: Boolean): Int = transactInt(
             shell,
             TRANSACTION_WRITE_TAR_ZSTD,
         ) { data ->
             data.writeString(outputPath)
             data.writeString(pairsPath)
+            data.writeInt(if (useZstd) 1 else 0)
         }
 
         fun verifyTarZstd(shell: android.os.IBinder, archivePath: String): Int = transactInt(

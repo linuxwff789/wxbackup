@@ -35,8 +35,8 @@ object RootGateways {
     fun delete(path: String): Boolean =
         runBlocking { gateway.delete(path) }
 
-    fun writeTarZstd(outputPath: String, pairsPath: String): Int =
-        runBlocking { gateway.writeTarZstd(outputPath, pairsPath) }
+    fun writeTarZstd(outputPath: String, pairsPath: String, useZstd: Boolean): Int =
+        runBlocking { gateway.writeTarZstd(outputPath, pairsPath, useZstd) }
 
     fun verifyTarZstd(archivePath: String): Int =
         runBlocking { gateway.verifyTarZstd(archivePath) }

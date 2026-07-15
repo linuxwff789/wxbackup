@@ -7,7 +7,7 @@ object NativeArchive {
     }
 
     @JvmStatic
-    external fun writeTarZstd(outputPath: String, pairsFilePath: String): Int
+    external fun writeTar(outputPath: String, pairsFilePath: String, useZstd: Boolean): Int
     @JvmStatic
-    external fun verifyTarZstd(archivePath: String): Int
+    external fun verifyTar(archivePath: String): Int
 }
