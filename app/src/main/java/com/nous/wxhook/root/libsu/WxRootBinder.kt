@@ -3,6 +3,7 @@ package com.nous.wxhook.root.libsu
 import android.os.IBinder
 import android.os.IInterface
 import android.os.Parcel
+import com.nous.wxhook.backup.NativeArchive
 import com.topjohnwu.superuser.Shell
 import java.io.File
 
@@ -108,6 +109,29 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 reply?.writeInt(result)
                 true
             }
+            TRANSACTION_WRITE_TAR_ZSTD -> {
+                val outputPath = data.readString()
+                val pairs = data.createStringArray()
+                val result = try {
+                    NativeArchive.writeTarZstd(outputPath ?: "", pairs ?: emptyArray())
+                } catch (_: Throwable) {
+                    -1
+                }
+                reply?.writeNoException()
+                reply?.writeInt(result)
+                true
+            }
+            TRANSACTION_VERIFY_TAR_ZSTD -> {
+                val archivePath = data.readString()
+                val result = try {
+                    NativeArchive.verifyTarZstd(archivePath ?: "")
+                } catch (_: Throwable) {
+                    -1
+                }
+                reply?.writeNoException()
+                reply?.writeInt(result)
+                true
+            }
             else -> super.onTransact(code, data, reply, flags)
         }
     }
@@ -122,6 +146,8 @@ class WxRootBinder : android.os.Binder(), IInterface {
         const val TRANSACTION_FILE_SIZE = android.os.IBinder.FIRST_CALL_TRANSACTION + 7
         const val TRANSACTION_COPY = android.os.IBinder.FIRST_CALL_TRANSACTION + 8
         const val TRANSACTION_DELETE = android.os.IBinder.FIRST_CALL_TRANSACTION + 9
+        const val TRANSACTION_WRITE_TAR_ZSTD = android.os.IBinder.FIRST_CALL_TRANSACTION + 10
+        const val TRANSACTION_VERIFY_TAR_ZSTD = android.os.IBinder.FIRST_CALL_TRANSACTION + 11
         private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
 
         fun exec(shell: android.os.IBinder, command: String): ExecResult {
@@ -241,6 +267,38 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 data.writeInterfaceToken(DESCRIPTOR)
                 data.writeString(path)
                 shell.transact(TRANSACTION_DELETE, data, reply, 0)
+                reply.readException()
+                return reply.readInt()
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+
+        fun writeTarZstd(shell: android.os.IBinder, outputPath: String, pairs: Array<String>): Int = transactInt(
+            shell,
+            TRANSACTION_WRITE_TAR_ZSTD,
+        ) { data ->
+            data.writeString(outputPath)
+            data.writeStringArray(pairs)
+        }
+
+        fun verifyTarZstd(shell: android.os.IBinder, archivePath: String): Int = transactInt(
+            shell,
+            TRANSACTION_VERIFY_TAR_ZSTD,
+        ) { data -> data.writeString(archivePath) }
+
+        private fun transactInt(
+            shell: android.os.IBinder,
+            transaction: Int,
+            write: (Parcel) -> Unit,
+        ): Int {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                write(data)
+                shell.transact(transaction, data, reply, 0)
                 reply.readException()
                 return reply.readInt()
             } finally {

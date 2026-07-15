@@ -12,7 +12,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 /**
  * Orchestrates the full backup flow: stop → resolve → archive → verify → record.
@@ -106,69 +105,36 @@ object BackupOrchestrator {
                     durationMs = System.currentTimeMillis() - startTime)
             )
 
-            // 5. Package everything into one wxbackup_full_<tag>.tar.zst
-            //    Use GNU tar with --zstd and multi -C
+            // 5. Package sources into one tar.zst in libsu RootService.
+            // Native pairs retain an explicit stable archive path, avoiding tar's mutable -C state.
             val pkgFile = File(dir, "wxbackup_full_$tag.tar.zst")
             val tmpPkg = "/data/local/tmp/${pkgFile.name}"
-
-            // Collect DB/state files from backup dir
-            val backupFiles = mutableListOf<String>()
+            val sources = mutableListOf<NativeArchivePlan.Source>()
             for (wxBasePath in wxPaths) {
-                val h = WeChatSourceResolver.extractUserHash(wxBasePath)
-                backupFiles.add("\"$h/EnMicroMsg_baseline${BackupEnv.ext()}\"")
-                backupFiles.add("\"$h/db_state.json\"")
-            }
-            backupFiles.add("\"file_manifest.json\"")
-            backupFiles.add("\"db_config.json\"")
-
-            // Collect attachment dirs from WeChat source
-            val attFiles = mutableListOf<String>()
-            for (wxBasePath in wxPaths) {
-                val h = WeChatSourceResolver.extractUserHash(wxBasePath)
+                val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                sources += NativeArchivePlan.Source(
+                    File(dir, "$hash/EnMicroMsg_baseline${BackupEnv.ext()}").absolutePath,
+                    "$hash/EnMicroMsg_baseline${BackupEnv.ext()}",
+                )
+                sources += NativeArchivePlan.Source(File(dir, "$hash/db_state.json").absolutePath, "$hash/db_state.json")
                 for (attDir in ATT_DIRS) {
-                    val src = "$wxBasePath/$attDir"
-                    if (BackupEnv.suOut("test -d \"$src\" && echo 1").trim() == "1") {
-                        attFiles.add("\"$h/$attDir\"")
+                    val sourcePath = "$wxBasePath/$attDir"
+                    if (BackupEnv.suOut("test -d \"$sourcePath\" && echo 1").trim() == "1") {
+                        sources += NativeArchivePlan.Source(sourcePath, "$hash/$attDir")
                     }
                 }
             }
+            sources += NativeArchivePlan.Source(File(dir, "file_manifest.json").absolutePath, "file_manifest.json")
+            sources += NativeArchivePlan.Source(File(dir, "db_config.json").absolutePath, "db_config.json")
 
-            // Call tar via su -c through ProcessBuilder (SELinux-safe)
-            val microMsgDir = wxPaths.first().substringBeforeLast("/MicroMsg") + "/MicroMsg"
-            val cleanBackupFiles = backupFiles.map { it.removeSurrounding("\"") }
-            val cleanAttDirs = attFiles.map { it.removeSurrounding("\"") }
-            android.util.Log.d("wxhook:PKG", "files=${cleanBackupFiles.size}, dirs=${cleanAttDirs.size}")
-
-            // Build tar args
-            val tarArgs = mutableListOf("/data/local/tmp/wxhook_bin/tar",
-                "--use-compress-program", "/data/local/tmp/wxhook_bin/zstd",
-                "-cf", tmpPkg, "-C", BackupEnv.backupDir)
-            tarArgs.addAll(cleanBackupFiles)
-            tarArgs.add("-C"); tarArgs.add(microMsgDir)
-            tarArgs.addAll(cleanAttDirs)
-
-            // Build the shell command (env vars + exec)
-            val shellCmd = tarArgs.joinToString(" ") { arg ->
-                if (arg.contains(" ")) "'$arg'" else arg
-            }
-            val fullCmd = "LD_LIBRARY_PATH=/data/local/tmp/wxhook_bin ZSTD_CLEVEL=3 exec $shellCmd"
-            android.util.Log.d("wxhook:PKG", "cmd: $fullCmd")
-
-            // Execute via su -c
-            val pb = ProcessBuilder("su", "-c", fullCmd)
-            pb.environment()["LD_LIBRARY_PATH"] = "/data/local/tmp/wxhook_bin"
-            pb.redirectErrorStream(true)
-            val proc = pb.start()
-            val output = proc.inputStream.bufferedReader().readText()
-            val ok = proc.waitFor(600, java.util.concurrent.TimeUnit.SECONDS)
-            val exitCode = if (ok) proc.exitValue() else -1
-            android.util.Log.d("wxhook:PKG", "exit=$exitCode out=${output.take(200)}")
-
+            val plan = NativeArchivePlan(tmpPkg, sources)
+            val writeResult = RootGateways.writeTarZstd(tmpPkg, plan.nativePairs())
+            val verifyResult = if (writeResult == 0) RootGateways.verifyTarZstd(tmpPkg) else -1
             val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
-            android.util.Log.d("wxhook:PKG", "size=$pkgSize")
-
-            if (exitCode != 0 || pkgSize <= 0L || !BackupEnv.suCopyResult(tmpPkg, pkgFile.absolutePath)) {
-                return BackupHookLocal.Result(false, "打包失败: exit=$exitCode")
+            Log.i("wxhook:PKG", "native write=$writeResult verify=$verifyResult size=$pkgSize sources=${sources.size}")
+            if (writeResult != 0 || verifyResult <= 0 || pkgSize <= 0L || !BackupEnv.suCopyResult(tmpPkg, pkgFile.absolutePath)) {
+                BackupEnv.su("rm -f \"$tmpPkg\"")
+                return BackupHookLocal.Result(false, "打包失败: native=$writeResult verify=$verifyResult")
             }
             BackupEnv.su("rm -f \"$tmpPkg\"")
 

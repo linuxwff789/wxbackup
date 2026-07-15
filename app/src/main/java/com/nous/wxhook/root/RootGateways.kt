@@ -34,4 +34,10 @@ object RootGateways {
 
     fun delete(path: String): Boolean =
         runBlocking { gateway.delete(path) }
+
+    fun writeTarZstd(outputPath: String, sourceArchivePairs: Array<String>): Int =
+        runBlocking { gateway.writeTarZstd(outputPath, sourceArchivePairs) }
+
+    fun verifyTarZstd(archivePath: String): Int =
+        runBlocking { gateway.verifyTarZstd(archivePath) }
 }

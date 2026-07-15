@@ -37,6 +37,8 @@ object RootManager {
         bound
     }
 
+    fun currentBinder(): android.os.IBinder? = service as? android.os.IBinder
+
     suspend fun exec(command: String, timeoutMs: Long = 60_000): CommandResult =
         withContext(Dispatchers.IO) {
             val binder = service ?: return@withContext CommandResult(-1, "", "RootService not bound")
