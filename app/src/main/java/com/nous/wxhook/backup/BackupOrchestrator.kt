@@ -115,12 +115,13 @@ object BackupOrchestrator {
             sources += NativeArchivePlan.Source(File(dir, "db_config.json").absolutePath, "db_config.json")
 
             val plan = NativeArchivePlan(tmpPkg, sources)
-            // Write pairs file directly from root process (no app-local file, no shell copy)
-            val pairsFile = "/data/local/tmp/${pkgFile.name}.pairs.txt"
+            // Write pairs file to backup dir via RootService Binder
+            val pairsFile = File(dir, "archive_pairs.txt").absolutePath
             val pairsContent = plan.toPairsContent()
             if (pairsContent.isEmpty() ||
                 !RootGateways.writeFile(pairsFile, pairsContent)) {
-                BackupEnv.su("rm -f \"$tmpPkg\"")
+                RootGateways.delete(tmpPkg)
+                RootGateways.delete(pairsFile)
                 return BackupHookLocal.Result(false, "写入源文件清单失败")
             }
             val writeResult = RootGateways.writeTarZstd(tmpPkg, pairsFile)
@@ -128,10 +129,12 @@ object BackupOrchestrator {
             val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
             Log.i("wxhook:PKG", "native write=$writeResult verify=$verifyResult size=$pkgSize sources=${sources.size}")
             if (writeResult != 0 || verifyResult <= 0 || pkgSize <= 0L || !BackupEnv.suCopyResult(tmpPkg, pkgFile.absolutePath)) {
-                BackupEnv.su("rm -f \"$tmpPkg\"")
+                RootGateways.delete(tmpPkg)
+                RootGateways.delete(pairsFile)
                 return BackupHookLocal.Result(false, "打包失败: native=$writeResult verify=$verifyResult")
             }
-            BackupEnv.su("rm -f \"$tmpPkg\"")
+            RootGateways.delete(tmpPkg)
+            RootGateways.delete(pairsFile)
 
             // 6. Cloud sync
             cloudSync(callback)
