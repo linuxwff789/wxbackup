@@ -227,7 +227,7 @@ static bool write_tree(TarWriter* tw, const char* dir_src, const char* dir_arc) 
 }
 
 // ── shared write logic ──
-static int do_write_tar(JNIEnv* env, const char* output, const char* pairs_path, int mode) {
+static int do_write_tar(const char* output, const char* pairs_path, int mode) {
     FILE* pf = fopen(pairs_path, "re");
     if (!pf) { __android_log_print(ANDROID_LOG_ERROR, "wxhook:archive", "open pairs: %s", strerror(errno)); return -1; }
     std::vector<std::pair<std::string, std::string>> pairs;
@@ -272,7 +272,7 @@ Java_com_nous_wxhook_backup_NativeArchive_writeTar(
         return -1;
     }
     int mode = useZstd_ ? 1 : 2;
-    int result = do_write_tar(env, output, pairs_path, mode);
+    int result = do_write_tar(output, pairs_path, mode);
     env->ReleaseStringUTFChars(output_, output);
     env->ReleaseStringUTFChars(pairsPath_, pairs_path);
     return result;
