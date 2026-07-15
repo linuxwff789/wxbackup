@@ -96,9 +96,9 @@ object BackupOrchestrator {
             )
 
             // 5. Package sources into one tar.zst in libsu RootService.
-            // Native pairs retain an explicit stable archive path, avoiding tar's mutable -C state.
+            // 5. Package sources into one tar.zst — write directly to sdcard
             val pkgFile = File(dir, "wxbackup_full_$tag.tar.zst")
-            val tmpPkg = "/data/local/tmp/${pkgFile.name}"
+            val tmpPkg = pkgFile.absolutePath
             val sources = mutableListOf<NativeArchivePlan.Source>()
             sources += databaseSources
             for (wxBasePath in wxPaths) {
@@ -138,12 +138,11 @@ object BackupOrchestrator {
             val verifyResult = if (writeResult == 0) RootGateways.verifyTarZstd(tmpPkg) else -1
             val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
             Log.i("wxhook:PKG", "native write=$writeResult verify=$verifyResult size=$pkgSize sources=${sources.size}")
-            if (writeResult != 0 || verifyResult <= 0 || pkgSize <= 0L || !BackupEnv.suCopyResult(tmpPkg, pkgFile.absolutePath)) {
+            if (writeResult != 0 || verifyResult <= 0 || pkgSize <= 0L) {
                 RootGateways.delete(tmpPkg)
                 RootGateways.delete(pairsFile)
                 return BackupHookLocal.Result(false, "打包失败: native=$writeResult verify=$verifyResult")
             }
-            RootGateways.delete(tmpPkg)
             RootGateways.delete(pairsFile)
 
             // 6. Cloud sync
