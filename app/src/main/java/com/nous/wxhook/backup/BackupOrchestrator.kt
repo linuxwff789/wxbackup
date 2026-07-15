@@ -482,12 +482,30 @@ object BackupOrchestrator {
         val results = mutableListOf<String>()
         val rebuiltRecords = JSONArray()
         return try {
-            // Read all user hashes from centralized db_state.json
+            // Determine user hashes from db_state.json, or derive from existing files
             val dbStateFile = File(BackupEnv.backupDataDir, "db_state.json")
             val allStates = runCatching {
                 JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath))
             }.getOrDefault(JSONObject())
-            val userHashes = allStates.keys().asSequence().toList()
+            var userHashes = allStates.keys().asSequence().toList()
+
+            // If db_state.json is empty, derive hashes from incr files and archives
+            if (userHashes.isEmpty()) {
+                // From incr filenames: incr_<hash>_...
+                val incrFiles = RootGateways.runQuiet(
+                    "ls ${BackupEnv.backupDataDir}/incr_*.sql.zst 2>/dev/null"
+                ).lines().filter { it.isNotBlank() }
+                val fromIncr = incrFiles.mapNotNull {
+                    val m = Regex("incr_([a-f0-9]+)_").find(File(it).name)
+                    m?.groupValues?.getOrNull(1)
+                }
+                // Also scan legacy hash subdirs in backupDir
+                val legacyDirs = RootGateways.runQuiet(
+                    "find ${BackupEnv.backupDir} -mindepth 1 -maxdepth 1 -type d -name '[a-f0-9]*' 2>/dev/null"
+                ).lines().filter { it.isNotBlank() }.map { File(it).name }
+                userHashes = (fromIncr + legacyDirs).distinct().sorted()
+            }
+
             if (userHashes.isEmpty()) return "备份目录为空或无状态记录"
 
             for (userHash in userHashes) {
@@ -497,10 +515,12 @@ object BackupOrchestrator {
                     state.put("lastMessageRowId", dbState.getLong("lastMessageRowId"))
                 }
 
-                // Full backup archives
-                val fullArchives = RootGateways.runQuiet(
+                // Full backup archives (new + legacy location)
+                val fullArchives = (RootGateways.runQuiet(
                     "ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null"
-                ).lines().filter { it.isNotBlank() && it.endsWith(".tar.zst") }
+                ).lines() + RootGateways.runQuiet(
+                    "ls ${BackupEnv.backupDir}/wxbackup_full_*.tar.zst 2>/dev/null"
+                ).lines()).filter { it.isNotBlank() && it.endsWith(".tar.zst") }.distinct()
                 for (arc in fullArchives) {
                     val f = File(arc)
                     val size = BackupEnv.backupSize(arc)
