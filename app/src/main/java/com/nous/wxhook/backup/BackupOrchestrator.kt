@@ -41,8 +41,6 @@ object BackupOrchestrator {
             // 2. Dump each database as raw SQL. The outer libarchive tar.zst is its only compression layer.
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                val userDir = File(dir, userHash)
-                userDir.mkdirs()
 
                 callback?.onProgress("[$userHash] 数据库基线...", totalFiles, totalSize)
                 val dbSrc = "$wxBasePath/EnMicroMsg.db"
@@ -183,8 +181,6 @@ object BackupOrchestrator {
             // 1. DB incremental
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                val userDir = File(dir, userHash)
-                userDir.mkdirs()
 
                 val dbState = BackupManifest.loadDbState(userHash)
                 val lastRowId = dbState.optLong("lastMessageRowId", 0)
@@ -233,8 +229,8 @@ object BackupOrchestrator {
                             }
                         }.getOrDefault(lastRowId)
 
-                        val incrName = "incr_${incrFrom}_to_${incrTo}" + BackupEnv.ext()
-                        val incrPath = "${userDir.absolutePath}/$incrName"
+                        val incrName = "incr_${userHash}_${incrFrom}_to_${incrTo}.sql.zst"
+                        val incrPath = "${BackupEnv.backupDataDir}/$incrName"
                         val ok = BackupEnv.suCopyResult(gzPath, incrPath)
                         if (ok && BackupEnv.backupExists(incrPath) && BackupEnv.backupSize(incrPath) > 0) {
                             totalFiles++; totalSize += BackupEnv.backupSize(incrPath); newFiles++
@@ -301,26 +297,24 @@ object BackupOrchestrator {
                 }
             }
 
-            // 3. Collect incremental DB files per user (not from root dir)
+            // 3. Collect incremental DB files per user (flat in backupdata)
             val incrFiles = mutableListOf<String>()
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                val userDir = File(dir, userHash)
-                userDir.listFiles()
-                    ?.filter { it.name.startsWith("incr_") && it.name.endsWith(BackupEnv.ext()) }
-                    ?.sortedBy { it.name }
-                    ?.forEach { incrFiles.add(it.name) }
+                val result = RootGateways.runQuiet(
+                    "ls ${BackupEnv.backupDataDir}/incr_${userHash}_*.sql.zst 2>/dev/null"
+                )
+                result.lineSequence().filter { it.isNotBlank() }.forEach { incrFiles.add(File(it).name) }
             }
 
             // 3b. Package incremental attachments into tar.zst via JNI (same as full backup)
             val incrTarFiles = mutableListOf<String>()
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                val userDir = File(dir, userHash)
                 for (attDir in ATT_DIRS) {
-                    val attDirFile = File(userDir, attDir)
-                    if (attDirFile.exists() && attDirFile.listFiles()?.isNotEmpty() == true) {
-                        incrTarFiles.add("${userDir.absolutePath}/$attDir")
+                    val attPath = "${BackupEnv.backupDataDir}/${userHash}_$attDir"
+                    if (RootGateways.runQuiet("test -d \"$attPath\" && echo 1").trim() == "1") {
+                        incrTarFiles.add(attPath)
                     }
                 }
             }
@@ -488,22 +482,17 @@ object BackupOrchestrator {
         val results = mutableListOf<String>()
         val rebuiltRecords = JSONArray()
         return try {
-            val usersOutput = RootGateways.runQuiet(
-                "find ${BackupEnv.backupDataDir} -mindepth 1 -maxdepth 1 -type d | " +
-                "grep -v '/\\.' | grep -v '/tmp$' | grep -v '/.git$'"
-            )
-            val userDirs = usersOutput.lines().filter { it.isNotBlank() }
-            if (userDirs.isEmpty()) return "备份目录为空"
-            for (userPath in userDirs) {
-                val userDir = File(userPath)
-                val state = JSONObject().apply { put("restoredAt", System.currentTimeMillis()) }
+            // Read all user hashes from centralized db_state.json
+            val dbStateFile = File(BackupEnv.backupDataDir, "db_state.json")
+            val allStates = runCatching {
+                JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath))
+            }.getOrDefault(JSONObject())
+            val userHashes = allStates.keys().asSequence().toList()
+            if (userHashes.isEmpty()) return "备份目录为空或无状态记录"
 
-                // Read db_state.json for rowid (single file at backup data dir)
-                val dbStateFile = File(BackupEnv.backupDataDir, "db_state.json")
-                val allStates = if (dbStateFile.exists())
-                    runCatching { JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath)) }.getOrDefault(JSONObject())
-                else JSONObject()
-                val dbState = allStates.optJSONObject(userDir.name) ?: JSONObject()
+            for (userHash in userHashes) {
+                val state = JSONObject().apply { put("restoredAt", System.currentTimeMillis()) }
+                val dbState = allStates.optJSONObject(userHash) ?: JSONObject()
                 if (dbState.has("lastMessageRowId")) {
                     state.put("lastMessageRowId", dbState.getLong("lastMessageRowId"))
                 }
@@ -528,9 +517,9 @@ object BackupOrchestrator {
                     })
                 }
 
-                // Incremental DB dumps (still separate .sql.zst files in user dir)
+                // Incremental DB dumps (flat in backupdata, hash-prefixed)
                 val incrFiles = RootGateways.runQuiet(
-                    "ls ${userDir.absolutePath}/incr_*.sql.zst 2>/dev/null"
+                    "ls ${BackupEnv.backupDataDir}/incr_${userHash}_*.sql.zst 2>/dev/null"
                 ).lines().filter { it.isNotBlank() }.sorted()
 
                 if (incrFiles.isNotEmpty()) {
@@ -548,7 +537,7 @@ object BackupOrchestrator {
                         else if (prevRowId > 0) state.put("lastMessageRowId", prevRowId)
                     } catch (_: Exception) {}
                     for (f in incrFiles) {
-                        val m = Regex("incr_(\\d+)_to_(\\d+)\\.sql\\.zst").find(File(f).name)
+                        val m = Regex("incr_${userHash}_(\\d+)_to_(\\d+)\\.sql\\.zst").find(File(f).name)
                         val from = m?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
                         val to = m?.groupValues?.getOrNull(2)?.toLongOrNull() ?: 0L
                         rebuiltRecords.put(JSONObject().apply {
@@ -570,12 +559,12 @@ object BackupOrchestrator {
 
                 // Update centralized db_state.json at backup root
                 val newAll = if (dbStateFile.exists())
-                    runCatching { JSONObject(dbStateFile.readText()) }.getOrDefault(JSONObject())
+                    runCatching { JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath)) }.getOrDefault(JSONObject())
                 else JSONObject()
-                newAll.put(userDir.name, state)
+                newAll.put(userHash, state)
                 RootGateways.writeFile(dbStateFile.absolutePath, newAll.toString())
                 results.add(
-                    "${userDir.name}: rowId=${state.optLong("lastMessageRowId", 0)}"
+                    "${userHash}: rowId=${state.optLong("lastMessageRowId", 0)}"
                 )
             }
             val sorted = (0 until rebuiltRecords.length())
