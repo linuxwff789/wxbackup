@@ -133,13 +133,36 @@ object BackupOrchestrator {
                 }
             }
 
-            // Package via JNI (fork+execvp, no shell)
+            // Call tar via su -c through ProcessBuilder (SELinux-safe)
             val microMsgDir = wxPaths.first().substringBeforeLast("/MicroMsg") + "/MicroMsg"
             val cleanBackupFiles = backupFiles.map { it.removeSurrounding("\"") }
             val cleanAttDirs = attFiles.map { it.removeSurrounding("\"") }
             android.util.Log.d("wxhook:PKG", "files=${cleanBackupFiles.size}, dirs=${cleanAttDirs.size}")
-            val exitCode = NativePackager.packageFiles(tmpPkg, BackupEnv.backupDir, cleanBackupFiles, microMsgDir, cleanAttDirs)
-            android.util.Log.d("wxhook:PKG", "exit=$exitCode")
+
+            // Build tar args
+            val tarArgs = mutableListOf("/data/local/tmp/wxhook_bin/tar",
+                "--use-compress-program", "/data/local/tmp/wxhook_bin/zstd",
+                "-cf", tmpPkg, "-C", BackupEnv.backupDir)
+            tarArgs.addAll(cleanBackupFiles)
+            tarArgs.add("-C"); tarArgs.add(microMsgDir)
+            tarArgs.addAll(cleanAttDirs)
+
+            // Build the shell command (env vars + exec)
+            val shellCmd = tarArgs.joinToString(" ") { arg ->
+                if (arg.contains(" ")) "'$arg'" else arg
+            }
+            val fullCmd = "LD_LIBRARY_PATH=/data/local/tmp/wxhook_bin ZSTD_CLEVEL=3 exec $shellCmd"
+            android.util.Log.d("wxhook:PKG", "cmd: $fullCmd")
+
+            // Execute via su -c
+            val pb = ProcessBuilder("su", "-c", fullCmd)
+            pb.environment()["LD_LIBRARY_PATH"] = "/data/local/tmp/wxhook_bin"
+            pb.redirectErrorStream(true)
+            val proc = pb.start()
+            val output = proc.inputStream.bufferedReader().readText()
+            val ok = proc.waitFor(600, java.util.concurrent.TimeUnit.SECONDS)
+            val exitCode = if (ok) proc.exitValue() else -1
+            android.util.Log.d("wxhook:PKG", "exit=$exitCode out=${output.take(200)}")
 
             val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
             android.util.Log.d("wxhook:PKG", "size=$pkgSize")
