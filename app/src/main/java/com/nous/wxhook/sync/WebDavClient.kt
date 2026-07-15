@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.security.SecureRandom
@@ -121,7 +122,7 @@ class WebDavClient(
 
     override suspend fun upload(local: File, remote: String): Result<RemoteObject> = withContext(Dispatchers.IO) {
         try {
-            val body = local.readBytes().toRequestBody("application/octet-stream".toMediaType())
+            val body = local.asRequestBody("application/octet-stream".toMediaType())
             val fullUrl = "${url.trimEnd('/')}/$remote"
             val request = Request.Builder()
                 .url(fullUrl)
