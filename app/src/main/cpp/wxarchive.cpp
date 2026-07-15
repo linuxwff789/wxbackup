@@ -175,48 +175,62 @@ Java_com_nous_wxhook_backup_NativeArchive_writeTarZstd(
         return -3;
     }
 
-    // Step 2: compress tar with static libzstd
+    // Step 2: compress tar with static libzstd (simplified streaming)
     FILE* in = fopen(tmp_path.c_str(), "rb");
-    if (!in) { unlink(tmp_path.c_str()); return -4; }
+    if (!in) { log_error("compress open input", strerror(errno)); unlink(tmp_path.c_str()); return -4; }
 
     ZSTD_CCtx* cctx = ZSTD_createCCtx();
-    if (!cctx) { fclose(in); unlink(tmp_path.c_str()); return -5; }
+    if (!cctx) { log_error("zstd create cctx", "OOM"); fclose(in); unlink(tmp_path.c_str()); return -5; }
     ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, 3);
     ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1);
 
     FILE* out = fopen(output_path.c_str(), "wb");
-    if (!out) { ZSTD_freeCCtx(cctx); fclose(in); unlink(tmp_path.c_str()); return -6; }
+    if (!out) { log_error("compress open output", strerror(errno)); ZSTD_freeCCtx(cctx); fclose(in); unlink(tmp_path.c_str()); return -6; }
 
-    void* obuf_dst = malloc(ZSTD_CStreamOutSize());
-    if (!obuf_dst) { ZSTD_freeCCtx(cctx); fclose(out); fclose(in); unlink(tmp_path.c_str()); return -6; }
-
-    std::vector<char> inbuf(128 * 1024);
-    ZSTD_outBuffer obuf = {obuf_dst, ZSTD_CStreamOutSize(), 0};
     bool compress_ok = true;
+    std::vector<char> inbuf(256 * 1024);
+    std::vector<char> obuf(ZSTD_CStreamOutSize());
+    ZSTD_inBuffer zibuf = {inbuf.data(), 0, 0};
+    ZSTD_outBuffer zobuf = {obuf.data(), obuf.size(), 0};
 
-    ZSTD_inBuffer ibuf = {inbuf.data(), 0, 0};
-    while (compress_ok) {
-        ibuf.size = fread(inbuf.data(), 1, inbuf.size(), in);
-        ibuf.pos = 0;
-        if (ferror(in)) { compress_ok = false; break; }
-        bool last_chunk = feof(in) != 0;
-        ZSTD_EndDirective mode = last_chunk ? ZSTD_e_end : ZSTD_e_continue;
-        size_t remaining = ZSTD_compressStream2(cctx, &obuf, &ibuf, mode);
-        if (ZSTD_isError(remaining)) { compress_ok = false; break; }
-        if (obuf.pos > 0) {
-            if (fwrite(obuf.dst, 1, obuf.pos, out) != obuf.pos) { compress_ok = false; break; }
-            obuf.pos = 0;
+    while (true) {
+        zibuf.size = fread(inbuf.data(), 1, inbuf.size(), in);
+        zibuf.pos = 0;
+        if (ferror(in)) { log_error("compress read input", strerror(errno)); compress_ok = false; break; }
+        bool last = feof(in) != 0;
+        ZSTD_EndDirective mode = last ? ZSTD_e_end : ZSTD_e_continue;
+
+        while (true) {
+            zobuf.pos = 0;
+            size_t remaining = ZSTD_compressStream2(cctx, &zobuf, &zibuf, mode);
+            if (ZSTD_isError(remaining)) {
+                log_error("zstd compress", ZSTD_getErrorName(remaining));
+                compress_ok = false;
+                break;
+            }
+            if (zobuf.pos > 0 && fwrite(obuf.data(), 1, zobuf.pos, out) != zobuf.pos) {
+                log_error("compress write output", strerror(errno));
+                compress_ok = false;
+                break;
+            }
+            if (!last) break;
+            if (remaining == 0) break;
         }
-        if (last_chunk && remaining == 0) break;
+        if (!compress_ok) break;
+        if (last) break;
     }
 
-    free(obuf_dst);
+    int cerr = ferror(out);
     ZSTD_freeCCtx(cctx);
     fclose(out);
     fclose(in);
     unlink(tmp_path.c_str());
 
-    if (!compress_ok) { unlink(output_path.c_str()); return -7; }
+    if (!compress_ok || cerr) {
+        log_error("compress failed", cerr ? "write error" : "compression error");
+        unlink(output_path.c_str());
+        return -7;
+    }
     return 0;
 }
 
