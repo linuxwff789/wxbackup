@@ -10,7 +10,9 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.nous.wxhook.root.RootGateways
+import com.nous.wxhook.root.RootGatewayImpl
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -50,6 +52,12 @@ class BackupService : Service() {
         try { startForeground(NOTIFICATION_ID, createNotification(if (incremental) "增量备份中..." else "全量备份中...")) } catch (_: Exception) {}
         Thread {
             try {
+                val gateway = RootGateways.gateway as? RootGatewayImpl
+                if (gateway == null || !runBlocking { gateway.initialize().available }) {
+                    appendLog("失败: RootService 未连接")
+                    updateNotification("RootService 未连接")
+                    return@Thread
+                }
                 BackupHookLocal.init(this)
                 appendLog("服务启动: " + if (incremental) "增量备份" else "全量备份")
                 updateNotification("前台服务已启动，开始前置检查")
