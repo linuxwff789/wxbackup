@@ -115,12 +115,16 @@ object BackupOrchestrator {
             sources += NativeArchivePlan.Source(File(dir, "db_config.json").absolutePath, "db_config.json")
 
             val plan = NativeArchivePlan(tmpPkg, sources)
-            // Write pairs to a file to avoid Binder transaction buffer overflow
+            // Write pairs to app-private file, then copy to tmp with root
             val pairsFile = "/data/local/tmp/${pkgFile.name}.pairs.txt"
-            if (!plan.writePairsFile(pairsFile)) {
+            val localPairs = File(BackupEnv.filesDirPath, "archive_pairs.txt")
+            if (!plan.writePairsFile(localPairs.absolutePath) ||
+                !BackupEnv.suCopyResult(localPairs.absolutePath, pairsFile)) {
                 BackupEnv.su("rm -f \"$tmpPkg\"")
+                localPairs.delete()
                 return BackupHookLocal.Result(false, "写入源文件清单失败")
             }
+            localPairs.delete()
             val writeResult = RootGateways.writeTarZstd(tmpPkg, pairsFile)
             val verifyResult = if (writeResult == 0) RootGateways.verifyTarZstd(tmpPkg) else -1
             val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
