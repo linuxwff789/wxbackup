@@ -312,7 +312,7 @@ object BackupOrchestrator {
                     ?.forEach { incrFiles.add(it.name) }
             }
 
-            // 3b. Package incremental attachments into tar.zst
+            // 3b. Package incremental attachments into tar.zst via JNI (same as full backup)
             val incrTarFiles = mutableListOf<String>()
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
@@ -320,27 +320,36 @@ object BackupOrchestrator {
                 for (attDir in ATT_DIRS) {
                     val attDirFile = File(userDir, attDir)
                     if (attDirFile.exists() && attDirFile.listFiles()?.isNotEmpty() == true) {
-                        incrTarFiles.add(userDir.absolutePath + "/" + attDir)
+                        incrTarFiles.add("${userDir.absolutePath}/$attDir")
                     }
                 }
             }
             if (incrTarFiles.isNotEmpty()) {
-                val incrArchive = File(dir, "incr_attachments_$tag.cpio.zst")
-                val tmpIncrArchive = "/data/local/tmp/${incrArchive.name}"
-                val tarArgs = incrTarFiles.joinToString(" ") { fullPath ->
+                val incrArchive = File(dir, "incr_attachments_$tag.tar.zst")
+                val tmpPkg = incrArchive.absolutePath
+                val incrSources = incrTarFiles.map { fullPath ->
                     val rel = fullPath.removePrefix("${BackupEnv.backupDir}/")
-                    "\"$rel\""
+                    NativeArchivePlan.Source(fullPath, rel)
                 }
-                val archiveResult = BackupEnv.su(
-                    "tar -C \"${BackupEnv.backupDir}\" cf - $tarArgs 2>/dev/null | ${BackupEnv.binDir}/zstd -c -3 > \"$tmpIncrArchive\"",
-                    600_000,
-                )
-                val archiveSize = BackupEnv.suOut("stat -c %s \"$tmpIncrArchive\" 2>/dev/null").trim().toLongOrNull() ?: 0L
-                if (archiveResult.isSuccess && archiveSize > 0L && BackupEnv.suCopyResult(tmpIncrArchive, incrArchive.absolutePath)) {
-                    totalFiles++; totalSize += BackupEnv.backupSize(incrArchive.absolutePath); newFiles++
-                    callback?.onProgress("增量附件归档: ${incrArchive.name}", totalFiles, totalSize)
+                val plan = NativeArchivePlan(tmpPkg, incrSources)
+                val pairsFile = File(dir, "incr_pairs.txt").absolutePath
+                val localPairs = File(BackupEnv.filesDirPath, "incr_pairs.txt")
+                try { localPairs.writeText(plan.toPairsContent()) } catch (_: Exception) {
+                    return BackupHookLocal.Result(false, "写入增量清单失败")
                 }
-                BackupEnv.su("rm -f \"$tmpIncrArchive\"")
+                if (!RootGateways.copy(localPairs.absolutePath, pairsFile) ||
+                    RootGateways.writeTarZstd(tmpPkg, pairsFile, BackupEnv.useZstd()) != 0) {
+                    localPairs.delete()
+                    return BackupHookLocal.Result(false, "增量打包失败")
+                }
+                localPairs.delete()
+                RootGateways.delete(pairsFile)
+                val pkgSize = BackupEnv.backupSize(tmpPkg)
+                if (pkgSize > 0L) {
+                    totalFiles++; totalSize += pkgSize; newFiles++
+                    callback?.onProgress("增量附件: ${incrArchive.name}", totalFiles, totalSize)
+                    Log.i("wxhook:PKG", "incr archive: $tmpPkg size=$pkgSize")
+                }
             }
 
             // 4. Update source manifest with current WeChat attachment state.
