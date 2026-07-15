@@ -13,6 +13,9 @@ class WxRootBinder : android.os.Binder(), IInterface {
     override fun asBinder(): android.os.IBinder = this
 
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+        if (code in TRANSACTION_EXEC..TRANSACTION_VERIFY_TAR_ZSTD) {
+            data.enforceInterface(DESCRIPTOR)
+        }
         return when (code) {
             TRANSACTION_EXEC -> {
                 val cmd = data.readString()
