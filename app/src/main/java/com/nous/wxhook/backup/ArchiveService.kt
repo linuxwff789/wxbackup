@@ -92,9 +92,9 @@ object ArchiveService {
     // ── Full DB decrypt + dump ──
 
     fun decryptAndDump(dbPath: String): String {
-        val tmpDir = "/sdcard/Download/wxhook_backup/tmp"
-        val shPath = "/data/local/tmp/decrypt_full.sh"
-        val gzFile = "$tmpDir/EnMicroMsg_baseline" + BackupEnv.ext()
+        val tmpDir = "/data/local/tmp/wxhook_backup"
+        val shPath = "$tmpDir/decrypt_full.sh"
+        val outputFile = "$tmpDir/${FullBackupLayout.databaseDumpName()}"
         return try {
             val pwd = getDbPassword()
             val sqlScript = "/data/local/tmp/decrypt_full.sql"
@@ -112,16 +112,15 @@ object ArchiveService {
                 "cp \"$dbPath\" $tmpDir/wxhook_dec.db 2>/dev/null\n" +
                 "printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript\n" +
                 "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6' " +
-                "${BackupEnv.binDir}/sqlcipher $tmpDir/wxhook_dec.db < $sqlScript " +
-                (if (BackupEnv.useZstd()) "2>/dev/null | ${BackupEnv.binDir}/zstd -c -3" else "2>/dev/null | gzip -c") +
-                " > $gzFile 2>/dev/null\n"
+                "${BackupEnv.binDir}/sqlcipher \"$tmpDir/wxhook_dec.db\" < $sqlScript > \"$outputFile\" 2>/dev/null\n"
             val b64 = Base64.encodeToString(
                 script.toByteArray(Charsets.UTF_8), Base64.NO_WRAP
             )
-            BackupEnv.su("printf '%s' $b64 | base64 -d > $shPath && chmod 755 $shPath")
-            // Use RootGateways with long timeout for decryption
-            RootGateways.run("sh $shPath > /data/local/tmp/decrypt_exec.log 2>&1", 600_000)
-            if (File(gzFile).exists() && File(gzFile).length() > 0) return "OK:$gzFile"
+            RootGateways.run(
+                "mkdir -p \"$tmpDir\" && printf '%s' $b64 | base64 -d > \"$shPath\" && chmod 700 \"$shPath\" && sh \"$shPath\" > /data/local/tmp/decrypt_exec.log 2>&1",
+                600_000,
+            )
+            if (BackupEnv.suOut("test -s \"$outputFile\" && echo 1").trim() == "1") return "OK:$outputFile"
             ""
         } catch (e: Exception) {
             Log.e("wxhook:Backup", "decryptAndDump: $e")

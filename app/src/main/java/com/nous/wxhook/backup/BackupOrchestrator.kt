@@ -32,12 +32,13 @@ object BackupOrchestrator {
             val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
             val dir = File(BackupEnv.backupDir); if (!dir.exists()) dir.mkdirs()
             var totalFiles = 0L; var totalSize = 0L
+            val databaseSources = mutableListOf<NativeArchivePlan.Source>()
 
             // 1. Find WeChat users
             val wxPaths = WeChatSourceResolver.findWxPaths()
             if (wxPaths.isEmpty()) return BackupHookLocal.Result(false, "微信未运行或未找到数据")
 
-            // 2. Backup DB (baseline) — dump directly to user dir
+            // 2. Dump each database as raw SQL. The outer libarchive tar.zst is its only compression layer.
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val userDir = File(dir, userHash)
@@ -45,29 +46,18 @@ object BackupOrchestrator {
 
                 callback?.onProgress("[$userHash] 数据库基线...", totalFiles, totalSize)
                 val dbSrc = "$wxBasePath/EnMicroMsg.db"
-                val dbGzFile = File(userDir, "EnMicroMsg_baseline" + BackupEnv.ext())
-                // Decrypt + compress — dump directly to final location
-                val decResult = ArchiveService.decryptAndDump(dbSrc)
-                if (decResult.startsWith("OK:")) {
-                    val gzPath = decResult.substring(3)
-                    val gzFile = File(gzPath)
-                    if (gzFile.exists()) {
-                        BackupEnv.suCopy(gzFile, dbGzFile)
-                    }
-                }
-                // Fallback: compress directly if decryptAndDump failed
-                if (!BackupEnv.backupExists(dbGzFile.absolutePath) || BackupEnv.backupSize(dbGzFile.absolutePath) <= 0) {
-                    BackupEnv.su("rm -f \"${dbGzFile.absolutePath}\"")
-                    val compressed = ArchiveService.compressFileSu(dbSrc, dbGzFile.absolutePath)
-                    if (compressed && BackupEnv.backupExists(dbGzFile.absolutePath)) {
-                        totalFiles++; totalSize += BackupEnv.backupSize(dbGzFile.absolutePath)
-                    }
-                }
+                val dumpResult = ArchiveService.decryptAndDump(dbSrc)
+                val dumpPath = dumpResult.removePrefix("OK:").takeIf { dumpResult.startsWith("OK:") }
+                if (dumpPath == null) return BackupHookLocal.Result(false, "数据库导出失败: $userHash")
+                databaseSources += NativeArchivePlan.Source(
+                    dumpPath,
+                    "$userHash/${FullBackupLayout.databaseDumpName()}",
+                )
 
                 // Save DB state
                 val maxRowId = runCatching {
                     val pwd = ArchiveService.getDbPassword()
-                    val decDb = "/sdcard/Download/wxhook_backup/tmp/wxhook_dec.db"
+                    val decDb = "/data/local/tmp/wxhook_backup/wxhook_dec.db"
                     val exists = RootGateways.runQuiet("test -e \"$decDb\" && echo 1").trim() == "1"
                     if (!exists || pwd.isEmpty()) return@runCatching 0L
                     val sqlScript = "/data/local/tmp/wxhook_backup/rowid_query.sql"
@@ -110,12 +100,9 @@ object BackupOrchestrator {
             val pkgFile = File(dir, "wxbackup_full_$tag.tar.zst")
             val tmpPkg = "/data/local/tmp/${pkgFile.name}"
             val sources = mutableListOf<NativeArchivePlan.Source>()
+            sources += databaseSources
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                sources += NativeArchivePlan.Source(
-                    File(dir, "$hash/EnMicroMsg_baseline${BackupEnv.ext()}").absolutePath,
-                    "$hash/EnMicroMsg_baseline${BackupEnv.ext()}",
-                )
                 sources += NativeArchivePlan.Source(File(dir, "$hash/db_state.json").absolutePath, "$hash/db_state.json")
                 for (attDir in ATT_DIRS) {
                     val sourcePath = "$wxBasePath/$attDir"
