@@ -124,15 +124,46 @@ class CloudConfigActivity : AppCompatActivity() {
         configCard.addView(addRow)
         root.addView(configCard)
 
-        // ── Sync button ──
-        root.addView(Button(this).apply {
-            text = "☁️ 立即同步到云端"; textSize = 15f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(0xFF6200EE.toInt())
+        // ── Sync button + schedule ──
+        root.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
-            ).apply { setMargins(dp(12), dp(16), dp(12), dp(8)) }
-            setOnClickListener { SyncService.start(this@CloudConfigActivity) }
+            ).apply { setMargins(dp(12), 0, dp(12), dp(4)) }
+            addView(Button(this@CloudConfigActivity).apply {
+                text = "☁️ 立即同步"; textSize = 15f
+                setTextColor(Color.WHITE)
+                setBackgroundColor(0xFF6200EE.toInt())
+                layoutParams = LinearLayout.LayoutParams(0, dp(48), 2f).apply { setMargins(0, 0, dp(8), 0) }
+                setOnClickListener {
+                    SyncService.start(this@CloudConfigActivity)
+                }
+            })
+            val intervalEt = android.widget.EditText(this@CloudConfigActivity).apply {
+                textSize = 14f; inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                hint = "间隔分"
+                gravity = Gravity.CENTER
+                setText(runCatching { org.json.JSONObject(File(applicationContext.filesDir, "settings_config.json").readText()) }.getOrDefault(org.json.JSONObject()).optString("sync_interval_min", ""))
+                layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f)
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(Color.WHITE); cornerRadius = 4f
+                    setStroke(1, 0xFFBDBDBD.toInt())
+                }
+            }
+            addView(intervalEt)
+            addView(Button(this@CloudConfigActivity).apply {
+                text = "定时"; textSize = 13f
+                setTextColor(Color.WHITE)
+                setBackgroundColor(0xFF03A9F4.toInt())
+                layoutParams = LinearLayout.LayoutParams(dp(60), dp(48)).apply { setMargins(dp(8), 0, 0, 0) }
+                setOnClickListener {
+                    val min = intervalEt.text.toString().trim().toIntOrNull()
+                    if (min != null && min > 0) {
+                        viewModel.setSyncInterval(min); SyncService.start(this@CloudConfigActivity)
+                    }
+                }
+            })
         })
 
         val sv = ScrollView(this)

@@ -125,6 +125,14 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
         configFile.writeText(config.toString(2))
     }
 
+    fun setSyncInterval(minutes: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val cfg = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
+            cfg.put("sync_interval_min", minutes)
+            configFile.writeText(cfg.toString())
+        }
+    }
+
     private fun loadStatus(): String {
         val sb = StringBuilder()
         val cfgRaw = try {
