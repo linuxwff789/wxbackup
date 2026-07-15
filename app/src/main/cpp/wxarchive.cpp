@@ -51,7 +51,9 @@ class TarWriter {
     bool compress_and_write(const char* data, size_t size, int flush_mode) {
         if (mode_ == 1) {
             ZSTD_inBuffer ib = {data, size, 0};
-            while (ib.pos < ib.size) {
+            bool first = true;
+            while (ib.pos < ib.size || (flush_mode == 2 && first)) {
+                first = false;
                 char obuf[ZSTD_CStreamOutSize()];
                 ZSTD_outBuffer ob = {obuf, sizeof(obuf), 0};
                 ZSTD_EndDirective ed = (flush_mode == 2) ? ZSTD_e_end : ZSTD_e_continue;
@@ -59,11 +61,14 @@ class TarWriter {
                 if (ZSTD_isError(err)) { __android_log_print(ANDROID_LOG_ERROR, "wxhook:archive", "zstd: %s", ZSTD_getErrorName(err)); return false; }
                 if (ob.pos > 0 && fwrite(obuf, 1, ob.pos, out_) != ob.pos) return false;
                 if (flush_mode == 2 && err == 0) break;
+                if (flush_mode != 2 && ib.pos >= ib.size) break;
             }
         } else if (mode_ == 2) {
             gz_.next_in = (Bytef*)data;
             gz_.avail_in = size;
-            while (gz_.avail_in > 0 || (flush_mode == 2 && gz_.avail_out < sizeof(char) * 1024)) {
+            bool first = true;
+            while (gz_.avail_in > 0 || (flush_mode == 2 && first)) {
+                first = false;
                 char obuf[64 * 1024];
                 gz_.next_out = (Bytef*)obuf;
                 gz_.avail_out = sizeof(obuf);
