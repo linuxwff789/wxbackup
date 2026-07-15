@@ -106,9 +106,9 @@ object BackupOrchestrator {
                     durationMs = System.currentTimeMillis() - startTime)
             )
 
-            // 5. Package everything into one wxbackup_full_<tag>.tar.zst
+            // 5. Package everything into one wxbackup_full_<tag>.cpio.zst
             //    Use cpio (supports multiple source dirs, clean relative paths)
-            val pkgFile = File(dir, "wxbackup_full_$tag.tar.zst")
+            val pkgFile = File(dir, "wxbackup_full_$tag.cpio.zst")
             val tmpPkg = "/data/local/tmp/${pkgFile.name}"
 
             // Build find commands for cpio: DB/state from backup dir
@@ -319,7 +319,7 @@ object BackupOrchestrator {
                 }
             }
             if (incrTarFiles.isNotEmpty()) {
-                val incrArchive = File(dir, "incr_attachments_$tag.tar.zst")
+                val incrArchive = File(dir, "incr_attachments_$tag.cpio.zst")
                 val tmpIncrArchive = "/data/local/tmp/${incrArchive.name}"
                 val tarArgs = incrTarFiles.joinToString(" ") { fullPath ->
                     val rel = fullPath.removePrefix("${BackupEnv.backupDir}/")
@@ -394,11 +394,11 @@ object BackupOrchestrator {
             val remoteBase = config.optString("remote", "wxhook-backup")
             if (webdavUrl.isBlank() || webdavUser.isBlank()) return
 
-            // Find the latest wxbackup_full_*.tar.zst
+            // Find the latest wxbackup_full_*.cpio.zst
             val pkgPath = if (archivePath != null && BackupEnv.backupExists(archivePath)) {
                 archivePath
             } else {
-                val found = BackupEnv.suOut("ls -t ${BackupEnv.backupDir}/wxbackup_full_*.tar.zst 2>/dev/null | head -1").trim()
+                val found = BackupEnv.suOut("ls -t ${BackupEnv.backupDir}/wxbackup_full_*.cpio.zst 2>/dev/null | head -1").trim()
                 if (found.isBlank()) { callback?.onProgress("无备份包可同步", 0, 0); return }
                 found
             }
