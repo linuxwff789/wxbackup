@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
 
-repo='linuxwff789/wxhook'
+repo='linuxwff789/wxbackup'
 out="$HOME/wxbackup-nightly.apk"
 url="https://github.com/$repo/releases/download/nightly/app-debug.apk"
 
