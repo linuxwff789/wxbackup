@@ -4,40 +4,65 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import com.nous.wxhook.core.command.CommandResult
 import com.topjohnwu.superuser.ipc.RootService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 object RootManager {
-    private var service: IBinder? = null
-    private var bound = false
+    @Volatile private var service: IBinder? = null
+    @Volatile private var bound = false
+    @Volatile private var binding = false
+    @Volatile private var connectionLatch = CountDownLatch(0)
+    private val bindLock = Any()
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             service = binder
             bound = binder != null
+            binding = false
+            connectionLatch.countDown()
             Log.i("wxhook:Root", "onServiceConnected binder=$bound component=$name")
         }
+
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
             bound = false
+            binding = false
+            connectionLatch.countDown()
         }
     }
 
     suspend fun ensureConnected(context: Context): Boolean = withContext(Dispatchers.IO) {
         if (bound && service != null) return@withContext true
-        Log.i("wxhook:Root", "binding RootService")
-        val intent = Intent(context, WxRootService::class.java)
-        RootService.bind(intent, connection)
-        // 等待连接
-        repeat(50) {
-            if (bound && service != null) return@withContext true
-            Thread.sleep(100)
+
+        val latch = synchronized(bindLock) {
+            if (bound && service != null) return@synchronized CountDownLatch(0)
+            if (!binding) {
+                binding = true
+                connectionLatch = CountDownLatch(1)
+                Log.i("wxhook:Root", "posting RootService.bind to main thread")
+                Handler(Looper.getMainLooper()).post {
+                    try {
+                        RootService.bind(Intent(context, WxRootService::class.java), connection)
+                    } catch (e: Exception) {
+                        binding = false
+                        connectionLatch.countDown()
+                        Log.e("wxhook:Root", "RootService.bind failed on main thread", e)
+                    }
+                }
+            }
+            connectionLatch
         }
-        bound
+
+        latch.await(10, TimeUnit.SECONDS)
+        bound && service != null
     }
 
     fun currentBinder(): IBinder? = service
@@ -51,7 +76,7 @@ object RootManager {
                     exitCode = result.code,
                     stdout = result.out.joinToString("\n"),
                     stderr = result.err.joinToString("\n"),
-                    timedOut = false
+                    timedOut = false,
                 )
             } catch (e: Exception) {
                 CommandResult(-1, "", e.toString())
@@ -61,75 +86,45 @@ object RootManager {
     suspend fun execQuiet(command: String, timeoutMs: Long = 60_000): String =
         exec(command, timeoutMs).let { if (it.stdout.isNotBlank()) it.stdout else it.stderr }
 
-    // 文件操作 - 在 root 进程执行
     suspend fun writeFile(path: String, content: String): Boolean = withContext(Dispatchers.IO) {
         val binder = service ?: return@withContext false
-        try {
-            WxRootBinder.writeFile(binder as IBinder, path, content) == 0
-        } catch (e: Exception) {
-            false
-        }
+        try { WxRootBinder.writeFile(binder, path, content) == 0 } catch (_: Exception) { false }
     }
 
     suspend fun readFile(path: String): String = withContext(Dispatchers.IO) {
         val binder = service ?: return@withContext ""
-        try {
-            WxRootBinder.readFile(binder as IBinder, path)
-        } catch (e: Exception) {
-            ""
-        }
+        try { WxRootBinder.readFile(binder, path) } catch (_: Exception) { "" }
     }
 
     suspend fun mkdirs(path: String): Boolean = withContext(Dispatchers.IO) {
         val binder = service ?: return@withContext false
-        try {
-            WxRootBinder.mkdirs(binder as IBinder, path) == 0
-        } catch (e: Exception) {
-            false
-        }
+        try { WxRootBinder.mkdirs(binder, path) == 0 } catch (_: Exception) { false }
     }
 
     suspend fun fileExists(path: String): Boolean = withContext(Dispatchers.IO) {
         val binder = service ?: return@withContext false
-        try {
-            WxRootBinder.fileExists(binder as IBinder, path)
-        } catch (e: Exception) {
-            false
-        }
+        try { WxRootBinder.fileExists(binder, path) } catch (_: Exception) { false }
     }
 
     suspend fun fileSize(path: String): Long = withContext(Dispatchers.IO) {
         val binder = service ?: return@withContext 0L
-        try {
-            WxRootBinder.fileSize(binder as IBinder, path)
-        } catch (e: Exception) {
-            0L
-        }
+        try { WxRootBinder.fileSize(binder, path) } catch (_: Exception) { 0L }
     }
 
     suspend fun copy(src: String, dst: String): Boolean = withContext(Dispatchers.IO) {
         val binder = service ?: return@withContext false
-        try {
-            WxRootBinder.copy(binder as IBinder, src, dst) == 0
-        } catch (e: Exception) {
-            false
-        }
+        try { WxRootBinder.copy(binder, src, dst) == 0 } catch (_: Exception) { false }
     }
 
     suspend fun delete(path: String): Boolean = withContext(Dispatchers.IO) {
         val binder = service ?: return@withContext false
-        try {
-            WxRootBinder.delete(binder as IBinder, path) == 0
-        } catch (e: Exception) {
-            false
-        }
+        try { WxRootBinder.delete(binder, path) == 0 } catch (_: Exception) { false }
     }
 
     fun disconnect(context: Context) {
-        if (bound) {
-            RootService.unbind(connection)
-            bound = false
-            service = null
-        }
+        if (bound) RootService.unbind(connection)
+        bound = false
+        binding = false
+        service = null
     }
 }
