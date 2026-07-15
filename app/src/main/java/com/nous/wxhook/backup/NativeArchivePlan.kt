@@ -14,4 +14,7 @@ data class NativeArchivePlan(
             true
         } catch (_: Exception) { false }
     }
+
+    fun toPairsContent(): String =
+        sources.joinToString("\n") { "${it.sourcePath}\t${it.archivePath}" }
 }
