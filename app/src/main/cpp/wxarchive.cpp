@@ -74,7 +74,7 @@ public:
         char buf[128 * 1024];
         off_t remaining = size;
         while (remaining > 0) {
-            ssize_t n = read(fd, buf, sizeof(buf) < remaining ? sizeof(buf) : remaining);
+            ssize_t n = read(fd, buf, sizeof(buf) < (size_t)remaining ? sizeof(buf) : (size_t)remaining);
             if (n <= 0) return false;
             remaining -= n;
             // Write full 512-byte chunks
