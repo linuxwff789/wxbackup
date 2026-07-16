@@ -150,7 +150,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
                     conn.requestMethod = "PUT"
                     conn.doOutput = true
                     conn.setRequestProperty("Authorization", "Basic " +
-                        java.util.Base64.getEncoder().encodeToString("$user:$pass".toByteArray()))
+                        android.util.Base64.encodeToString("$user:$pass".toByteArray(), android.util.Base64.NO_WRAP))
                     conn.setRequestProperty("Content-Type", "application/octet-stream")
                     conn.setRequestProperty("Content-Length", f.length().toString())
                     conn.connectTimeout = 30_000
