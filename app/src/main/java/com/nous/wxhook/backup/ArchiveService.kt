@@ -135,9 +135,8 @@ object ArchiveService {
         val workDir = "/data/local/tmp/wxhook_backup"
         val workDb = "$workDir/wxhook_inc.db"
         val workSql = "$workDir/wxhook_inc_out.sql"
-        val workOut = "$workDir/wxhook_inc_out" + BackupEnv.ext()
-        val finalOut = "$finalDir/wxhook_inc_out" + BackupEnv.ext()
-        val cleanupWork = "rm -f $workDb $workDb-shm $workDb-wal $workSql $workOut 2>/dev/null"
+        val finalOut = "$finalDir/wxhook_inc_out.sql"
+        val cleanupWork = "rm -f $workDb $workDb-shm $workDb-wal $workSql 2>/dev/null"
         val cleanupAll = "$cleanupWork; rm -f $finalOut 2>/dev/null"
         return try {
             val pwd = getDbPassword()
@@ -186,29 +185,17 @@ object ArchiveService {
                 return ""
             }
 
-            // Compress the SQL dump
+            // Output raw SQL (no extra compression — tar zstd handles it)
             RootGateways.run("mkdir -p $finalDir", 5_000)
-            val compressor = if (BackupEnv.useZstd()) "${BackupEnv.binDir}/zstd -c -3" else "gzip -c"
-            val gzipResult = RootGateways.run(
-                "$compressor \"$workSql\" > \"$workOut\"", 120_000
-            )
+            RootGateways.run("cp \"$workSql\" \"$finalOut\" && chmod 664 \"$finalOut\"", 60_000)
             val outputSize = RootGateways.runQuiet(
-                "stat -c %s \"$workOut\" 2>/dev/null"
+                "stat -c %s \"$finalOut\" 2>/dev/null"
             ).trim().toLongOrNull() ?: 0L
-            if (!gzipResult.isSuccess || outputSize <= 0L) {
-                RootGateways.run(cleanupWork, 10_000)
-                return ""
-            }
-
-            // Move output to final location
-            val moved = RootGateways.run(
-                "cp \"$workOut\" \"$finalOut\" && chmod 664 \"$finalOut\"", 60_000
-            ).isSuccess
             RootGateways.run(cleanupWork, 10_000)
-            if (moved) "OK:$finalOut" else ""
+            if (outputSize > 0L) "OK:$finalOut" else ""
         } catch (e: Exception) {
             RootGateways.run(
-                "killall sqlcipher 2>/dev/null; rm -f $workDb $workDb-shm $workDb-wal $workOut $finalOut 2>/dev/null",
+                "killall sqlcipher 2>/dev/null; rm -f $workDb $workDb-shm $workDb-wal $finalOut 2>/dev/null",
                 10_000
             )
             ""

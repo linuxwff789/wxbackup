@@ -235,9 +235,8 @@ object BackupOrchestrator {
 
                         val incrSqlName = "incr_${incrFrom}_to_${incrTo}.sql"
                         val tmpSql = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/$incrSqlName"
-                        // Decompress to raw SQL before adding to tar (tar is already zstd compressed)
-                        val dec = if (BackupEnv.useZstd()) "${BackupEnv.binDir}/zstd -dc" else "gzip -dc"
-                        val ok = RootGateways.run("$dec \"$gzPath\" > \"$tmpSql\" 2>/dev/null", 30_000).isSuccess
+                        // Raw SQL from decryptIncremental, copy directly into tar
+                        val ok = RootGateways.run("cp \"$gzPath\" \"$tmpSql\" 2>/dev/null", 10_000).isSuccess
                         if (ok && BackupEnv.backupExists(tmpSql) && BackupEnv.backupSize(tmpSql) > 0) {
                             totalFiles++; newFiles++
                             incrSources += NativeArchivePlan.Source(tmpSql, "$userHash/$incrSqlName")
