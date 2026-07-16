@@ -13,7 +13,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
     override fun asBinder(): android.os.IBinder = this
 
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-        if (code in TRANSACTION_EXEC..TRANSACTION_VERIFY_TAR_ZSTD) {
+        if (code in TRANSACTION_EXEC..TRANSACTION_WEBDAV_UPLOAD) {
             data.enforceInterface(DESCRIPTOR)
         }
         return when (code) {
@@ -139,6 +139,35 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 reply?.writeInt(result)
                 true
             }
+            TRANSACTION_WEBDAV_UPLOAD -> {
+                val url = data.readString()
+                val user = data.readString()
+                val pass = data.readString()
+                val filePath = data.readString()
+                val result = try {
+                    val f = File(filePath)
+                    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    conn.requestMethod = "PUT"
+                    conn.doOutput = true
+                    conn.setRequestProperty("Authorization", "Basic " +
+                        java.util.Base64.getEncoder().encodeToString("$user:$pass".toByteArray()))
+                    conn.setRequestProperty("Content-Type", "application/octet-stream")
+                    conn.setRequestProperty("Content-Length", f.length().toString())
+                    conn.connectTimeout = 30_000
+                    conn.readTimeout = 300_000
+                    f.inputStream().use { input ->
+                        conn.outputStream.use { output -> input.copyTo(output) }
+                    }
+                    val responseCode = conn.responseCode
+                    if (responseCode in 200..299) 0 else responseCode
+                } catch (e: Exception) {
+                    Log.e("wxhook:Root", "webdav upload error", e)
+                    -1
+                }
+                reply?.writeNoException()
+                reply?.writeInt(result)
+                true
+            }
             else -> super.onTransact(code, data, reply, flags)
         }
     }
@@ -155,6 +184,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
         const val TRANSACTION_DELETE = android.os.IBinder.FIRST_CALL_TRANSACTION + 9
         const val TRANSACTION_WRITE_TAR_ZSTD = android.os.IBinder.FIRST_CALL_TRANSACTION + 10
         const val TRANSACTION_VERIFY_TAR_ZSTD = android.os.IBinder.FIRST_CALL_TRANSACTION + 11
+        const val TRANSACTION_WEBDAV_UPLOAD = android.os.IBinder.FIRST_CALL_TRANSACTION + 12
         private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
 
         fun exec(shell: android.os.IBinder, command: String): ExecResult {
@@ -295,6 +325,16 @@ class WxRootBinder : android.os.Binder(), IInterface {
             shell,
             TRANSACTION_VERIFY_TAR_ZSTD,
         ) { data -> data.writeString(archivePath) }
+
+        fun webdavUpload(shell: android.os.IBinder, url: String, user: String, pass: String, filePath: String): Int = transactInt(
+            shell,
+            TRANSACTION_WEBDAV_UPLOAD,
+        ) { data ->
+            data.writeString(url)
+            data.writeString(user)
+            data.writeString(pass)
+            data.writeString(filePath)
+        }
 
         private fun transactInt(
             shell: android.os.IBinder,

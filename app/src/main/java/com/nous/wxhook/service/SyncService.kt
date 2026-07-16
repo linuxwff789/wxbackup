@@ -10,7 +10,6 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.nous.wxhook.backup.BackupEnv
-import com.nous.wxhook.core.command.ShellEscaper
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.sync.WebDavClient
 import java.io.File
@@ -101,14 +100,11 @@ class SyncService : Service() {
                     }
                     updateNotification("上传 $pkgName (${formatSize(pkgSize)})...")
                     appendLog("上传: $pkgName")
-                    // Upload via curl in root process (avoids app process file permission)
+                    // Upload via root process Binder (no external binary)
                     val uploadUrl = "${webdavUrl.trimEnd('/')}/$remotePath/$pkgName"
-                    val curlResult = RootGateways.run(
-                        "curl -s --max-time 600 -X PUT -u ${ShellEscaper.quote("$webdavUser:$webdavPass")} --data-binary @${ShellEscaper.quote(pkgPath)} ${ShellEscaper.quote(uploadUrl)}",
-                        600_000
-                    )
-                    if (!curlResult.isSuccess) {
-                        appendLog("上传失败: ${curlResult.stderr.take(200)}")
+                    val ok = RootGateways.webdavUpload(uploadUrl, webdavUser, webdavPass, pkgPath)
+                    if (!ok) {
+                        appendLog("上传失败: $pkgName")
                     }
                 }
                 result = "同步完成: ${allFiles.size}个文件"

@@ -34,4 +34,7 @@ interface RootGateway {
     suspend fun writeFile(path: String, content: String): Boolean
     suspend fun readFile(path: String): String
     suspend fun fileSize(path: String): Long
+
+    // WebDAV upload in root process (no external binary dependency)
+    suspend fun webdavUpload(url: String, user: String, pass: String, filePath: String): Boolean
 }
