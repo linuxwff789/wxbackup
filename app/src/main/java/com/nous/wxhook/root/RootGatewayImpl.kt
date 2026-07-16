@@ -115,7 +115,7 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
         withContext(Dispatchers.IO) {
             val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder()
                 ?: return@withContext false
-            com.nous.wxhook.root.libsu.WxRootBinder.webdavUpload(binder, url, user, pass, filePath)
+            com.nous.wxhook.root.libsu.WxRootBinder.webdavUpload(binder, url, user, pass, filePath) == 0
         }
 
     override suspend fun verifyTarZstd(archivePath: String): Int = withContext(Dispatchers.IO) {
