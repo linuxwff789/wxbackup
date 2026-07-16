@@ -548,9 +548,9 @@ object BackupOrchestrator {
                 }
 
                 // Update centralized db_state.json at backup root
-                val newAll = if (dbStateFile.exists())
-                    runCatching { JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath)) }.getOrDefault(JSONObject())
-                else JSONObject()
+                val newAll = runCatching {
+                    JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath))
+                }.getOrDefault(JSONObject())
                 newAll.put(userHash, state)
                 RootGateways.writeFile(dbStateFile.absolutePath, newAll.toString())
                 results.add(
