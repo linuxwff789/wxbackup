@@ -111,11 +111,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun rebuildState() {
         viewModelScope.launch(Dispatchers.IO) {
             val result = runCatching {
-                BackupOrchestrator.rebuildDbState { msg, _, _ ->
-                    withContext(Dispatchers.Main) {
-                        _uiState.value = _uiState.value.copy(actionTitle = "重建: $msg")
+                BackupOrchestrator.rebuildDbState(object : BackupHookLocal.ProgressCallback {
+                    override fun onProgress(current: String, fileCount: Long, totalSize: Long) {
+                        withContext(Dispatchers.Main) {
+                            _uiState.value = _uiState.value.copy(actionTitle = "重建: $current")
+                        }
                     }
-                }
+                })
             }.getOrElse { "重建失败: ${it.message}" }
             withContext(Dispatchers.Main) {
                 _uiState.value = _uiState.value.copy(actionTitle = "设置 ✅ 重建完成")
