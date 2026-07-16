@@ -99,12 +99,9 @@ object BackupOrchestrator {
             val tmpPkg = pkgFile.absolutePath
             val sources = mutableListOf<NativeArchivePlan.Source>()
             sources += databaseSources
-            for (wxBasePath in wxPaths) {
-                val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                sources += NativeArchivePlan.Source(File(dir, "$hash/db_state.json").absolutePath, "$hash/db_state.json")
-            }
+            sources += NativeArchivePlan.Source(File(BackupEnv.backupDataDir, "db_state.json").absolutePath, "db_state.json")
             sources += NativeArchivePlan.Source(File(dir, "file_manifest.json").absolutePath, "file_manifest.json")
-            sources += NativeArchivePlan.Source(File(dir, "db_config.json").absolutePath, "db_config.json")
+            sources += NativeArchivePlan.Source(File(BackupEnv.backupDir, "db_config.json").absolutePath, "db_config.json")
 
             // Add files from scan results directly (avoid Binder limit on loading manifest)
             for (entry in sourceFiles) {
