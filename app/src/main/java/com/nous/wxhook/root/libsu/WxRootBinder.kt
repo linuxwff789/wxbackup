@@ -13,7 +13,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
     override fun asBinder(): android.os.IBinder = this
 
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-        if (code in TRANSACTION_EXEC..TRANSACTION_READ_FILE_FROM_TAR) {
+        if (code in TRANSACTION_EXEC..TRANSACTION_LIST_TAR) {
             data.enforceInterface(DESCRIPTOR)
         }
         return when (code) {
@@ -152,6 +152,18 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 reply?.writeString(result)
                 true
             }
+            TRANSACTION_LIST_TAR -> {
+                val archivePath = data.readString()
+                val result = try {
+                    NativeArchive.listTar(archivePath ?: "")
+                } catch (e: Throwable) {
+                    Log.e("wxhook:archive", "listTar JNI failed", e)
+                    ""
+                }
+                reply?.writeNoException()
+                reply?.writeString(result)
+                true
+            }
             TRANSACTION_WEBDAV_UPLOAD -> {
                 val url = data.readString()
                 val user = data.readString()
@@ -199,6 +211,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
         const val TRANSACTION_VERIFY_TAR_ZSTD = android.os.IBinder.FIRST_CALL_TRANSACTION + 11
         const val TRANSACTION_WEBDAV_UPLOAD = android.os.IBinder.FIRST_CALL_TRANSACTION + 12
         const val TRANSACTION_READ_FILE_FROM_TAR = android.os.IBinder.FIRST_CALL_TRANSACTION + 13
+        const val TRANSACTION_LIST_TAR = android.os.IBinder.FIRST_CALL_TRANSACTION + 14
         private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
 
         fun exec(shell: android.os.IBinder, command: String): ExecResult {
@@ -354,6 +367,11 @@ class WxRootBinder : android.os.Binder(), IInterface {
             shell,
             TRANSACTION_READ_FILE_FROM_TAR,
         ) { data -> data.writeString(archivePath); data.writeString(filePath) }
+
+        fun listTar(shell: android.os.IBinder, archivePath: String): String = transactString(
+            shell,
+            TRANSACTION_LIST_TAR,
+        ) { data -> data.writeString(archivePath) }
 
         private fun transactInt(
             shell: android.os.IBinder,

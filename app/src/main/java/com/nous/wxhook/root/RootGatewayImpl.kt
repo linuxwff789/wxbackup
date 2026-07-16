@@ -128,6 +128,11 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
         com.nous.wxhook.root.libsu.WxRootBinder.readFileFromTar(binder, archivePath, filePath)
     }
 
+    override suspend fun listTar(archivePath: String): String = withContext(Dispatchers.IO) {
+        val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder() ?: return@withContext ""
+        com.nous.wxhook.root.libsu.WxRootBinder.listTar(binder, archivePath)
+    }
+
     override suspend fun run(command: String, timeoutMs: Long): CommandResult = exec(command, timeoutMs)
 
     override suspend fun exec(command: String, timeoutMs: Long): CommandResult = withContext(Dispatchers.IO) {

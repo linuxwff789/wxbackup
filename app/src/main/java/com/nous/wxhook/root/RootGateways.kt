@@ -25,6 +25,8 @@ object RootGateways {
         runBlocking { gateway.verifyTarZstd(archivePath) }
     fun readFileFromTar(archivePath: String, filePath: String): String =
         runBlocking { gateway.readFileFromTar(archivePath, filePath) }
+    fun listTar(archivePath: String): String =
+        runBlocking { gateway.listTar(archivePath) }
     fun run(command: String, timeoutMs: Long = 60_000) = runBlocking { gateway.run(command, timeoutMs) }
     fun runQuiet(command: String, timeoutMs: Long = 60_000) = runBlocking { gateway.runQuiet(command, timeoutMs) }
 }

@@ -13,4 +13,7 @@ object NativeArchive {
     @JvmStatic
     /** Read a single file from a tar[.zst|.gz] archive. Returns content or empty string. */
     external fun readFileFromTar(archivePath: String, filePath: String): String
+    @JvmStatic
+    /** List files in a tar[.zst|.gz] archive. Returns newline-separated filenames. */
+    external fun listTar(archivePath: String): String
 }

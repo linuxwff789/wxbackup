@@ -30,6 +30,8 @@ interface RootGateway {
     suspend fun exec(command: String, timeoutMs: Long): CommandResult
     /** Read a file from a tar[.zst|.gz] archive via JNI (runs in root process). */
     suspend fun readFileFromTar(archivePath: String, filePath: String): String
+    /** List files in a tar[.zst|.gz] archive via JNI. */
+    suspend fun listTar(archivePath: String): String
     suspend fun run(command: String, timeoutMs: Long = 60_000): CommandResult
     suspend fun runQuiet(command: String, timeoutMs: Long = 60_000): String
     
