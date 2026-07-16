@@ -108,10 +108,9 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun saveS3Config(name: String, provider: String, region: String, endpoint: String, ak: String, sk: String) {
-        val configFile = File("/sdcard/Download/wxhook_backup/remote_config.json")
-        val config = try {
-            JSONObject(configFile.readText())
-        } catch (_: Exception) { JSONObject() }
+        val path = "/sdcard/Download/wxhook_backup/remote_config.json"
+        val txt = RootGateways.runQuiet("cat \"$path\" 2>/dev/null").trim()
+        val config = if (txt.isNotEmpty()) JSONObject(txt) else JSONObject()
         config.put("enabled", true)
         config.put("remote", name)
         config.put("type", "s3")
@@ -120,8 +119,7 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
         config.put("endpoint", endpoint)
         config.put("access_key", ak)
         config.put("secret_key", sk)
-        configFile.parentFile?.mkdirs()
-        configFile.writeText(config.toString(2))
+        RootGateways.writeFile(path, config.toString(2))
     }
 
     fun setSyncInterval(minutes: Int) {
