@@ -234,12 +234,13 @@ object BackupOrchestrator {
                         }.getOrDefault(lastRowId)
 
                         val incrSqlName = "incr_${incrFrom}_to_${incrTo}.sql"
-                        val ok = BackupEnv.suCopyResult(gzPath, "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/$incrSqlName")
-                        if (ok) {
+                        val tmpSql = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/$incrSqlName"
+                        // Decompress to raw SQL before adding to tar (tar is already zstd compressed)
+                        val dec = if (BackupEnv.useZstd()) "${BackupEnv.binDir}/zstd -dc" else "gzip -dc"
+                        val ok = RootGateways.run("$dec \"$gzPath\" > \"$tmpSql\" 2>/dev/null", 30_000).isSuccess
+                        if (ok && BackupEnv.backupExists(tmpSql) && BackupEnv.backupSize(tmpSql) > 0) {
                             totalFiles++; newFiles++
-                            incrSources += NativeArchivePlan.Source(
-                                "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/$incrSqlName",
-                                "$userHash/$incrSqlName")
+                            incrSources += NativeArchivePlan.Source(tmpSql, "$userHash/$incrSqlName")
                             callback?.onProgress(
                                 "[$userHash] DB增量: ${incrTo - incrFrom}条新消息",
                                 totalFiles, totalSize
