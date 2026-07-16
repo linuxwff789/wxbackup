@@ -467,67 +467,110 @@ object BackupOrchestrator {
         val results = mutableListOf<String>()
         val rebuiltRecords = JSONArray()
         return try {
-            // Determine user hashes from centralized db_state.json only
-            val dbStateFile = File(BackupEnv.backupDataDir, "db_state.json")
-            val allStates = runCatching {
-                JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath))
-            }.getOrDefault(JSONObject())
-            val userHashes = allStates.keys().asSequence().toList()
+            // 1. Check if WeChat is running
+            val wxPaths = WeChatSourceResolver.findWxPaths()
+            if (wxPaths.isEmpty())
+                return "微信未运行，请先打开微信再重建"
 
-            if (userHashes.isEmpty()) return "备份目录为空或无状态记录"
+            // 2. For each WeChat user, read live rowid + file count
+            val liveStates = mutableMapOf<String, JSONObject>()
+            for (wxBasePath in wxPaths) {
+                val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                val live = JSONObject()
+                live.put("hash", userHash)
 
-            for (userHash in userHashes) {
-                val state = JSONObject().apply { put("restoredAt", System.currentTimeMillis()) }
-                val dbState = allStates.optJSONObject(userHash) ?: JSONObject()
-                if (dbState.has("lastMessageRowId")) {
-                    state.put("lastMessageRowId", dbState.getLong("lastMessageRowId"))
+                // Query live max(rowid)
+                val workDb = "/data/local/tmp/wxhook_backup/wxhook_rebuild.db"
+                val pwd = runCatching {
+                    JSONObject(BackupEnv.suOut(
+                        "cat ${BackupEnv.backupDir}/db_config.json 2>/dev/null"
+                    )).optString("password", "")
+                }.getOrDefault("")
+                if (pwd.isNotEmpty()) {
+                    val rowId = runCatching {
+                        RootGateways.run("mkdir -p /data/local/tmp/wxhook_backup", 5_000)
+                        RootGateways.run("dd if=\"$wxBasePath/EnMicroMsg.db\" of=\"$workDb\" bs=4M status=none 2>/dev/null", 300_000)
+                        val sqlScript = "/data/local/tmp/wxhook_backup/rebuild_rowid.sql"
+                        val script = ".output /dev/null\n" +
+                            "PRAGMA key = '$pwd';\n" +
+                            "PRAGMA cipher_compatibility = 3;\n" +
+                            "PRAGMA cipher_page_size = 1024;\n" +
+                            "PRAGMA kdf_iter = 4000;\n" +
+                            "PRAGMA cipher_use_hmac = OFF;\n" +
+                            ".output stdout\n" +
+                            "SELECT coalesce(max(rowid), 0) FROM message;\n"
+                        RootGateways.runQuiet("printf '%s' '${script.replace("'", "'\\''")}' > $sqlScript")
+                        val ld = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
+                        val r = RootGateways.run("$ld ${BackupEnv.binDir}/sqlcipher \"$workDb\" < $sqlScript 2>/dev/null", 30_000)
+                        RootGateways.run("rm -f $workDb $workDb-shm $workDb-wal $sqlScript", 10_000)
+                        r.stdout.lines().lastOrNull { it.all { c -> c.isDigit() } }?.toLong() ?: 0L
+                    }.getOrDefault(0L)
+                    if (rowId > 0) live.put("lastMessageRowId", rowId)
                 }
 
-                // Full backup archives (backupdata/)
-                val fullArchives = RootGateways.runQuiet(
-                    "ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null"
-                ).lines().filter { it.isNotBlank() && it.endsWith(".tar.zst") }.distinct()
+                // Count attachment files live
+                val fileCount = wxPaths.flatMap { wxBasePath2 ->
+                    FileManifest.scanWeChatAttachments(wxBasePath2,
+                        WeChatSourceResolver.extractUserHash(wxBasePath2),
+                        listOf("image2", "voice2", "video", "emoji", "avatar", "cdn", "record", "favorite"))
+                }.size
+                live.put("fileCount", fileCount)
+                liveStates[userHash] = live
+            }
+
+            // 3. Scan archives and generate records
+            val fullArchives = RootGateways.runQuiet(
+                "ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null"
+            ).lines().filter { it.isNotBlank() }.distinct().sorted()
+            val incrArchives = RootGateways.runQuiet(
+                "ls ${BackupEnv.backupDataDir}/incr_attachments_*.tar.zst 2>/dev/null"
+            ).lines().filter { it.isNotBlank() }.sorted()
+
+            // 4. Build records from archives + live data, update db_state
+            val dbStateFile = File(BackupEnv.backupDataDir, "db_state.json")
+            val dbState = runCatching {
+                JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath))
+            }.getOrDefault(JSONObject())
+
+            for ((userHash, live) in liveStates) {
+                val state = JSONObject().apply { put("restoredAt", System.currentTimeMillis()) }
+                // Use live rowid (most current)
+                if (live.has("lastMessageRowId"))
+                    state.put("lastMessageRowId", live.getLong("lastMessageRowId"))
+
+                // Full archive records
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    val size = BackupEnv.backupSize(arc)
                     rebuiltRecords.put(JSONObject().apply {
                         put("tag", SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
                             .format(Date(f.lastModified())))
                         put("type", "full")
                         put("time", f.lastModified())
                         put("fileCount", 1)
-                        put("totalSize", size)
+                        put("totalSize", BackupEnv.backupSize(arc))
                         put("compression", "zstd")
                         put("message", "全量备份: ${f.name}")
                         put("files", JSONArray().put(f.name))
                     })
                 }
 
-                // Incremental attachment archives
-                val incrArchives = RootGateways.runQuiet(
-                    "ls ${BackupEnv.backupDataDir}/incr_attachments_*.tar.zst 2>/dev/null"
-                ).lines().filter { it.isNotBlank() }.sorted()
-
+                // Incremental archive records
                 if (incrArchives.isNotEmpty()) {
                     state.put("incrCount", incrArchives.size)
                     for (arc in incrArchives) {
                         val f = File(arc)
                         val size = BackupEnv.backupSize(arc)
-                        // Extract db_state.json from tar for rowid (exact path, no glob)
-                        val rowId = runCatching {
+                        // Extract db_state.json from archive for historical rowid (for display only)
+                        val histRowId = runCatching {
                             val cmd = "${BackupEnv.binDir}/zstd -dc \"${f.absolutePath}\" 2>/dev/null | " +
-                                "${BackupEnv.binDir}/tar -xO \"$userHash/db_state.json\" 2>/dev/null | " +
-                                "head -c 4096"
+                                "${BackupEnv.binDir}/tar -xO \"$userHash/db_state.json\" 2>/dev/null | head -c 4096"
                             val out = RootGateways.runQuiet(cmd, 30_000).trim()
                             JSONObject(out).optLong("lastMessageRowId", 0)
                         }.getOrDefault(0L)
-                        if (rowId > 0) state.put("lastMessageRowId", rowId)
-
-                        // Extract file_manifest.json from tar for file list
+                        // Extract file_manifest.json for file count
                         val fileCount = runCatching {
                             val cmd = "${BackupEnv.binDir}/zstd -dc \"${f.absolutePath}\" 2>/dev/null | " +
-                                "${BackupEnv.binDir}/tar -xO \"$userHash/file_manifest.json\" 2>/dev/null | " +
-                                "head -c 4096"
+                                "${BackupEnv.binDir}/tar -xO \"$userHash/file_manifest.json\" 2>/dev/null | head -c 4096"
                             val out = RootGateways.runQuiet(cmd, 30_000).trim()
                             JSONObject(out).optInt("fileCount", 1)
                         }.getOrDefault(1)
@@ -541,29 +584,32 @@ object BackupOrchestrator {
                             put("totalSize", size)
                             put("compression", "zstd")
                             put("newFiles", fileCount)
+                            put("incrRowId", histRowId)
                             put("message", "增量备份: ${f.name}")
                             put("files", JSONArray().put(f.name))
                         })
                     }
                 }
 
-                // Update centralized db_state.json at backup root
-                val newAll = runCatching {
+                // Update centralized db_state
+                val all = runCatching {
                     JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath))
                 }.getOrDefault(JSONObject())
-                newAll.put(userHash, state)
-                RootGateways.writeFile(dbStateFile.absolutePath, newAll.toString())
-                results.add(
-                    "${userHash}: rowId=${state.optLong("lastMessageRowId", 0)}"
-                )
+                all.put(userHash, state)
+                RootGateways.writeFile(dbStateFile.absolutePath, all.toString())
+                results.add("${userHash}: rowId=${state.optLong("lastMessageRowId", 0)}")
             }
+
+            // 5. Sort and save records
             val sorted = (0 until rebuiltRecords.length())
                 .map { rebuiltRecords.getJSONObject(it) }
                 .sortedBy { it.optLong("time", 0L) }
             val outArr = JSONArray()
             for (rec in sorted) outArr.put(rec)
             RootGateways.writeFile(File(BackupEnv.backupDataDir, WxHookPaths.RECORDS_FILE).absolutePath, outArr.toString())
-            results.joinToString("\n") + "\nrecords=" + sorted.size
+            results.joinToString("\n") +
+                "\nrecords=" + sorted.size +
+                "\n（rowid 来自微信实时数据库，fileCount 来自实时扫描）"
         } catch (e: Exception) {
             "重建失败: ${e.message}"
         }
