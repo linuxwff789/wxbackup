@@ -245,12 +245,10 @@ object BackupOrchestrator {
                 }
             }
 
-            // 2. Attachments incremental via manifest diff (not find -newermt)
+            // 2. Attachments incremental via manifest diff
             val oldManifest = FileManifest.load(dir)
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                val userDir = File(dir, userHash)
-                userDir.mkdirs()
 
                 for (attDir in ATT_DIRS) {
                     val src = "$wxBasePath/$attDir"
@@ -271,11 +269,9 @@ object BackupOrchestrator {
                             totalFiles, totalSize
                         )
                         for (entry in toCopy) {
-                            // entry.path is "<hash>/image2/..." relative to wxBasePath root
-                            // Source absolute: wxBasePath + "/" + entry.path (without hash prefix)
                             val rel = entry.path.removePrefix("$userHash/")
                             val srcFile = "$wxBasePath/$rel"
-                            val dstFile = File(userDir.absolutePath, rel)
+                            val dstFile = File(BackupEnv.backupDataDir, "${userHash}_$rel")
                             dstFile.parentFile?.mkdirs()
                             val cpResult = BackupEnv.su(
                                 "cp \"$srcFile\" \"${dstFile.absolutePath}\" && chmod 644 \"${dstFile.absolutePath}\""
