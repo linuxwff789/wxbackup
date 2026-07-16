@@ -518,6 +518,16 @@ object BackupOrchestrator {
                 liveStates[userHash] = live
             }
 
+            // Save current manifest from live scan (for incremental diff to work)
+            val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val allFiles = wxPaths.flatMap { wxBasePath ->
+                FileManifest.scanWeChatAttachments(wxBasePath,
+                    WeChatSourceResolver.extractUserHash(wxBasePath),
+                    listOf("image2", "voice2", "video", "emoji", "avatar", "cdn", "record", "favorite"))
+            }
+            FileManifest.save(File(BackupEnv.backupDataDir),
+                FileManifest.toManifest(allFiles, "rebuild_$tag"))
+
             // 3. Scan archives and generate records
             val fullArchives = RootGateways.runQuiet(
                 "ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null"
