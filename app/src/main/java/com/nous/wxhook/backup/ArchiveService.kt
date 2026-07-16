@@ -187,6 +187,7 @@ object ArchiveService {
             }
 
             // Compress the SQL dump
+            RootGateways.run("mkdir -p $finalDir", 5_000)
             val compressor = if (BackupEnv.useZstd()) "${BackupEnv.binDir}/zstd -c -3" else "gzip -c"
             val gzipResult = RootGateways.run(
                 "$compressor \"$workSql\" > \"$workOut\"", 120_000
