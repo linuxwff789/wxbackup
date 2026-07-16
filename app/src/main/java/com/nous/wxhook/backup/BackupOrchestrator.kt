@@ -478,22 +478,25 @@ object BackupOrchestrator {
 
     // ── Rebuild DB State ──
 
-    fun rebuildDbState(): String {
+    fun rebuildDbState(callback: BackupHookLocal.ProgressCallback? = null): String {
         val results = mutableListOf<String>()
         val rebuiltRecords = JSONArray()
         return try {
+            callback?.onProgress("检查微信登录状态...", 0, 0)
             // 1. Check WeChat is running (needed for manifest scan)
             val wxPaths = WeChatSourceResolver.findWxPaths()
             if (wxPaths.isEmpty())
                 return "微信未运行，请先打开微信再重建"
 
             // 2. Scan archives (shared across users)
+            callback?.onProgress("扫描备份文件...", 0, 0)
             val fullArchives = RootGateways.runQuiet(
                 "ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null"
             ).lines().filter { it.isNotBlank() }.sorted()
             val incrArchives = RootGateways.runQuiet(
                 "ls ${BackupEnv.backupDataDir}/incr_attachments_*.tar.zst 2>/dev/null"
             ).lines().filter { it.isNotBlank() }.sorted()
+            callback?.onProgress("全量: ${fullArchives.size}个, 增量: ${incrArchives.size}个", 0, 0)
 
             data class ChainPoint(
                 val from: Long, val to: Long, val time: Long,
@@ -502,19 +505,19 @@ object BackupOrchestrator {
             // 3. For each user, build chain from archives
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
 
                 // Full archives: extract SQL or db_state.json for max rowid
+                callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    // Try per-user db_state.json first (new format)
                     val dbJson = RootGateways.readFileFromTar(arc, "$hash/db_state.json")
                     val fromDb = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
                     val toDb = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
                     if (toDb > 0) {
                         points += ChainPoint(fromDb, toDb, f.lastModified(), f.name, true, hash)
                     } else {
-                        // Old format: parse SQL directly
                         val sql = RootGateways.readFileFromTar(arc, "$hash/EnMicroMsg_baseline.sql")
                         val maxRowId = sql.lineSequence().lastOrNull { it.startsWith("INSERT") }
                             ?.let { line -> "\\d+".toRegex().find(line.substringAfter("VALUES("))?.value?.toLongOrNull() }
@@ -525,25 +528,24 @@ object BackupOrchestrator {
                 }
 
                 // Incremental archives: extract db_state.json for from/to
+                callback?.onProgress("[$hash] 分析增量包...", 0, 0)
                 for (arc in incrArchives) {
                     val f = File(arc)
                     val dbJson = RootGateways.readFileFromTar(arc, "$hash/db_state.json")
                     val fromDb = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
                     val toDb = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
                     if (fromDb > 0 && toDb > 0) {
-                        // New format: has from/to directly
                         points += ChainPoint(fromDb, toDb, f.lastModified(), f.name, false, hash)
                     } else if (toDb > 0) {
-                        // Partial: has to but no from → try listTar for incr filename
                         val listing = RootGateways.listTar(arc)
                         val m = Regex("incr_(\\d+)_to_(\\d+)\\.sql").find(listing)
                         val from = m?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
                         points += ChainPoint(from, toDb, f.lastModified(), f.name, false, hash)
                     }
-                    // else: no db_state.json in archive at all → skip this archive
                 }
 
                 // Longest continuous chain
+                callback?.onProgress("[$hash] 计算最长链...", 0, 0)
                 points.sortBy { it.time }
                 var chainEnd = 0L; var chainPoints = mutableListOf<ChainPoint>()
                 var bestChain = mutableListOf<ChainPoint>()
@@ -561,10 +563,12 @@ object BackupOrchestrator {
                 val safeFrom = if (bestChain.isNotEmpty()) bestChain.minOf { it.from } else 0L
                 val safeRowId = if (bestChain.isNotEmpty()) bestChain.maxOf { it.to } else 0L
 
-                // Per-user db_state (centralized + <hash>/db_state.json)
+                // Per-user db_state
+                callback?.onProgress("[$hash] 保存状态: $safeFrom→$safeRowId (链=${bestChain.size})", 0, 0)
                 BackupManifest.saveDbState(hash, "rebuild", safeFrom, safeRowId)
 
-                // Per-user manifest (live scan, only if WeChat is running)
+                // Per-user manifest (live scan)
+                callback?.onProgress("[$hash] 扫描附件清单...", 0, 0)
                 val userDir = File(BackupEnv.backupDataDir, hash)
                 userDir.mkdirs()
                 val userFiles = wxPaths.filter { WeChatSourceResolver.extractUserHash(it) == hash }
@@ -589,7 +593,8 @@ object BackupOrchestrator {
                 results.add("$hash: rowId=$safeRowId (chain=${bestChain.size})")
             }
 
-            // 4. Save backup records (sorted, all users combined)
+            // 4. Save backup records
+            callback?.onProgress("保存备份记录...", 0, 0)
             val sorted = (0 until rebuiltRecords.length())
                 .map { rebuiltRecords.getJSONObject(it) }
                 .sortedBy { it.optLong("time", 0L) }
@@ -597,6 +602,7 @@ object BackupOrchestrator {
             for (rec in sorted) outArr.put(rec)
             RootGateways.writeFile(File(BackupEnv.backupDataDir, WxHookPaths.RECORDS_FILE).absolutePath, outArr.toString())
 
+            callback?.onProgress("✅ 重建完成: ${sorted.size}条记录", 0, 0)
             results.joinToString("\n") + "\nrecords=" + sorted.size
         } catch (e: Exception) {
             "重建失败: ${e.message}"

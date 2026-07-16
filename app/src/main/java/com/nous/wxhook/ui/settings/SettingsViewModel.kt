@@ -3,6 +3,7 @@ package com.nous.wxhook.ui.settings
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.nous.wxhook.backup.BackupOrchestrator
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -109,8 +110,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun rebuildState() {
         viewModelScope.launch(Dispatchers.IO) {
-            val result = runCatching { BackupHookLocal.rebuildDbState() }
-                .getOrElse { "重建失败: ${it.message}" }
+            val result = runCatching {
+                BackupOrchestrator.rebuildDbState { msg, _, _ ->
+                    withContext(Dispatchers.Main) {
+                        _uiState.value = _uiState.value.copy(actionTitle = "重建: $msg")
+                    }
+                }
+            }.getOrElse { "重建失败: ${it.message}" }
             withContext(Dispatchers.Main) {
                 _uiState.value = _uiState.value.copy(actionTitle = "设置 ✅ 重建完成")
             }
