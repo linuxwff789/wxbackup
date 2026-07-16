@@ -106,12 +106,9 @@ object BackupOrchestrator {
             sources += NativeArchivePlan.Source(File(dir, "file_manifest.json").absolutePath, "file_manifest.json")
             sources += NativeArchivePlan.Source(File(dir, "db_config.json").absolutePath, "db_config.json")
 
-            // Add files from manifest only (not whole directory trees)
-            val manifestObj = FileManifest.load(dir)
-            val filesArr = manifestObj.optJSONArray("files") ?: org.json.JSONArray()
-            for (i in 0 until filesArr.length()) {
-                val entry = filesArr.getJSONObject(i)
-                val arcPath = entry.getString("path")
+            // Add files from scan results directly (avoid Binder limit on loading manifest)
+            for (entry in sourceFiles) {
+                val arcPath = entry.path
                 val slashIdx = arcPath.indexOf('/')
                 if (slashIdx < 0) continue
                 val fileHash = arcPath.substring(0, slashIdx)
