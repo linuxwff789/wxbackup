@@ -296,6 +296,7 @@ Java_com_nous_wxhook_backup_NativeArchive_writeTar(
 }
 
 // ── read one file from tar.zst ──
+static int detect_compression(const char* path); // forward
 static std::string read_file_from_tar(const char* input, int comp, const char* target) {
     FILE* f = fopen(input, "rb");
     if (!f) return "";
