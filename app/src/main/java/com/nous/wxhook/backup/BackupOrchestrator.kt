@@ -521,8 +521,7 @@ object BackupOrchestrator {
                             val out = RootGateways.runQuiet(cmd, 30_000).trim()
                             JSONObject(out).optLong("lastMessageRowId", 0)
                         }.getOrDefault(0L)
-                        val currentRowId = state.optLong("lastMessageRowId", 0)
-                        if (rowId > currentRowId) state.put("lastMessageRowId", rowId)
+                        if (rowId > 0) state.put("lastMessageRowId", rowId)
 
                         // Extract file_manifest.json from tar for file list
                         val fileCount = runCatching {
