@@ -179,6 +179,9 @@ object BackupOrchestrator {
             var incrFrom = 0L
             var incrTo = 0L
 
+            // Collect all incr sources (SQL, config, attachments)
+            val incrSources = mutableListOf<NativeArchivePlan.Source>()
+
             // 1. DB incremental
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
@@ -317,7 +320,6 @@ object BackupOrchestrator {
             }
 
             // 3b. Package incremental changes into tar.zst via JNI
-            val incrSources = mutableListOf<NativeArchivePlan.Source>()
 
             // Add db_state.json, db_config.json, file_manifest.json per user
             for (wxBasePath in wxPaths) {
