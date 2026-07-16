@@ -74,7 +74,7 @@ object BackupOrchestrator {
                     RootGateways.run("rm -f $sqlScript", 5_000)
                     result.stdout.lines().lastOrNull { it.all { c -> c.isDigit() } }?.toLong() ?: 0L
                 }.getOrDefault(0L)
-                BackupManifest.saveDbState(userHash, tag, maxRowId)
+                BackupManifest.saveDbState(userHash, tag, 0L, maxRowId)
             }
 
             // 3. Scan source files for manifest
@@ -229,7 +229,7 @@ object BackupOrchestrator {
                             )
                         }
                         // Always update db_state during incr (tag/time even if rowid unchanged)
-                        BackupManifest.updateDbState(userHash, tag, incrTo.toString())
+                        BackupManifest.updateDbState(userHash, tag, incrFrom, incrTo)
                     } else {
                         callback?.onProgress("[$userHash] DB增量输出为空", totalFiles, totalSize)
                     }

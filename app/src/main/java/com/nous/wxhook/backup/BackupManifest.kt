@@ -16,19 +16,26 @@ object BackupManifest {
     private const val DB_STATE_FILE = WxHookPaths.DB_STATE_FILE
     private const val DB_CONFIG_FILE = WxHookPaths.DB_CONFIG_FILE
 
-    // ── DB State (single file at backup root) ──
+    // ── DB State (single file at backup root plus per-user copies) ──
 
     private fun dbStateFile(): File = File(BackupEnv.backupDataDir, "db_state.json")
+    private fun userDbStateDir(hash: String): File = File(BackupEnv.backupDataDir, hash)
 
-    fun saveDbState(userHash: String, tag: String, maxRowId: Long = 0) {
+    /** Write db_state for a user: centralized + per-user copy. */
+    fun saveDbState(userHash: String, tag: String, fromRowId: Long = 0, maxRowId: Long = 0) {
         val f = dbStateFile()
         val all = runCatching { JSONObject(BackupEnv.backupRead(f.absolutePath)) }.getOrDefault(JSONObject())
         val u = all.optJSONObject(userHash) ?: JSONObject()
         u.put("lastBackupTag", tag)
         u.put("lastBackupTime", System.currentTimeMillis())
+        u.put("lastMessageRowIdFrom", fromRowId)
         if (maxRowId > 0) u.put("lastMessageRowId", maxRowId)
         all.put(userHash, u)
         RootGateways.writeFile(f.absolutePath, all.toString())
+        // Per-user copy
+        val uf = userDbStateDir(userHash)
+        uf.mkdirs()
+        RootGateways.writeFile(File(uf, "db_state.json").absolutePath, u.toString())
     }
 
     fun loadDbState(userHash: String): JSONObject {
@@ -38,17 +45,22 @@ object BackupManifest {
         return all.optJSONObject(userHash) ?: JSONObject()
     }
 
-    fun updateDbState(userHash: String, tag: String, newRowId: String) {
+    /** Update db_state during incremental backup. */
+    fun updateDbState(userHash: String, tag: String, fromRowId: Long, toRowId: Long) {
         val f = dbStateFile()
         val all = runCatching { JSONObject(BackupEnv.backupRead(f.absolutePath)) }.getOrDefault(JSONObject())
         val u = all.optJSONObject(userHash) ?: JSONObject()
         u.put("lastBackupTag", tag)
         u.put("lastBackupTime", System.currentTimeMillis())
         u.put("incrCount", u.optInt("incrCount", 0) + 1)
-        val rowId = newRowId.toLongOrNull()
-        if (rowId != null && rowId > 0) u.put("lastMessageRowId", rowId)
+        u.put("lastMessageRowIdFrom", fromRowId)
+        if (toRowId > 0) u.put("lastMessageRowId", toRowId)
         all.put(userHash, u)
         RootGateways.writeFile(f.absolutePath, all.toString())
+        // Per-user copy
+        val uf = userDbStateDir(userHash)
+        uf.mkdirs()
+        RootGateways.writeFile(File(uf, "db_state.json").absolutePath, u.toString())
     }
 
     // ── Backup State ──
