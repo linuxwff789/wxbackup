@@ -25,7 +25,7 @@ object FileManifest {
     fun load(backupDir: File): JSONObject {
         val f = File(backupDir, MANIFEST_FILE)
         return try {
-            val txt = RootGateways.runQuiet("cat \"${f.absolutePath}\" 2>/dev/null").trim()
+            val txt = RootGateways.readFile(f.absolutePath)
             if (txt.isNotEmpty()) JSONObject(txt) else JSONObject()
         } catch (_: Exception) { JSONObject() }
     }
