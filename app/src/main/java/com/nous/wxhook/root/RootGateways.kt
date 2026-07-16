@@ -1,9 +1,10 @@
 package com.nous.wxhook.root
 
+import com.nous.wxhook.core.command.CommandResult
 import kotlinx.coroutines.runBlocking
 
 object RootGateways {
-    private var gateway: RootGateway = RootGatewayStub()
+    var gateway: RootGateway = RootGatewayImpl()
 
     fun set(g: RootGateway) { gateway = g }
 
