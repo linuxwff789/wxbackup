@@ -102,7 +102,7 @@ object BackupOrchestrator {
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 sources += NativeArchivePlan.Source(
-                    File(BackupEnv.backupDataDir, "$hash/db_state.json").absolutePath, "$hash/db_state.json")
+                    File(BackupEnv.backupDataDir, "db_state.json").absolutePath, "$hash/db_state.json")
                 sources += NativeArchivePlan.Source(
                     File(dir, "file_manifest.json").absolutePath, "$hash/file_manifest.json")
                 sources += NativeArchivePlan.Source(
