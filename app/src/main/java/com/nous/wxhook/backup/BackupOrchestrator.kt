@@ -312,10 +312,26 @@ object BackupOrchestrator {
             if (incrTarFiles.isNotEmpty()) {
                 val incrArchive = File(dir, "incr_attachments_$tag.tar.zst")
                 val tmpPkg = incrArchive.absolutePath
-                val incrSources = incrTarFiles.map { fullPath ->
-                    val rel = fullPath.removePrefix("${BackupEnv.backupDir}/")
-                    NativeArchivePlan.Source(fullPath, rel)
+                val incrSources = mutableListOf<NativeArchivePlan.Source>()
+
+                // Add incr SQL dump for each user
+                for (wxBasePath in wxPaths) {
+                    val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                    val sqlResult = RootGateways.runQuiet(
+                        "ls ${BackupEnv.backupDataDir}/incr_${userHash}_*.sql.zst 2>/dev/null | tail -1"
+                    ).trim()
+                    if (sqlResult.isNotEmpty()) {
+                        incrSources += NativeArchivePlan.Source(sqlResult, File(sqlResult).name)
+                    }
                 }
+                // Add db_state.json (always included in incr)
+                incrSources += NativeArchivePlan.Source(
+                    File(BackupEnv.backupDataDir, "db_state.json").absolutePath, "db_state.json")
+                // Add attachment directories
+                incrSources += incrTarFiles.map { fullPath ->
+                    NativeArchivePlan.Source(fullPath, File(fullPath).name)
+                }
+
                 val plan = NativeArchivePlan(tmpPkg, incrSources)
                 val pairsFile = File(dir, "incr_pairs.txt").absolutePath
                 val localPairs = File(BackupEnv.filesDirPath, "incr_pairs.txt")
