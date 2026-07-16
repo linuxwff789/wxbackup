@@ -99,7 +99,11 @@ object BackupOrchestrator {
             val tmpPkg = pkgFile.absolutePath
             val sources = mutableListOf<NativeArchivePlan.Source>()
             sources += databaseSources
-            sources += NativeArchivePlan.Source(File(BackupEnv.backupDataDir, "db_state.json").absolutePath, "db_state.json")
+            for (wxBasePath in wxPaths) {
+                val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                sources += NativeArchivePlan.Source(
+                    File(BackupEnv.backupDataDir, "$hash/db_state.json").absolutePath, "$hash/db_state.json")
+            }
             sources += NativeArchivePlan.Source(File(dir, "file_manifest.json").absolutePath, "file_manifest.json")
             sources += NativeArchivePlan.Source(File(BackupEnv.backupDir, "db_config.json").absolutePath, "db_config.json")
 
@@ -271,7 +275,7 @@ object BackupOrchestrator {
                         for (entry in toCopy) {
                             val rel = entry.path.removePrefix("$userHash/")
                             val srcFile = "$wxBasePath/$rel"
-                            val dstFile = File(BackupEnv.backupDataDir, "${userHash}_$rel")
+                            val dstFile = File(BackupEnv.backupDataDir, "${userHash}/$rel")
                             dstFile.parentFile?.mkdirs()
                             val cpResult = BackupEnv.su(
                                 "cp \"$srcFile\" \"${dstFile.absolutePath}\" && chmod 644 \"${dstFile.absolutePath}\""
@@ -303,7 +307,7 @@ object BackupOrchestrator {
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 for (attDir in ATT_DIRS) {
-                    val attPath = "${BackupEnv.backupDataDir}/${userHash}_$attDir"
+                    val attPath = "${BackupEnv.backupDataDir}/${userHash}/$attDir"
                     if (RootGateways.runQuiet("test -d \"$attPath\" && echo 1").trim() == "1") {
                         incrTarFiles.add(attPath)
                     }
