@@ -103,9 +103,11 @@ object BackupOrchestrator {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 sources += NativeArchivePlan.Source(
                     File(BackupEnv.backupDataDir, "$hash/db_state.json").absolutePath, "$hash/db_state.json")
+                sources += NativeArchivePlan.Source(
+                    File(dir, "file_manifest.json").absolutePath, "$hash/file_manifest.json")
+                sources += NativeArchivePlan.Source(
+                    File(BackupEnv.backupDir, "db_config.json").absolutePath, "$hash/db_config.json")
             }
-            sources += NativeArchivePlan.Source(File(dir, "file_manifest.json").absolutePath, "file_manifest.json")
-            sources += NativeArchivePlan.Source(File(BackupEnv.backupDir, "db_config.json").absolutePath, "db_config.json")
 
             // Add files from scan results directly (avoid Binder limit on loading manifest)
             for (entry in sourceFiles) {
@@ -302,40 +304,44 @@ object BackupOrchestrator {
                 result.lineSequence().filter { it.isNotBlank() }.forEach { incrFiles.add(File(it).name) }
             }
 
-            // 3b. Package incremental attachments into tar.zst via JNI (same as full backup)
-            val incrTarFiles = mutableListOf<String>()
+            // 3b. Package incremental attachments into tar.zst via JNI (same structure as full backup)
+            val incrSources = mutableListOf<NativeArchivePlan.Source>()
+
+            // Add incr SQL dump for each user (under hash/)
+            for (wxBasePath in wxPaths) {
+                val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                val sqlResult = RootGateways.runQuiet(
+                    "ls ${BackupEnv.backupDataDir}/incr_${userHash}_*.sql.zst 2>/dev/null | tail -1"
+                ).trim()
+                if (sqlResult.isNotEmpty()) {
+                    incrSources += NativeArchivePlan.Source(sqlResult, "$userHash/${File(sqlResult).name}")
+                }
+            }
+            // Add db_state.json and db_config.json per user
+            for (wxBasePath in wxPaths) {
+                val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                incrSources += NativeArchivePlan.Source(
+                    File(BackupEnv.backupDataDir, "$userHash/db_state.json").absolutePath, "$userHash/db_state.json")
+                incrSources += NativeArchivePlan.Source(
+                    File(BackupEnv.backupDir, "db_config.json").absolutePath, "$userHash/db_config.json")
+            }
+            // Add individual changed attachment files (not directory trees)
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 for (attDir in ATT_DIRS) {
                     val attPath = "${BackupEnv.backupDataDir}/${userHash}/$attDir"
-                    if (RootGateways.runQuiet("test -d \"$attPath\" && echo 1").trim() == "1") {
-                        incrTarFiles.add(attPath)
+                    val files = RootGateways.runQuiet(
+                        "find \"$attPath\" -type f 2>/dev/null"
+                    ).lines().filter { it.isNotBlank() }
+                    for (f in files) {
+                        val arcPath = f.removePrefix("${BackupEnv.backupDataDir}/")
+                        incrSources += NativeArchivePlan.Source(f, arcPath)
                     }
                 }
             }
-            if (incrTarFiles.isNotEmpty()) {
+            if (incrSources.isNotEmpty()) {
                 val incrArchive = File(dir, "incr_attachments_$tag.tar.zst")
                 val tmpPkg = incrArchive.absolutePath
-                val incrSources = mutableListOf<NativeArchivePlan.Source>()
-
-                // Add incr SQL dump for each user
-                for (wxBasePath in wxPaths) {
-                    val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                    val sqlResult = RootGateways.runQuiet(
-                        "ls ${BackupEnv.backupDataDir}/incr_${userHash}_*.sql.zst 2>/dev/null | tail -1"
-                    ).trim()
-                    if (sqlResult.isNotEmpty()) {
-                        incrSources += NativeArchivePlan.Source(sqlResult, File(sqlResult).name)
-                    }
-                }
-                // Add db_state.json (always included in incr)
-                incrSources += NativeArchivePlan.Source(
-                    File(BackupEnv.backupDataDir, "db_state.json").absolutePath, "db_state.json")
-                // Add attachment directories
-                incrSources += incrTarFiles.map { fullPath ->
-                    NativeArchivePlan.Source(fullPath, File(fullPath).name)
-                }
-
                 val plan = NativeArchivePlan(tmpPkg, incrSources)
                 val pairsFile = File(dir, "incr_pairs.txt").absolutePath
                 val localPairs = File(BackupEnv.filesDirPath, "incr_pairs.txt")
