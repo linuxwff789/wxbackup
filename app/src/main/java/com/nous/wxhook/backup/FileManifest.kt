@@ -24,9 +24,10 @@ object FileManifest {
 
     fun load(backupDir: File): JSONObject {
         val f = File(backupDir, MANIFEST_FILE)
-        return if (f.exists()) {
-            try { JSONObject(f.readText()) } catch (_: Exception) { JSONObject() }
-        } else JSONObject()
+        return try {
+            val txt = BackupEnv.backupRead(f.absolutePath)
+            if (txt.isNotEmpty()) JSONObject(txt) else JSONObject()
+        } catch (_: Exception) { JSONObject() }
     }
 
     fun save(backupDir: File, manifest: JSONObject) {

@@ -123,6 +123,7 @@ object BackupOrchestrator {
             }
 
             val plan = NativeArchivePlan(tmpPkg, sources)
+            android.util.Log.i("wxhook:PKG", "plan sources: ${sources.size}")
             // Write pairs file locally, then root-copy (Binder content too large for direct writeFile)
             val pairsFile = File(dir, "archive_pairs.txt").absolutePath
             val localPairs = File(BackupEnv.filesDirPath, "archive_pairs.txt")

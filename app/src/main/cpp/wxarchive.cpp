@@ -252,6 +252,7 @@ static int do_write_tar(const char* output, const char* pairs_path, int mode) {
         pairs.emplace_back(std::move(src), std::move(arc));
     }
     fclose(pf);
+    __android_log_print(ANDROID_LOG_INFO, "wxhook:archive", "pairs loaded: %zu", pairs.size());
     if (pairs.empty()) return -1;
 
     TarWriter tw;
