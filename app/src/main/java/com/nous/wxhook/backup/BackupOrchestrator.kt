@@ -203,39 +203,18 @@ object BackupOrchestrator {
                 if (incResult.startsWith("OK:")) {
                     val gzPath = incResult.substring(3)
                     if (BackupEnv.backupExists(gzPath) && BackupEnv.backupSize(gzPath) > 0) {
-                        // Extract last rowid via explicit query, not from dump
-                        incrTo = runCatching {
-                            val pwd = ArchiveService.getDbPassword()
-                            val workDb = "/data/local/tmp/wxhook_backup/wxhook_inc.db"
-                            RootGateways.run("mkdir -p /data/local/tmp/wxhook_backup", 5_000)
-                            val copiedSize = RootGateways.runQuiet("stat -c %s \"$workDb\" 2>/dev/null").trim().toLongOrNull() ?: 0L
-                            if (copiedSize < 1_000_000L) {
-                                // Still use fallback from compressed dump
-                                val dec = if (BackupEnv.useZstd()) "${BackupEnv.binDir}/zstd -dc" else "gzip -dc"
+                            // Extract last rowid from raw SQL directly (no longer compressed)
+                            incrTo = runCatching {
                                 BackupEnv.suOut(
-                                    "$dec \"$gzPath\" 2>/dev/null | tail -1 | cut -d'(' -f2 | cut -d',' -f1"
+                                    "tail -1 \"$gzPath\" 2>/dev/null | cut -d'(' -f2 | cut -d',' -f1"
                                 ).trim().toLong()
-                            } else {
-                                val sqlScript = "/data/local/tmp/wxhook_backup/incr_max_rowid.sql"
-                                val scriptContent = ".output /dev/null\n" +
-                                    "PRAGMA key = '$pwd';\n" +
-                                    "PRAGMA cipher_compatibility = 3;\n" +
-                                    "PRAGMA cipher_page_size = 1024;\n" +
-                                    "PRAGMA kdf_iter = 4000;\n" +
-                                    "PRAGMA cipher_use_hmac = OFF;\n" +
-                                    ".output stdout\n" +
-                                    "SELECT coalesce(max(rowid), $lastRowId) FROM message WHERE rowid > $lastRowId;\n"
-                                RootGateways.runQuiet("printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript")
-                                val ld = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
-                                val r = RootGateways.run("$ld ${BackupEnv.binDir}/sqlcipher \"$workDb\" < $sqlScript 2>/dev/null", 30_000)
-                                RootGateways.run("rm -f $workDb $workDb-shm $workDb-wal $sqlScript", 10_000)
-                                r.stdout.lines().lastOrNull { it.all { c -> c.isDigit() } }?.toLong() ?: lastRowId
-                            }
-                        }.getOrDefault(lastRowId)
+                            }.getOrDefault(lastRowId)
 
                         val incrSqlName = "incr_${incrFrom}_to_${incrTo}.sql"
-                        val tmpSql = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/$incrSqlName"
+                        val tmpDir = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}"
+                        val tmpSql = "$tmpDir/$incrSqlName"
                         // Raw SQL from decryptIncremental, copy directly into tar
+                        RootGateways.run("mkdir -p \"$tmpDir\"", 5_000)
                         val ok = RootGateways.run("cp \"$gzPath\" \"$tmpSql\" 2>/dev/null", 10_000).isSuccess
                         if (ok && BackupEnv.backupExists(tmpSql) && BackupEnv.backupSize(tmpSql) > 0) {
                             totalFiles++; newFiles++
