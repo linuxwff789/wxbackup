@@ -332,9 +332,8 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun loadRemoteConfig() {
         try {
-            val cfg = JSONObject(
-                File("/sdcard/Download/wxhook_backup/remote_config.json").readText()
-            )
+            val txt = RootGateways.runQuiet("cat /sdcard/Download/wxhook_backup/remote_config.json 2>/dev/null").trim()
+            val cfg = JSONObject(if (txt.isNotEmpty()) txt else "{}")
             _uiState.value = _uiState.value.copy(
                 remoteEnabled = cfg.optBoolean("enabled", false),
                 remotePath = cfg.optString("remote", "wxhook-backup")
