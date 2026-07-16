@@ -24,9 +24,13 @@ object FileManifest {
 
     fun load(backupDir: File): JSONObject {
         val f = File(backupDir, MANIFEST_FILE)
+        val local = File(BackupEnv.filesDirForWrite(), MANIFEST_FILE)
         return try {
-            val txt = RootGateways.readFile(f.absolutePath)
-            if (txt.isNotEmpty()) JSONObject(txt) else JSONObject()
+            if (RootGateways.copy(f.absolutePath, local.absolutePath)) {
+                val txt = if (local.exists()) local.readText() else ""
+                local.delete()
+                if (txt.isNotEmpty()) JSONObject(txt) else JSONObject()
+            } else JSONObject()
         } catch (_: Exception) { JSONObject() }
     }
 
