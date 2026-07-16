@@ -16,10 +16,9 @@ object BackupManifest {
     private const val DB_STATE_FILE = WxHookPaths.DB_STATE_FILE
     private const val DB_CONFIG_FILE = WxHookPaths.DB_CONFIG_FILE
 
-    // ── DB State (single file at backup root, plus per-user copies) ──
+    // ── DB State (single file at backup root) ──
 
     private fun dbStateFile(): File = File(BackupEnv.backupDataDir, "db_state.json")
-    private fun userDbStateFile(hash: String): File = File(File(BackupEnv.backupDataDir, hash), "db_state.json")
 
     fun saveDbState(userHash: String, tag: String, maxRowId: Long = 0) {
         val f = dbStateFile()
@@ -30,8 +29,6 @@ object BackupManifest {
         if (maxRowId > 0) u.put("lastMessageRowId", maxRowId)
         all.put(userHash, u)
         RootGateways.writeFile(f.absolutePath, all.toString())
-        // Also write per-user copy
-        RootGateways.writeFile(userDbStateFile(userHash).absolutePath, u.toString())
     }
 
     fun loadDbState(userHash: String): JSONObject {
@@ -52,8 +49,6 @@ object BackupManifest {
         if (rowId != null && rowId > 0) u.put("lastMessageRowId", rowId)
         all.put(userHash, u)
         RootGateways.writeFile(f.absolutePath, all.toString())
-        // Also update per-user copy
-        RootGateways.writeFile(userDbStateFile(userHash).absolutePath, u.toString())
     }
 
     // ── Backup State ──

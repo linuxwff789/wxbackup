@@ -230,18 +230,20 @@ object BackupOrchestrator {
                             }
                         }.getOrDefault(lastRowId)
 
-                        val incrName = "incr_${userHash}_${incrFrom}_to_${incrTo}.sql.zst"
-                        val incrPath = "${BackupEnv.backupDataDir}/$incrName"
-                        val ok = BackupEnv.suCopyResult(gzPath, incrPath)
-                        if (ok && BackupEnv.backupExists(incrPath) && BackupEnv.backupSize(incrPath) > 0) {
-                            totalFiles++; totalSize += BackupEnv.backupSize(incrPath); newFiles++
+                        val incrSqlName = "incr_${incrFrom}_to_${incrTo}.sql"
+                        val ok = BackupEnv.suCopyResult(gzPath, "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/$incrSqlName")
+                        if (ok) {
+                            totalFiles++; newFiles++
+                            incrSources += NativeArchivePlan.Source(
+                                "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/$incrSqlName",
+                                "$userHash/$incrSqlName")
                             callback?.onProgress(
                                 "[$userHash] DB增量: ${incrTo - incrFrom}条新消息",
                                 totalFiles, totalSize
                             )
                         } else {
                             callback?.onProgress(
-                                "[$userHash] DB增量文件无效/重命名失败", totalFiles, totalSize
+                                "[$userHash] DB增量文件无效", totalFiles, totalSize
                             )
                         }
                         // Always update db_state during incr (tag/time even if rowid unchanged)
@@ -278,7 +280,7 @@ object BackupOrchestrator {
                         for (entry in toCopy) {
                             val rel = entry.path.removePrefix("$userHash/")
                             val srcFile = "$wxBasePath/$rel"
-                            val dstFile = File(BackupEnv.backupDataDir, "${userHash}/$rel")
+                            val dstFile = File(BackupEnv.backupDataDir, "tmp/${tag}_${userHash}/$rel")
                             dstFile.parentFile?.mkdirs()
                             val cpResult = BackupEnv.su(
                                 "cp \"$srcFile\" \"${dstFile.absolutePath}\" && chmod 644 \"${dstFile.absolutePath}\""
@@ -295,51 +297,51 @@ object BackupOrchestrator {
                 }
             }
 
-            // 3. Collect incremental DB files per user (flat in backupdata)
-            val incrFiles = mutableListOf<String>()
-            for (wxBasePath in wxPaths) {
-                val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                val result = RootGateways.runQuiet(
-                    "ls ${BackupEnv.backupDataDir}/incr_${userHash}_*.sql.zst 2>/dev/null"
+            // 3. Update manifest with current state, then package
+            val currentSourceFiles = wxPaths.flatMap { wxBasePath ->
+                FileManifest.scanWeChatAttachments(
+                    wxBasePath,
+                    WeChatSourceResolver.extractUserHash(wxBasePath),
+                    ATT_DIRS,
                 )
-                result.lineSequence().filter { it.isNotBlank() }.forEach { incrFiles.add(File(it).name) }
+            }
+            val diff = FileManifest.diff(oldManifest, currentSourceFiles)
+            if (diff.added.isNotEmpty() || diff.modified.isNotEmpty() || diff.deleted.isNotEmpty()) {
+                val updatedManifest = FileManifest.toManifest(currentSourceFiles, tag)
+                FileManifest.save(dir, updatedManifest)
+                callback?.onProgress(
+                    "清单已更新: +${diff.added.size} ~${diff.modified.size} -${diff.deleted.size}",
+                    totalFiles,
+                    totalSize,
+                )
             }
 
-            // 3b. Package incremental attachments into tar.zst via JNI (same structure as full backup)
+            // 3b. Package incremental changes into tar.zst via JNI
             val incrSources = mutableListOf<NativeArchivePlan.Source>()
 
-            // Add incr SQL dump for each user (under hash/)
-            for (wxBasePath in wxPaths) {
-                val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                val sqlResult = RootGateways.runQuiet(
-                    "ls ${BackupEnv.backupDataDir}/incr_${userHash}_*.sql.zst 2>/dev/null | tail -1"
-                ).trim()
-                if (sqlResult.isNotEmpty()) {
-                    incrSources += NativeArchivePlan.Source(sqlResult, "$userHash/${File(sqlResult).name}")
-                }
-            }
-            // Add db_state.json and db_config.json per user
+            // Add db_state.json, db_config.json, file_manifest.json per user
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 incrSources += NativeArchivePlan.Source(
-                    File(BackupEnv.backupDataDir, "$userHash/db_state.json").absolutePath, "$userHash/db_state.json")
+                    File(BackupEnv.backupDataDir, "db_state.json").absolutePath, "$userHash/db_state.json")
                 incrSources += NativeArchivePlan.Source(
                     File(BackupEnv.backupDir, "db_config.json").absolutePath, "$userHash/db_config.json")
+                incrSources += NativeArchivePlan.Source(
+                    File(dir, "file_manifest.json").absolutePath, "$userHash/file_manifest.json")
             }
-            // Add individual changed attachment files (not directory trees)
+            // Add changed attachments from tmp/ (find individual files, not directory trees)
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                for (attDir in ATT_DIRS) {
-                    val attPath = "${BackupEnv.backupDataDir}/${userHash}/$attDir"
-                    val files = RootGateways.runQuiet(
-                        "find \"$attPath\" -type f 2>/dev/null"
-                    ).lines().filter { it.isNotBlank() }
-                    for (f in files) {
-                        val arcPath = f.removePrefix("${BackupEnv.backupDataDir}/")
-                        incrSources += NativeArchivePlan.Source(f, arcPath)
-                    }
+                val tmpDir = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}"
+                val files = RootGateways.runQuiet(
+                    "find \"$tmpDir\" -type f 2>/dev/null"
+                ).lines().filter { it.isNotBlank() }
+                for (f in files) {
+                    val arcPath = f.removePrefix("${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/")
+                    incrSources += NativeArchivePlan.Source(f, "$userHash/$arcPath")
                 }
             }
+            
             if (incrSources.isNotEmpty()) {
                 val incrArchive = File(dir, "incr_attachments_$tag.tar.zst")
                 val tmpPkg = incrArchive.absolutePath
@@ -364,24 +366,8 @@ object BackupOrchestrator {
                 }
             }
 
-            // 4. Update source manifest with current WeChat attachment state.
-            val currentSourceFiles = wxPaths.flatMap { wxBasePath ->
-                FileManifest.scanWeChatAttachments(
-                    wxBasePath,
-                    WeChatSourceResolver.extractUserHash(wxBasePath),
-                    ATT_DIRS,
-                )
-            }
-            val diff = FileManifest.diff(oldManifest, currentSourceFiles)
-            if (diff.added.isNotEmpty() || diff.modified.isNotEmpty() || diff.deleted.isNotEmpty()) {
-                val updatedManifest = FileManifest.toManifest(currentSourceFiles, tag)
-                FileManifest.save(dir, updatedManifest)
-                callback?.onProgress(
-                    "清单已更新: +${diff.added.size} ~${diff.modified.size} -${diff.deleted.size}",
-                    totalFiles,
-                    totalSize,
-                )
-            }
+            // Clean up tmp dir after packaging
+            RootGateways.runQuiet("rm -rf ${BackupEnv.backupDataDir}/tmp/${tag}_* 2>/dev/null")
 
             // 5. Cloud sync (after all data committed)
             cloudSync(callback)
@@ -394,8 +380,8 @@ object BackupOrchestrator {
                 if (newFiles > 0) "增量: ${newFiles}个文件, ${BackupManifest.formatSize(totalSize)}" else "无新文件",
                 durationMs = System.currentTimeMillis() - startTime
             )
-            if (incrFiles.isNotEmpty()) rec.put("files", JSONArray(incrFiles))
             rec.put("newFiles", newFiles)
+            if (incrSources.isNotEmpty()) rec.put("hasIncrArchive", true)
             BackupManifest.addRecord(rec)
             val msg = if (newFiles > 0) "增量备份: ${newFiles}个文件(${BackupManifest.formatSize(totalSize)}), DB:${incrFrom}→${incrTo}" else "无新文件"
             
@@ -500,29 +486,12 @@ object BackupOrchestrator {
         val results = mutableListOf<String>()
         val rebuiltRecords = JSONArray()
         return try {
-            // Determine user hashes from db_state.json, or derive from existing files
+            // Determine user hashes from centralized db_state.json only
             val dbStateFile = File(BackupEnv.backupDataDir, "db_state.json")
             val allStates = runCatching {
                 JSONObject(BackupEnv.backupRead(dbStateFile.absolutePath))
             }.getOrDefault(JSONObject())
-            var userHashes = allStates.keys().asSequence().toList()
-
-            // If db_state.json is empty, derive hashes from incr files and archives
-            if (userHashes.isEmpty()) {
-                // From incr filenames: incr_<hash>_...
-                val incrFiles = RootGateways.runQuiet(
-                    "ls ${BackupEnv.backupDataDir}/incr_*.sql.zst 2>/dev/null"
-                ).lines().filter { it.isNotBlank() }
-                val fromIncr = incrFiles.mapNotNull {
-                    val m = Regex("incr_([a-f0-9]+)_").find(File(it).name)
-                    m?.groupValues?.getOrNull(1)
-                }
-                // Also scan legacy hash subdirs in backupDir
-                val legacyDirs = RootGateways.runQuiet(
-                    "find ${BackupEnv.backupDir} -mindepth 1 -maxdepth 1 -type d -name '[a-f0-9]*' 2>/dev/null"
-                ).lines().filter { it.isNotBlank() }.map { File(it).name }
-                userHashes = (fromIncr + legacyDirs).distinct().sorted()
-            }
+            val userHashes = allStates.keys().asSequence().toList()
 
             if (userHashes.isEmpty()) return "备份目录为空或无状态记录"
 
@@ -533,12 +502,10 @@ object BackupOrchestrator {
                     state.put("lastMessageRowId", dbState.getLong("lastMessageRowId"))
                 }
 
-                // Full backup archives (new + legacy location)
-                val fullArchives = (RootGateways.runQuiet(
+                // Full backup archives (backupdata/)
+                val fullArchives = RootGateways.runQuiet(
                     "ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null"
-                ).lines() + RootGateways.runQuiet(
-                    "ls ${BackupEnv.backupDir}/wxbackup_full_*.tar.zst 2>/dev/null"
-                ).lines()).filter { it.isNotBlank() && it.endsWith(".tar.zst") }.distinct()
+                ).lines().filter { it.isNotBlank() && it.endsWith(".tar.zst") }.distinct()
                 for (arc in fullArchives) {
                     val f = File(arc)
                     val size = BackupEnv.backupSize(arc)
@@ -555,42 +522,46 @@ object BackupOrchestrator {
                     })
                 }
 
-                // Incremental DB dumps (flat in backupdata, hash-prefixed)
-                val incrFiles = RootGateways.runQuiet(
-                    "ls ${BackupEnv.backupDataDir}/incr_${userHash}_*.sql.zst 2>/dev/null"
+                // Incremental attachment archives
+                val incrArchives = RootGateways.runQuiet(
+                    "ls ${BackupEnv.backupDataDir}/incr_attachments_*.tar.zst 2>/dev/null"
                 ).lines().filter { it.isNotBlank() }.sorted()
 
-                if (incrFiles.isNotEmpty()) {
-                    state.put("incrCount", incrFiles.size)
-                    state.put("incrFiles", JSONArray(incrFiles.map { File(it).name }))
-                    val lastFile = File(incrFiles.last())
-                    try {
-                        val pResult = RootGateways.run(
-                            "${BackupEnv.binDir}/zstd -dc \"${lastFile.absolutePath}\" 2>/dev/null | tail -1 | cut -d'(' -f2 | cut -d',' -f1",
-                            30_000
-                        )
-                        val rowId = pResult.stdout.trim().toLongOrNull()
-                        val prevRowId = state.optLong("lastMessageRowId", 0)
-                        if (rowId != null && rowId > prevRowId) state.put("lastMessageRowId", rowId)
-                        else if (prevRowId > 0) state.put("lastMessageRowId", prevRowId)
-                    } catch (_: Exception) {}
-                    for (f in incrFiles) {
-                        val m = Regex("incr_${userHash}_(\\d+)_to_(\\d+)\\.sql\\.zst").find(File(f).name)
-                        val from = m?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
-                        val to = m?.groupValues?.getOrNull(2)?.toLongOrNull() ?: 0L
+                if (incrArchives.isNotEmpty()) {
+                    state.put("incrCount", incrArchives.size)
+                    for (arc in incrArchives) {
+                        val f = File(arc)
+                        val size = BackupEnv.backupSize(arc)
+                        // Extract db_state.json from tar for rowid
+                        val rowId = runCatching {
+                            val cmd = "${BackupEnv.binDir}/zstd -dc \"${f.absolutePath}\" 2>/dev/null | " +
+                                "${BackupEnv.binDir}/tar -xO \"*/db_state.json\" 2>/dev/null | " +
+                                "head -c 4096"
+                            val out = RootGateways.runQuiet(cmd, 30_000).trim()
+                            JSONObject(out).optLong("lastMessageRowId", 0)
+                        }.getOrDefault(0L)
+                        if (rowId > 0) state.put("lastMessageRowId", rowId)
+
+                        // Extract file_manifest.json from tar for file list
+                        val fileCount = runCatching {
+                            val cmd = "${BackupEnv.binDir}/zstd -dc \"${f.absolutePath}\" 2>/dev/null | " +
+                                "${BackupEnv.binDir}/tar -xO \"*/file_manifest.json\" 2>/dev/null | " +
+                                "head -c 4096"
+                            val out = RootGateways.runQuiet(cmd, 30_000).trim()
+                            JSONObject(out).optInt("fileCount", 1)
+                        }.getOrDefault(1)
+
                         rebuiltRecords.put(JSONObject().apply {
                             put("tag", SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-                                .format(Date(File(f).lastModified())))
+                                .format(Date(f.lastModified())))
                             put("type", "incremental")
-                            put("time", File(f).lastModified())
-                            put("fileCount", 1)
-                            put("totalSize", BackupEnv.backupSize(f))
+                            put("time", f.lastModified())
+                            put("fileCount", fileCount)
+                            put("totalSize", size)
                             put("compression", "zstd")
-                            put("newFiles", 1)
-                            put("incrFrom", from)
-                            put("incrTo", to)
-                            put("message", "增量备份: DB:${from}→${to}")
-                            put("files", JSONArray().put(File(f).name))
+                            put("newFiles", fileCount)
+                            put("message", "增量备份: ${f.name}")
+                            put("files", JSONArray().put(f.name))
                         })
                     }
                 }
