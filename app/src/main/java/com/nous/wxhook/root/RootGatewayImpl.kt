@@ -138,6 +138,7 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
                 RootCommandRunner.runSu(command, timeoutMs)
             }
         }
+    }
 
     override suspend fun runQuiet(command: String, timeoutMs: Long): String =
         withContext(Dispatchers.IO) {
