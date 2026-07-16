@@ -235,7 +235,6 @@ object BackupOrchestrator {
                         val ok = BackupEnv.suCopyResult(gzPath, incrPath)
                         if (ok && BackupEnv.backupExists(incrPath) && BackupEnv.backupSize(incrPath) > 0) {
                             totalFiles++; totalSize += BackupEnv.backupSize(incrPath); newFiles++
-                            BackupManifest.updateDbState(userHash, tag, incrTo.toString())
                             callback?.onProgress(
                                 "[$userHash] DB增量: ${incrTo - incrFrom}条新消息",
                                 totalFiles, totalSize
@@ -245,6 +244,8 @@ object BackupOrchestrator {
                                 "[$userHash] DB增量文件无效/重命名失败", totalFiles, totalSize
                             )
                         }
+                        // Always update db_state during incr (tag/time even if rowid unchanged)
+                        BackupManifest.updateDbState(userHash, tag, incrTo.toString())
                     } else {
                         callback?.onProgress("[$userHash] DB增量输出为空", totalFiles, totalSize)
                     }
