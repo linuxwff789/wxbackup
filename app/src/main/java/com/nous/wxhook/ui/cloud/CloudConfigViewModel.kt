@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
 
 data class RemoteInfo(val name: String, val type: String)
 
@@ -134,8 +135,10 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
 
     private fun loadStatus(): String {
         val sb = StringBuilder()
-        val cfgRaw = RootGateways.runQuiet("cat /sdcard/Download/wxhook_backup/remote_config.json 2>/dev/null").trim()
-        val cfg = if (cfgRaw.isNotEmpty()) JSONObject(cfgRaw) else JSONObject()
+        val cfgRaw = try {
+            File("/sdcard/Download/wxhook_backup/remote_config.json").readText()
+        } catch (_: Exception) { "{}" }
+        val cfg = JSONObject(cfgRaw)
         sb.appendLine("云同步: ${if (cfg.optBoolean("enabled", false)) "✅ 已启用" else "⛔ 未启用"}")
 
         // Load WebDAV config
