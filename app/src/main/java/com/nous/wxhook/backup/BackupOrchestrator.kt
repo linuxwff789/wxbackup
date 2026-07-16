@@ -513,10 +513,10 @@ object BackupOrchestrator {
                     for (arc in incrArchives) {
                         val f = File(arc)
                         val size = BackupEnv.backupSize(arc)
-                        // Extract db_state.json from tar for rowid
+                        // Extract db_state.json from tar for rowid (exact path, no glob)
                         val rowId = runCatching {
                             val cmd = "${BackupEnv.binDir}/zstd -dc \"${f.absolutePath}\" 2>/dev/null | " +
-                                "${BackupEnv.binDir}/tar -xO \"*/db_state.json\" 2>/dev/null | " +
+                                "${BackupEnv.binDir}/tar -xO \"$userHash/db_state.json\" 2>/dev/null | " +
                                 "head -c 4096"
                             val out = RootGateways.runQuiet(cmd, 30_000).trim()
                             JSONObject(out).optLong("lastMessageRowId", 0)
@@ -526,7 +526,7 @@ object BackupOrchestrator {
                         // Extract file_manifest.json from tar for file list
                         val fileCount = runCatching {
                             val cmd = "${BackupEnv.binDir}/zstd -dc \"${f.absolutePath}\" 2>/dev/null | " +
-                                "${BackupEnv.binDir}/tar -xO \"*/file_manifest.json\" 2>/dev/null | " +
+                                "${BackupEnv.binDir}/tar -xO \"$userHash/file_manifest.json\" 2>/dev/null | " +
                                 "head -c 4096"
                             val out = RootGateways.runQuiet(cmd, 30_000).trim()
                             JSONObject(out).optInt("fileCount", 1)
