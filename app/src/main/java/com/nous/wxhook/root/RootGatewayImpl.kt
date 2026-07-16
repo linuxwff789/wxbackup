@@ -123,7 +123,14 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
         com.nous.wxhook.root.libsu.WxRootBinder.verifyTarZstd(binder, archivePath)
     }
 
-    override suspend fun run(command: String, timeoutMs: Long): CommandResult =
+    override suspend fun readFileFromTar(archivePath: String, filePath: String): String = withContext(Dispatchers.IO) {
+        val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder() ?: return@withContext ""
+        com.nous.wxhook.root.libsu.WxRootBinder.readFileFromTar(binder, archivePath, filePath)
+    }
+
+    override suspend fun run(command: String, timeoutMs: Long): CommandResult = exec(command, timeoutMs)
+
+    override suspend fun exec(command: String, timeoutMs: Long): CommandResult = withContext(Dispatchers.IO) {
         withContext(Dispatchers.IO) {
             if (useLibsu) {
                 com.nous.wxhook.root.libsu.RootManager.exec(command, timeoutMs)

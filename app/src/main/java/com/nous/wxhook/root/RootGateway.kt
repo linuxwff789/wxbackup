@@ -27,6 +27,9 @@ interface RootGateway {
     suspend fun delete(path: String): Boolean
     suspend fun writeTarZstd(outputPath: String, pairsPath: String, useZstd: Boolean): Int
     suspend fun verifyTarZstd(archivePath: String): Int
+    suspend fun exec(command: String, timeoutMs: Long): CommandResult
+    /** Read a file from a tar[.zst|.gz] archive via JNI (runs in root process). */
+    suspend fun readFileFromTar(archivePath: String, filePath: String): String
     suspend fun run(command: String, timeoutMs: Long = 60_000): CommandResult
     suspend fun runQuiet(command: String, timeoutMs: Long = 60_000): String
     

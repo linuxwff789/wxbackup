@@ -13,7 +13,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
     override fun asBinder(): android.os.IBinder = this
 
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-        if (code in TRANSACTION_EXEC..TRANSACTION_WEBDAV_UPLOAD) {
+        if (code in TRANSACTION_EXEC..TRANSACTION_READ_FILE_FROM_TAR) {
             data.enforceInterface(DESCRIPTOR)
         }
         return when (code) {
@@ -139,6 +139,19 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 reply?.writeInt(result)
                 true
             }
+            TRANSACTION_READ_FILE_FROM_TAR -> {
+                val archivePath = data.readString()
+                val filePath = data.readString()
+                val result = try {
+                    NativeArchive.readFileFromTar(archivePath ?: "", filePath ?: "")
+                } catch (e: Throwable) {
+                    Log.e("wxhook:archive", "readFileFromTar JNI failed", e)
+                    ""
+                }
+                reply?.writeNoException()
+                reply?.writeString(result)
+                true
+            }
             TRANSACTION_WEBDAV_UPLOAD -> {
                 val url = data.readString()
                 val user = data.readString()
@@ -185,6 +198,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
         const val TRANSACTION_WRITE_TAR_ZSTD = android.os.IBinder.FIRST_CALL_TRANSACTION + 10
         const val TRANSACTION_VERIFY_TAR_ZSTD = android.os.IBinder.FIRST_CALL_TRANSACTION + 11
         const val TRANSACTION_WEBDAV_UPLOAD = android.os.IBinder.FIRST_CALL_TRANSACTION + 12
+        const val TRANSACTION_READ_FILE_FROM_TAR = android.os.IBinder.FIRST_CALL_TRANSACTION + 13
         private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
 
         fun exec(shell: android.os.IBinder, command: String): ExecResult {
@@ -336,6 +350,11 @@ class WxRootBinder : android.os.Binder(), IInterface {
             data.writeString(filePath)
         }
 
+        fun readFileFromTar(shell: android.os.IBinder, archivePath: String, filePath: String): String = transactString(
+            shell,
+            TRANSACTION_READ_FILE_FROM_TAR,
+        ) { data -> data.writeString(archivePath); data.writeString(filePath) }
+
         private fun transactInt(
             shell: android.os.IBinder,
             transaction: Int,
@@ -349,6 +368,25 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 shell.transact(transaction, data, reply, 0)
                 reply.readException()
                 return reply.readInt()
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+
+        private fun transactString(
+            shell: android.os.IBinder,
+            transaction: Int,
+            write: (Parcel) -> Unit,
+        ): String {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                write(data)
+                shell.transact(transaction, data, reply, 0)
+                reply.readException()
+                return reply.readString() ?: ""
             } finally {
                 data.recycle()
                 reply.recycle()

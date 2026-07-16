@@ -10,4 +10,7 @@ object NativeArchive {
     external fun writeTar(outputPath: String, pairsFilePath: String, useZstd: Boolean): Int
     @JvmStatic
     external fun verifyTar(archivePath: String): Int
+    @JvmStatic
+    /** Read a single file from a tar[.zst|.gz] archive. Returns content or empty string. */
+    external fun readFileFromTar(archivePath: String, filePath: String): String
 }

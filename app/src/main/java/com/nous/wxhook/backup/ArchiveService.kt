@@ -45,44 +45,6 @@ object ArchiveService {
 
     // ── Compression ──
 
-    fun compressFileSu(srcPath: String, dstPath: String): Boolean {
-        return try {
-            // 先验证源文件存在且大小合理
-            val srcSize = BackupEnv.suOut("stat -c %s \\\"$srcPath\\\" 2>/dev/null").trim().toLongOrNull() ?: 0L
-            if (srcSize < 1000L) return false
-
-            val compressor = if (BackupEnv.useZstd()) "${BackupEnv.binDir}/zstd -c -3" else "gzip -c"
-            val result = BackupEnv.su(
-                "$compressor \\\"$srcPath\\\" > \\\"$dstPath\\\" && chmod 644 \\\"$dstPath\\\"",
-                600_000
-            )
-
-            // 验证压缩结果
-            val dstSize = BackupEnv.suOut("stat -c %s \\\"$dstPath\\\" 2>/dev/null").trim().toLongOrNull() ?: 0L
-            if (dstSize <= 0L) return false
-
-            // 验证压缩比合理（压缩后应该比源文件小）
-            if (dstSize >= srcSize) {
-                // 压缩失败，删除无效文件
-                BackupEnv.su("rm -f \\\"$dstPath\\\"")
-                return false
-            }
-
-            // 验证文件头 (用 od 替代 xxd，更通用)
-            val header = BackupEnv.suOut("od -A n -t x1 -N 2 \\\"$dstPath\\\" 2>/dev/null | head -1").trim()
-            val expectedHeader = if (BackupEnv.useZstd()) "28 b5" else "1f 8b"
-            if (!header.contains(expectedHeader)) {
-                BackupEnv.su("rm -f \\\"$dstPath\\\"")
-                return false
-            }
-
-            true
-        } catch (e: Exception) {
-            Log.e("wxhook:Backup", "compressFileSu failed: $e")
-            false
-        }
-    }
-
     fun compressGzip(data: ByteArray): ByteArray {
         val bos = ByteArrayOutputStream()
         GZIPOutputStream(bos).use { it.write(data) }

@@ -23,6 +23,8 @@ object RootGateways {
         runBlocking { gateway.webdavUpload(url, user, pass, filePath) }
     fun verifyTarZstd(archivePath: String): Int =
         runBlocking { gateway.verifyTarZstd(archivePath) }
+    fun readFileFromTar(archivePath: String, filePath: String): String =
+        runBlocking { gateway.readFileFromTar(archivePath, filePath) }
     fun run(command: String, timeoutMs: Long = 60_000) = runBlocking { gateway.run(command, timeoutMs) }
     fun runQuiet(command: String, timeoutMs: Long = 60_000) = runBlocking { gateway.runQuiet(command, timeoutMs) }
 }

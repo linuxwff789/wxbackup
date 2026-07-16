@@ -570,18 +570,14 @@ object BackupOrchestrator {
                     for (arc in incrArchives) {
                         val f = File(arc)
                         val size = BackupEnv.backupSize(arc)
-                        // Extract db_state.json from archive for historical rowid (for display only)
+                        // Extract db_state.json from archive via JNI (no shell)
                         val histRowId = runCatching {
-                            val cmd = "${BackupEnv.binDir}/zstd -dc \"${f.absolutePath}\" 2>/dev/null | " +
-                                "${BackupEnv.binDir}/tar -xO \"$userHash/db_state.json\" 2>/dev/null | head -c 4096"
-                            val out = RootGateways.runQuiet(cmd, 30_000).trim()
+                            val out = RootGateways.readFileFromTar(f.absolutePath, "$userHash/db_state.json")
                             JSONObject(out).optLong("lastMessageRowId", 0)
                         }.getOrDefault(0L)
-                        // Extract file_manifest.json for file count
+                        // Extract file_manifest.json via JNI
                         val fileCount = runCatching {
-                            val cmd = "${BackupEnv.binDir}/zstd -dc \"${f.absolutePath}\" 2>/dev/null | " +
-                                "${BackupEnv.binDir}/tar -xO \"$userHash/file_manifest.json\" 2>/dev/null | head -c 4096"
-                            val out = RootGateways.runQuiet(cmd, 30_000).trim()
+                            val out = RootGateways.readFileFromTar(f.absolutePath, "$userHash/file_manifest.json")
                             JSONObject(out).optInt("fileCount", 1)
                         }.getOrDefault(1)
 

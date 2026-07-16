@@ -295,7 +295,137 @@ Java_com_nous_wxhook_backup_NativeArchive_writeTar(
     return result;
 }
 
-// ── auto-detect compression by file header ──
+// ── read one file from tar.zst ──
+static std::string read_file_from_tar(const char* input, int comp, const char* target) {
+    FILE* f = fopen(input, "rb");
+    if (!f) return "";
+
+    const size_t BUF = 256 * 1024;
+    char inbuf[BUF];
+    char outbuf[2 * BUF];
+
+    // streaming decompress → tar parser
+    // We'll collect the content in a string when we find the target file
+    struct TarReader {
+        std::string result;
+        const char* target;
+        bool found = false;
+        off_t content_remaining = 0;
+
+        void feed(const char* data, size_t size) {
+            size_t off = 0;
+            while (off < size) {
+                if (content_remaining > 0) {
+                    // Reading file content
+                    size_t take = (size_t)content_remaining < (size - off) ? (size_t)content_remaining : (size - off);
+                    if (found) result.append(data + off, take);
+                    content_remaining -= take;
+                    off += take;
+                    if (content_remaining == 0 && !found) {
+                        // Skip padding after content to next header
+                        off += (512 - ((off + take) % 512)) % 512;
+                    }
+                    continue;
+                }
+                // At a header boundary
+                if (off + 512 > size) break; // need more data
+                const ustar_header* h = reinterpret_cast<const ustar_header*>(data + off);
+                if (h->name[0] == '\0') { found = true; content_remaining = -1; return; } // EOT
+                if (memcmp(h->magic, "ustar", 5) != 0) { off += 512; continue; }
+                // Parse entry
+                uint64_t entry_size = 0;
+                for (int i = 0; i < 12; i++) entry_size = (entry_size << 3) | (h->size[i] - '0');
+                // Build full path from prefix+name
+                char path[512];
+                size_t pl = 0;
+                if (h->prefix[0]) { pl = strlen(h->prefix); memcpy(path, h->prefix, pl); path[pl++] = '/'; }
+                size_t nl = strlen(h->name); memcpy(path + pl, h->name, nl); pl += nl;
+                path[pl] = '\0';
+                if (strcmp(path, target) == 0) {
+                    found = true;
+                    if (h->typeflag == '0' || h->typeflag == '\0') {
+                        result.reserve((size_t)entry_size);
+                        content_remaining = (off_t)entry_size;
+                    } else {
+                        content_remaining = -1; // directory or other, mark done
+                        return;
+                    }
+                } else {
+                    content_remaining = (off_t)entry_size;
+                }
+                off += 512;
+            }
+        }
+    };
+
+    TarReader tr;
+    tr.target = target;
+
+    auto scan = [&](const char* data, size_t size) { tr.feed(data, size); };
+
+    if (comp == 1) {
+        ZSTD_DCtx* dctx = ZSTD_createDCtx();
+        if (!dctx) { fclose(f); return ""; }
+        ZSTD_outBuffer ob = {outbuf, sizeof(outbuf), 0};
+        ZSTD_inBuffer ib = {inbuf, 0, 0};
+        while (true) {
+            ib.size = fread(inbuf, 1, sizeof(inbuf), f);
+            ib.pos = 0;
+            if (ferror(f)) break;
+            bool last = feof(f) != 0;
+            while (true) {
+                ob.pos = 0;
+                size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
+                if (ZSTD_isError(err)) break;
+                if (ob.pos > 0) scan(outbuf, ob.pos);
+                if (tr.result.size() > 0 && tr.content_remaining == (off_t)-1) break;
+                if (last && err == 0) break;
+                if (ob.pos == 0 && ib.pos >= ib.size) break;
+            }
+            if (tr.found) break;
+            if (feof(f)) break;
+        }
+        ZSTD_freeDCtx(dctx);
+    } else if (comp == 2) {
+        z_stream strm;
+        memset(&strm, 0, sizeof(strm));
+        if (inflateInit2(&strm, 15 | 16) != Z_OK) { fclose(f); return ""; }
+        while (true) {
+            strm.avail_in = fread(inbuf, 1, sizeof(inbuf), f);
+            strm.next_in = (Bytef*)inbuf;
+            if (ferror(f)) break;
+            bool last = feof(f) != 0;
+            do {
+                strm.avail_out = sizeof(outbuf);
+                strm.next_out = (Bytef*)outbuf;
+                int ret = inflate(&strm, Z_NO_FLUSH);
+                if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR) break;
+                size_t produced = sizeof(outbuf) - strm.avail_out;
+                if (produced > 0) scan(outbuf, produced);
+                if (tr.found) break;
+                if (ret == Z_STREAM_END) { last = true; break; }
+            } while (strm.avail_out == 0);
+            if (tr.found) break;
+            if (last) break;
+        }
+        inflateEnd(&strm);
+    }
+    fclose(f);
+    return tr.result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
+    JNIEnv* env, jobject, jstring archivePath_, jstring filePath_) {
+    const char* archivePath = env->GetStringUTFChars(archivePath_, nullptr);
+    const char* filePath = env->GetStringUTFChars(filePath_, nullptr);
+    if (!archivePath || !filePath) return env->NewStringUTF("");
+    int comp = detect_compression(archivePath);
+    std::string content = read_file_from_tar(archivePath, comp, filePath);
+    env->ReleaseStringUTFChars(archivePath_, archivePath);
+    env->ReleaseStringUTFChars(filePath_, filePath);
+    return env->NewStringUTF(content.c_str());
+}
 static int detect_compression(const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) return -1;
