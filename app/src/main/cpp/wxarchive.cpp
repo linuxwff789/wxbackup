@@ -455,9 +455,17 @@ Java_com_nous_wxhook_backup_NativeArchive_getFullArchiveRowId(
     const char* archivePath = env->GetStringUTFChars(archivePath_, nullptr);
     const char* hash = env->GetStringUTFChars(hash_, nullptr);
     if (!archivePath || !hash) return 0;
+    __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "getFullArchiveRowId path=%s hash=%s", archivePath, hash);
+    // Also write to file for debugging
+    FILE* dbg = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+    if (dbg) { fprintf(dbg, "path=%s hash=%s\n", archivePath, hash); fclose(dbg); }
     int comp = detect_compression(archivePath);
+    __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "comp=%d", comp);
     std::string dbPath = std::string(hash) + "/db_state.json";
     std::string dbJson = read_file_from_tar(archivePath, comp, dbPath.c_str(), 4096);
+    __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "db_state len=%zu", dbJson.size());
+    FILE* dbg2 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+    if (dbg2) { fprintf(dbg2, "comp=%d db_state_len=%zu\n", comp, dbJson.size()); fclose(dbg2); }
     jlong result = 0;
     if (!dbJson.empty()) {
         size_t kp = dbJson.rfind("\"lastMessageRowId\"");
@@ -469,6 +477,9 @@ Java_com_nous_wxhook_backup_NativeArchive_getFullArchiveRowId(
     if (result == 0) {
         std::string sqlPath = std::string(hash) + "/EnMicroMsg_baseline.sql";
         std::string tail = read_file_from_tar(archivePath, comp, sqlPath.c_str(), 4096);
+        __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "sql_tail len=%zu first100=%.100s", tail.size(), tail.c_str());
+        FILE* dbg3 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+        if (dbg3) { fprintf(dbg3, "sql_tail_len=%zu first100=%.100s\n", tail.size(), tail.c_str()); fclose(dbg3); }
         size_t pos = tail.rfind("INSERT");
         if (pos != std::string::npos) {
             size_t vpos = tail.find("VALUES(", pos);
