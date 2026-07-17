@@ -530,12 +530,12 @@ object BackupOrchestrator {
                     val rowId = if (tail.isNotBlank()) {
                         val r = Regex("INSERT[^;]*VALUES\\s*\\(\\s*(\\d+)")
                         val m = r.find(tail)
-                        val shellRowId = m?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
-                        Log.i("wxhook:rebuild", "shell SQL tail: parsed=$shellRowId tail_len=${tail.length}")
-                        shellRowId
+                        m?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L.also { parsed ->
+                            Log.i("wxhook:rebuild", "shell SQL tail: parsed=$parsed tail_len=${tail.length}")
+                        }
                     } else {
-                        Log.e("wxhook:rebuild", "shell SQL tail empty for ${f.name}")
-                        centralized.optLong("lastMessageRowId", 0L)
+                        Log.e("wxhook:rebuild", "shell SQL tail empty for ${f.name}, skipping")
+                        0L
                     }
                     if (rowId > 0) points += ChainPoint(
                         centralized.optLong("lastMessageRowIdFrom", 0L), rowId,
