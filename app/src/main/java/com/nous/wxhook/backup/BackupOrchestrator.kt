@@ -605,7 +605,8 @@ object BackupOrchestrator {
             callback?.onProgress("✅ 重建完成: ${sorted.size}条记录", 0, 0)
             results.joinToString("\n") + "\nrecords=" + sorted.size
         } catch (e: Exception) {
-            "重建失败: ${e.message}"
+            Log.e("wxhook:rebuild", "rebuildDbState failed", e)
+            "重建失败: ${e::class.simpleName}: ${e.message}"
         }
     }
 }
