@@ -518,54 +518,15 @@ object BackupOrchestrator {
                 callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
 
-                // Full archives: JNI async scan (db_state fast, SQL tail async)
+                // Full archives: NativeArchive JNI directly (app process, no Binder)
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    var rowId = runCatching {
-                        RootGateways.getFullArchiveRowId(arc, hash)
-                    }.onFailure {
-                        Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name}, reconnecting...", it)
-                    }.getOrDefault(0L)
-                    if (rowId == 0L) {
-                        // Binder dead → full reset + fresh bind
-                        com.nous.wxhook.root.libsu.RootManager.disconnect(com.nous.wxhook.App.instance)
-                        runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
-                        // Verify new Binder is alive with a ping
-                        var ready = false
-                        for (i in 0..20) {
-                            val b = com.nous.wxhook.root.libsu.RootManager.currentBinder()
-                            if (b != null) {
-                                try {
-                                    b.transact(0xFE, android.os.Parcel.obtain(), null, android.os.IBinder.FLAG_ONEWAY)
-                                    ready = true
-                                    break
-                                } catch (_: android.os.DeadObjectException) {
-                                    Thread.sleep(500)
-                                }
-                            }
-                            Thread.sleep(500)
-                        }
-                        if (!ready) Log.e("wxhook:rebuild", "Binder ping failed after reconnect")
-                        rowId = runCatching {
-                            RootGateways.getFullArchiveRowId(arc, hash)
-                        }.onFailure {
-                            Log.e("wxhook:rebuild", "getFullArchiveRowId retry failed for ${f.name}", it)
-                        }.getOrDefault(0L)
-                    }
-                    if (rowId == -1L) {
-                        // Async scan running; poll with timeout
-                        val deadline = System.currentTimeMillis() + 180_000
-                        var polled = -2L
-                        while (polled == -2L && System.currentTimeMillis() < deadline) {
-                            Thread.sleep(2000)
-                            polled = runCatching {
-                                RootGateways.pollFullArchiveRowId(hash)
-                            }.onFailure {
-                                Log.e("wxhook:rebuild", "poll failed for ${f.name}", it)
-                            }.getOrDefault(-2L)
-                        }
-                        rowId = if (polled > 0) polled else 0L
+                    val rowId = try {
+                        NativeArchive.getFullArchiveRowId(arc, hash)
+                    } catch (e: Throwable) {
+                        Log.e("wxhook:rebuild", "NativeArchive.getFullArchiveRowId failed for ${f.name}", e)
+                        0L
                     }
                     if (rowId > 0) points += ChainPoint(
                         centralized.optLong("lastMessageRowIdFrom", 0L), rowId,
@@ -579,22 +540,22 @@ object BackupOrchestrator {
                     val f = File(arc)
                     var incrFrom = 0L; var incrTo = 0L
                     try {
-                        val dbJson = RootGateways.readFileFromTar(arc, "$hash/db_state.json")
+                        val dbJson = NativeArchive.readFileFromTar(arc, "$hash/db_state.json")
                         incrFrom = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
                         incrTo = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
                     } catch (e: Throwable) {
-                        Log.e("wxhook:rebuild", "readFileFromTar for incr db_state failed: $arc", e)
+                        Log.e("wxhook:rebuild", "NativeArchive.readFileFromTar for incr db_state failed: $arc", e)
                     }
                     if (incrFrom > 0 && incrTo > 0) {
                         points += ChainPoint(incrFrom, incrTo, f.lastModified(), f.name, false, hash)
                     } else if (incrTo > 0) {
                         try {
-                            val listing = RootGateways.listTar(arc)
+                            val listing = NativeArchive.listTar(arc)
                             val m = Regex("incr_(\\d+)_to_(\\d+)\\.sql").find(listing)
                             incrFrom = m?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
                             points += ChainPoint(incrFrom, incrTo, f.lastModified(), f.name, false, hash)
                         } catch (e: Throwable) {
-                            Log.e("wxhook:rebuild", "listTar for incr failed: $arc", e)
+                            Log.e("wxhook:rebuild", "NativeArchive.listTar for incr failed: $arc", e)
                         }
                     }
                     Log.i("wxhook:rebuild", "incr arc ${f.name}: from=$incrFrom to=$incrTo")
