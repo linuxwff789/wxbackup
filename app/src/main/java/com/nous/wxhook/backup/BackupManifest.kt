@@ -22,7 +22,7 @@ object BackupManifest {
     private fun userDbStateDir(hash: String): File = File(BackupEnv.backupDataDir, hash)
 
     /** Write db_state for a user: centralized + per-user copy. */
-    fun saveDbState(userHash: String, tag: String, fromRowId: Long = 0, maxRowId: Long = 0) {
+    fun saveDbState(userHash: String, tag: String, fromRowId: Long = 0, maxRowId: Long = 0): Boolean {
         val f = dbStateFile()
         val all = runCatching { JSONObject(BackupEnv.backupRead(f.absolutePath)) }.getOrDefault(JSONObject())
         val u = all.optJSONObject(userHash) ?: JSONObject()
@@ -31,11 +31,10 @@ object BackupManifest {
         u.put("lastMessageRowIdFrom", fromRowId)
         if (maxRowId > 0) u.put("lastMessageRowId", maxRowId)
         all.put(userHash, u)
-        RootGateways.writeFile(f.absolutePath, all.toString())
-        // Per-user copy (via root gateways since sdcard)
+        if (!RootGateways.writeFile(f.absolutePath, all.toString())) return false
         val uDir = File(BackupEnv.backupDataDir, userHash).absolutePath
         RootGateways.mkdirs(uDir)
-        RootGateways.writeFile("$uDir/db_state.json", u.toString())
+        return RootGateways.writeFile("$uDir/db_state.json", u.toString())
     }
 
     fun loadDbState(userHash: String): JSONObject {

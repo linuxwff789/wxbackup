@@ -584,7 +584,10 @@ object BackupOrchestrator {
 
                 // Per-user db_state
                 callback?.onProgress("[$hash] 保存状态: $safeFrom→$safeRowId (链=${bestChain.size})", 0, 0)
-                BackupManifest.saveDbState(hash, "rebuild", safeFrom, safeRowId)
+                if (!BackupManifest.saveDbState(hash, "rebuild", safeFrom, safeRowId)) {
+                    runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
+                    BackupManifest.saveDbState(hash, "rebuild", safeFrom, safeRowId)
+                }
 
                 // Per-user manifest (live scan)
                 callback?.onProgress("[$hash] 扫描附件清单...", 0, 0)
@@ -612,14 +615,20 @@ object BackupOrchestrator {
                 results.add("$hash: rowId=$safeRowId (chain=${bestChain.size})")
             }
 
-            // 4. Save backup records
+            // 4. Save backup records (may need to reconnect Binder)
             callback?.onProgress("保存备份记录...", 0, 0)
             val sorted = (0 until rebuiltRecords.length())
                 .map { rebuiltRecords.getJSONObject(it) }
                 .sortedBy { it.optLong("time", 0L) }
-            val outArr = JSONArray()
-            for (rec in sorted) outArr.put(rec)
-            RootGateways.writeFile(File(BackupEnv.backupDataDir, WxHookPaths.RECORDS_FILE).absolutePath, outArr.toString())
+            var recordsOk = writeSortedRecords(sorted)
+            if (!recordsOk) {
+                // Binder may have died during archive reads; reconnect and retry
+                runBlocking {
+                    (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService()
+                }
+                recordsOk = writeSortedRecords(sorted)
+            }
+            if (!recordsOk) android.util.Log.e("wxhook:rebuild", "Failed to write backup_records.json")
 
             callback?.onProgress("✅ 重建完成: ${sorted.size}条记录", 0, 0)
             results.joinToString("\n") + "\nrecords=" + sorted.size
@@ -628,5 +637,14 @@ object BackupOrchestrator {
             callback?.onProgress("❌ ${e::class.simpleName}: ${e.message}", 0, 0)
             "重建失败: ${e::class.simpleName}: ${e.message}"
         }
+    }
+
+    private fun writeSortedRecords(sorted: List<JSONObject>): Boolean {
+        val outArr = JSONArray()
+        for (rec in sorted) outArr.put(rec)
+        return RootGateways.writeFile(
+            File(BackupEnv.backupDataDir, WxHookPaths.RECORDS_FILE).absolutePath,
+            outArr.toString()
+        )
     }
 }
