@@ -350,7 +350,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 // At a header boundary
                 if (off + 512 > size) break; // need more data
                 const ustar_header* h = reinterpret_cast<const ustar_header*>(data + off);
-                if (h->name[0] == '\0') return "";
+                if (h->name[0] == '\0') return;
                 if (memcmp(h->magic, "ustar", 5) != 0) { off += 512; continue; }
                 uint64_t entry_size = 0;
                 for (int i = 0; i < 12 && h->size[i] >= '0' && h->size[i] <= '7'; i++) entry_size = (entry_size << 3) | (h->size[i] - '0');
