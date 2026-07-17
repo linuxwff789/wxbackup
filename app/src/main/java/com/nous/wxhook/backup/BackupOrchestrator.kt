@@ -87,7 +87,7 @@ object BackupOrchestrator {
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val userDir = File(BackupEnv.backupDataDir, hash)
-                userDir.mkdirs()
+                RootGateways.mkdirs(userDir.absolutePath)
                 val userFiles = sourceFiles.filter { it.path.startsWith("$hash/") }
                 FileManifest.save(userDir, FileManifest.toManifest(userFiles, tag))
             }
@@ -302,7 +302,7 @@ object BackupOrchestrator {
                 for (wxBasePath in wxPaths) {
                     val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                     val uDir = File(BackupEnv.backupDataDir, hash)
-                    uDir.mkdirs()
+                    RootGateways.mkdirs(uDir.absolutePath)
                     val uFiles = currentSourceFiles.filter { it.path.startsWith("$hash/") }
                     FileManifest.save(uDir, FileManifest.toManifest(uFiles, tag))
                 }
@@ -554,7 +554,7 @@ object BackupOrchestrator {
                         chainEnd = maxOf(chainEnd, p.to)
                         chainPoints.add(p)
                         if (chainPoints.size > bestChain.size)
-                            bestChain = chainPoints.toList() as MutableList<ChainPoint>
+                            bestChain = mutableListOf<ChainPoint>().also { it.addAll(chainPoints) }
                     } else {
                         chainEnd = p.to
                         chainPoints = mutableListOf(p)
@@ -570,7 +570,7 @@ object BackupOrchestrator {
                 // Per-user manifest (live scan)
                 callback?.onProgress("[$hash] 扫描附件清单...", 0, 0)
                 val userDir = File(BackupEnv.backupDataDir, hash)
-                userDir.mkdirs()
+                RootGateways.mkdirs(userDir.absolutePath)
                 val userFiles = wxPaths.filter { WeChatSourceResolver.extractUserHash(it) == hash }
                     .flatMap { wxBasePath2 ->
                         FileManifest.scanWeChatAttachments(wxBasePath2, hash, ATT_DIRS)

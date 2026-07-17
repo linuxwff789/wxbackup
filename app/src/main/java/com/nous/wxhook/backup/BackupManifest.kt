@@ -32,10 +32,10 @@ object BackupManifest {
         if (maxRowId > 0) u.put("lastMessageRowId", maxRowId)
         all.put(userHash, u)
         RootGateways.writeFile(f.absolutePath, all.toString())
-        // Per-user copy
-        val uf = userDbStateDir(userHash)
-        uf.mkdirs()
-        RootGateways.writeFile(File(uf, "db_state.json").absolutePath, u.toString())
+        // Per-user copy (via root gateways since sdcard)
+        val uDir = File(BackupEnv.backupDataDir, userHash).absolutePath
+        RootGateways.mkdirs(uDir)
+        RootGateways.writeFile("$uDir/db_state.json", u.toString())
     }
 
     fun loadDbState(userHash: String): JSONObject {
@@ -57,10 +57,10 @@ object BackupManifest {
         if (toRowId > 0) u.put("lastMessageRowId", toRowId)
         all.put(userHash, u)
         RootGateways.writeFile(f.absolutePath, all.toString())
-        // Per-user copy
-        val uf = userDbStateDir(userHash)
-        uf.mkdirs()
-        RootGateways.writeFile(File(uf, "db_state.json").absolutePath, u.toString())
+        // Per-user copy (via root gateways since sdcard)
+        val uDir = File(BackupEnv.backupDataDir, userHash).absolutePath
+        RootGateways.mkdirs(uDir)
+        RootGateways.writeFile("$uDir/db_state.json", u.toString())
     }
 
     // ── Backup State ──
