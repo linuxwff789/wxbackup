@@ -502,47 +502,44 @@ object BackupOrchestrator {
                 val from: Long, val to: Long, val time: Long,
                 val name: String, val isFull: Boolean, val hash: String)
 
+            // Pre-read centralized db_state (Binder may die during long operations)
+            val centralizedStates = mutableMapOf<String, JSONObject>()
+            for (wxBasePath in wxPaths) {
+                val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                centralizedStates[hash] = BackupManifest.loadDbState(hash)
+            }
+
             // 3. For each user, build chain from archives
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                val centralized = centralizedStates[hash] ?: JSONObject()
                 callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
 
-                // Full archives: use JNI via Binder (root process has file access)
+                // Full archives: try db_state.json, fallback to SQL tail, then centralized
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    try {
-                        // Try db_state.json via Binder (fast, small file)
+                    var rowId = 0L; var from = 0L
+                    runCatching {
                         val dbJson = RootGateways.readFileFromTar(arc, "$hash/db_state.json")
-                        val toDb = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
-                        if (toDb > 0) {
-                            val fromDb = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
-                            points += ChainPoint(fromDb, toDb, f.lastModified(), f.name, true, hash)
-                        } else {
-                            // Old format: read SQL tail via Binder JNI (returns long only)
-                            val maxRowId = runCatching {
-                                RootGateways.getTarSqlMaxRowId(arc, "$hash/EnMicroMsg_baseline.sql")
-                            }.getOrDefault(0L)
-                            if (maxRowId > 0) {
-                                points += ChainPoint(0L, maxRowId, f.lastModified(), f.name, true, hash)
-                            } else {
-                                // Fallback: use centralized db_state
-                                val existing = BackupManifest.loadDbState(hash)
-                                val oldRowId = existing.optLong("lastMessageRowId", 0L)
-                                if (oldRowId > 0)
-                                    points += ChainPoint(0L, oldRowId, f.lastModified(), f.name, true, hash)
-                            }
-                        }
-                    } catch (e: Throwable) {
-                        Log.e("wxhook:rebuild", "full archive processing failed for ${f.name}", e)
-                        // Fallback to centralized db_state
-                        val existing = BackupManifest.loadDbState(hash)
-                        val oldRowId = existing.optLong("lastMessageRowId", 0L)
-                        if (oldRowId > 0)
-                            points += ChainPoint(0L, oldRowId, f.lastModified(), f.name, true, hash)
+                        from = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
+                        rowId = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
+                    }.onFailure { Log.e("wxhook:rebuild", "readFileFromTar db_state failed for ${f.name}", it) }
+                    if (rowId == 0L) {
+                        rowId = runCatching {
+                            RootGateways.getTarSqlMaxRowId(arc, "$hash/EnMicroMsg_baseline.sql")
+                        }.onFailure { Log.e("wxhook:rebuild", "getTarSqlMaxRowId failed for ${f.name}", it) }
+                            .getOrDefault(0L)
+                        if (rowId > 0) from = 0L
                     }
-                    Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=${points.lastOrNull { it.name == f.name }?.to ?: 0}")
+                    if (rowId == 0L) {
+                        // Final fallback: use centralized db_state (pre-read)
+                        rowId = centralized.optLong("lastMessageRowId", 0L)
+                        from = centralized.optLong("lastMessageRowIdFrom", 0L)
+                    }
+                    if (rowId > 0) points += ChainPoint(from, rowId, f.lastModified(), f.name, true, hash)
+                    Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=$rowId")
                 }
 
                 // Incremental archives: extract db_state.json for from/to
