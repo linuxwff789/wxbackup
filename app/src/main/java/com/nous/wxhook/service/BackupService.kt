@@ -23,6 +23,7 @@ class BackupService : Service() {
         private const val CHANNEL_ID = "wxhook_backup"
         private const val NOTIFICATION_ID = 1002
         private const val ACTION_START = "com.nous.wxhook.BACKUP_START"
+        private const val ACTION_REBUILD = "com.nous.wxhook.BACKUP_REBUILD"
         private const val EXTRA_INCREMENTAL = "incremental"
         const val ACTION_FINISH = "com.nous.wxhook.BACKUP_FINISH"
         const val EXTRA_OK = "ok"
@@ -35,6 +36,13 @@ class BackupService : Service() {
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i) else ctx.startService(i)
         }
+
+        fun startRebuild(ctx: Context) {
+            val i = Intent(ctx, BackupService::class.java).apply {
+                action = ACTION_REBUILD
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i) else ctx.startService(i)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -43,6 +51,8 @@ class BackupService : Service() {
         if (intent?.action == ACTION_START) {
             val incremental = intent.getBooleanExtra(EXTRA_INCREMENTAL, true)
             startBackup(incremental)
+        } else if (intent?.action == ACTION_REBUILD) {
+            startRebuild()
         }
         return START_NOT_STICKY
     }
@@ -86,6 +96,32 @@ class BackupService : Service() {
                     putExtra(EXTRA_OK, false)
                     putExtra(EXTRA_MSG, "服务异常: ${e.message}")
                 })
+            }
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ stopSelf() }, 3000)
+        }.start()
+    }
+
+    private fun startRebuild() {
+        try { startForeground(NOTIFICATION_ID, createNotification("重建备份状态中...")) } catch (_: Exception) {}
+        Thread {
+            try {
+                BackupHookLocal.init(this)
+                android.util.Log.e("wxhook:rebuild", "Rebuild started via BackupService")
+                appendLog("开始重建备份状态")
+                updateNotification("正在重建...")
+                val result = BackupHookLocal.rebuildDbState()
+                android.util.Log.e("wxhook:rebuild", "Rebuild result: $result")
+                appendLog(result)
+                updateNotification("重建完成")
+                sendBroadcast(Intent(ACTION_FINISH).apply {
+                    setPackage(packageName)
+                    putExtra(EXTRA_OK, true)
+                    putExtra(EXTRA_MSG, result)
+                })
+            } catch (e: Exception) {
+                android.util.Log.e("wxhook:rebuild", "Rebuild crashed", e)
+                appendLog("重建异常: ${e.message}")
+                updateNotification("重建异常: ${e.message}")
             }
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ stopSelf() }, 3000)
         }.start()
