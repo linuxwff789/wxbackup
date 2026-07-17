@@ -522,8 +522,8 @@ object BackupOrchestrator {
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    // Shell pipe: direct su -c, no Binder
-                    val shell = "LD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc ${arc} 2>/dev/null | ${BackupEnv.binDir}/tar -xO '$hash/EnMicroMsg_baseline.sql' 2>/dev/null | tail -c 4096"
+                    // Shell pipe: wrap in sh -c for reliable pipe handling
+                    val shell = "sh -c 'LD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc ${arc} 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$hash/EnMicroMsg_baseline.sql\" 2>/dev/null | tail -c 4096'"
                     val cmdResult = com.nous.wxhook.rootbridge.RootCommandRunner.runSu(shell, 180_000)
                     Log.i("wxhook:rebuild", "shell exit=${cmdResult.exitCode} err=${cmdResult.stderr.take(200)} out_len=${cmdResult.stdout.length}")
                     val tail = cmdResult.stdout
