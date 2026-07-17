@@ -29,6 +29,8 @@ object RootGateways {
         runBlocking { gateway.listTar(archivePath) }
     fun getTarSqlMaxRowId(archivePath: String, filePath: String): Long =
         runBlocking { gateway.getTarSqlMaxRowId(archivePath, filePath) }
+    fun getFullArchiveRowId(archivePath: String, hash: String): Long =
+        runBlocking { gateway.getFullArchiveRowId(archivePath, hash) }
     fun run(command: String, timeoutMs: Long = 60_000) = runBlocking { gateway.run(command, timeoutMs) }
     fun runQuiet(command: String, timeoutMs: Long = 60_000) = runBlocking { gateway.runQuiet(command, timeoutMs) }
 }

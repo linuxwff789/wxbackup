@@ -432,6 +432,47 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     return env->NewStringUTF(content.c_str());
 }
 
+// ── get rowid from full archive: try db_state.json first, fallback to SQL tail ──
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_nous_wxhook_backup_NativeArchive_getFullArchiveRowId(
+    JNIEnv* env, jobject, jstring archivePath_, jstring hash_) {
+    const char* archivePath = env->GetStringUTFChars(archivePath_, nullptr);
+    const char* hash = env->GetStringUTFChars(hash_, nullptr);
+    if (!archivePath || !hash) return 0;
+    int comp = detect_compression(archivePath);
+
+    // Try db_state.json first (small)
+    std::string dbPath = std::string(hash) + "/db_state.json";
+    std::string dbJson = read_file_from_tar(archivePath, comp, dbPath.c_str(), 4096);
+    if (!dbJson.empty()) {
+        // Parse lastMessageRowId from JSON
+        size_t kp = dbJson.rfind("\"lastMessageRowId\"");
+        if (kp != std::string::npos) {
+            size_t vp = dbJson.find(':', kp);
+            if (vp != std::string::npos) {
+                char* end = nullptr;
+                uint64_t rid = strtoull(dbJson.c_str() + vp + 1, &end, 10);
+                if (rid > 0) { env->ReleaseStringUTFChars(archivePath_, archivePath); env->ReleaseStringUTFChars(hash_, hash); return (jlong)rid; }
+            }
+        }
+    }
+
+    // Fallback: read SQL tail
+    std::string sqlPath = std::string(hash) + "/EnMicroMsg_baseline.sql";
+    std::string tail = read_file_from_tar(archivePath, comp, sqlPath.c_str(), 4096);
+    env->ReleaseStringUTFChars(archivePath_, archivePath);
+    env->ReleaseStringUTFChars(hash_, hash);
+    if (tail.empty()) return 0;
+    size_t pos = tail.rfind("INSERT");
+    if (pos == std::string::npos) return 0;
+    size_t vpos = tail.find("VALUES(", pos);
+    if (vpos == std::string::npos) return 0;
+    vpos += 7;
+    char* end = nullptr;
+    uint64_t rowid = strtoull(tail.c_str() + vpos, &end, 10);
+    return (jlong)rowid;
+}
+
 // ── get max rowid from SQL file in tar ──
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_nous_wxhook_backup_NativeArchive_getTarSqlMaxRowId(

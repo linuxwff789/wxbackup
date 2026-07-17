@@ -19,4 +19,7 @@ object NativeArchive {
     @JvmStatic
     /** Get max rowid from SQL file in a tar archive. Returns 0 if not found. */
     external fun getTarSqlMaxRowId(archivePath: String, filePath: String): Long
+    @JvmStatic
+    /** Get rowid from full archive: tries db_state.json first, then SQL tail. Single archive scan. */
+    external fun getFullArchiveRowId(archivePath: String, hash: String): Long
 }
