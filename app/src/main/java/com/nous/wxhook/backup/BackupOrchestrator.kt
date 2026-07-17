@@ -508,13 +508,21 @@ object BackupOrchestrator {
                 callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
 
-                // Full archives: get rowid from archive's db_state.json (fast, no SQL tail)
+                // Full archives: use NativeArchive JNI directly (no Binder, no timeout)
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    val maxRowId = RootGateways.getFullArchiveRowId(arc, hash)
-                    if (maxRowId > 0)
-                        points += ChainPoint(0L, maxRowId, f.lastModified(), f.name, true, hash)
+                    val dbJson = NativeArchive.readFileFromTar(arc, "$hash/db_state.json")
+                    val toDb = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
+                    if (toDb > 0) {
+                        val fromDb = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
+                        points += ChainPoint(fromDb, toDb, f.lastModified(), f.name, true, hash)
+                    } else {
+                        // Old format: read SQL tail via JNI (in-process, no binder)
+                        val maxRowId = NativeArchive.getTarSqlMaxRowId(arc, "$hash/EnMicroMsg_baseline.sql")
+                        if (maxRowId > 0)
+                            points += ChainPoint(0L, maxRowId, f.lastModified(), f.name, true, hash)
+                    }
                 }
 
                 // Incremental archives: extract db_state.json for from/to
