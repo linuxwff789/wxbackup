@@ -335,7 +335,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                         if (content_padding <= size - off) {
                             off += content_padding;
                             content_padding = 0;
-                            complete = found;
+                            complete = found; found = false;
                         }
                     }
                     continue;
@@ -344,7 +344,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                     size_t take = content_padding < size - off ? content_padding : size - off;
                     off += take;
                     content_padding -= take;
-                    if (content_padding == 0) complete = found;
+                    if (content_padding == 0) complete = found; found = false;
                     continue;
                 }
                 // At a header boundary
