@@ -524,7 +524,7 @@ object BackupOrchestrator {
                     val f = File(arc)
                     // Shell pipe: runs in root process, no Binder timeout
                     val shell = "LD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc ${arc} 2>/dev/null | ${BackupEnv.binDir}/tar -xO '$hash/EnMicroMsg_baseline.sql' 2>/dev/null | tail -c 4096"
-                    val result = RootGateways.run(shell, 120_000)
+                    val result = RootGateways.run(shell, 180_000)
                     val tail = result.stdout
                     val rowId = if (tail.isNotBlank()) {
                         val r = Regex("INSERT[^;]*VALUES\\s*\\(\\s*(\\d+)")
