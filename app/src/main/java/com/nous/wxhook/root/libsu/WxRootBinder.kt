@@ -178,8 +178,8 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 true
             }
             TRANSACTION_GET_FULL_ARCHIVE_ROWID -> {
-                val archivePath = data.readString() ?: return@when false
-                val hash = data.readString() ?: return@when false
+                val archivePath = data.readString() ?: return false
+                val hash = data.readString() ?: return false
                 // Fast path: try db_state only
                 val fastResult = NativeArchive.getFullArchiveRowId(archivePath, hash)
                 if (fastResult > 0) {
@@ -207,7 +207,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 true
             }
             TRANSACTION_POLL_FULL_ARCHIVE_ROWID -> {
-                val hash = data.readString() ?: return@when false
+                val hash = data.readString() ?: return false
                 val resultFile = "/data/local/tmp/wxhook_full_rowid_${hash}.txt"
                 val result = if (File(resultFile).exists())
                     runCatching { File(resultFile).readText().trim().toLongOrNull() ?: -2L }.getOrDefault(-2L)
