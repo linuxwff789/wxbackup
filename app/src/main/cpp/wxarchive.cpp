@@ -310,7 +310,10 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
         std::string result;
         const char* target;
         bool found = false;
+        bool complete = false;
         off_t content_remaining = 0;
+        size_t content_padding = 0;
+        size_t entry_padding = 0;
         size_t maxSize = 0; // 0 = read all, >0 = keep only last N bytes
 
         void feed(const char* data, size_t size) {
@@ -326,22 +329,32 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                             if (result.size() > maxSize) result.erase(0, result.size() - maxSize);
                         }
                     }
-                    content_remaining -= take;
                     off += take;
-                    if (content_remaining == 0 && !found) {
-                        off += (512 - ((off + take) % 512)) % 512;
+                    content_remaining -= take;
+                    if (content_remaining == 0) {
+                        content_padding = entry_padding;
+                        if (content_padding <= size - off) {
+                            off += content_padding;
+                            content_padding = 0;
+                            complete = found;
+                        }
                     }
+                    continue;
+                }
+                if (content_padding > 0) {
+                    size_t take = content_padding < size - off ? content_padding : size - off;
+                    off += take;
+                    content_padding -= take;
+                    if (content_padding == 0) complete = found;
                     continue;
                 }
                 // At a header boundary
                 if (off + 512 > size) break; // need more data
                 const ustar_header* h = reinterpret_cast<const ustar_header*>(data + off);
-                if (h->name[0] == '\0') { found = true; content_remaining = -1; return; } // EOT
+                if (h->name[0] == '\0') return;
                 if (memcmp(h->magic, "ustar", 5) != 0) { off += 512; continue; }
-                // Parse entry
                 uint64_t entry_size = 0;
                 for (int i = 0; i < 12; i++) entry_size = (entry_size << 3) | (h->size[i] - '0');
-                // Build full path from prefix+name
                 char path[512];
                 size_t pl = 0;
                 if (h->prefix[0]) { pl = strlen(h->prefix); memcpy(path, h->prefix, pl); path[pl++] = '/'; }
@@ -350,10 +363,11 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 if (strcmp(path, target) == 0) {
                     found = true;
                     if (h->typeflag == '0' || h->typeflag == '\0') {
-                        result.reserve((size_t)entry_size);
+                        if (maxSize == 0) result.reserve((size_t)entry_size);
                         content_remaining = (off_t)entry_size;
+                        entry_padding = (512 - (entry_size % 512)) % 512;
                     } else {
-                        content_remaining = -1; // directory or other, mark done
+                        complete = true;
                         return;
                     }
                 } else {
@@ -384,7 +398,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
                 if (ZSTD_isError(err)) break;
                 if (ob.pos > 0) scan(outbuf, ob.pos);
-                if (tr.result.size() > 0 && tr.content_remaining == (off_t)-1) break;
+                if (tr.complete) break;
                 if (last && err == 0) break;
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
             }
@@ -433,8 +447,8 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     return env->NewStringUTF(content.c_str());
 }
 
-// ── get rowid from full archive: read db_state.json from archive. 
-//     No SQL fallback (too large → Binder timeout / service killed).
+// ── get rowid from full archive: one native scan ──
+//     db_state.json first, SQL tail fallback for old archives.
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_nous_wxhook_backup_NativeArchive_getFullArchiveRowId(
     JNIEnv* env, jobject, jstring archivePath_, jstring hash_) {
@@ -444,16 +458,26 @@ Java_com_nous_wxhook_backup_NativeArchive_getFullArchiveRowId(
     int comp = detect_compression(archivePath);
     std::string dbPath = std::string(hash) + "/db_state.json";
     std::string dbJson = read_file_from_tar(archivePath, comp, dbPath.c_str(), 4096);
+    jlong result = 0;
+    if (!dbJson.empty()) {
+        size_t kp = dbJson.rfind("\"lastMessageRowId\"");
+        if (kp != std::string::npos) {
+            size_t vp = dbJson.find(':', kp);
+            if (vp != std::string::npos) result = (jlong)strtoull(dbJson.c_str() + vp + 1, nullptr, 10);
+        }
+    }
+    if (result == 0) {
+        std::string sqlPath = std::string(hash) + "/EnMicroMsg_baseline.sql";
+        std::string tail = read_file_from_tar(archivePath, comp, sqlPath.c_str(), 4096);
+        size_t pos = tail.rfind("INSERT");
+        if (pos != std::string::npos) {
+            size_t vpos = tail.find("VALUES(", pos);
+            if (vpos != std::string::npos) result = (jlong)strtoull(tail.c_str() + vpos + 7, nullptr, 10);
+        }
+    }
     env->ReleaseStringUTFChars(archivePath_, archivePath);
     env->ReleaseStringUTFChars(hash_, hash);
-    if (dbJson.empty()) return 0;
-    size_t kp = dbJson.rfind("\"lastMessageRowId\"");
-    if (kp == std::string::npos) return 0;
-    size_t vp = dbJson.find(':', kp);
-    if (vp == std::string::npos) return 0;
-    char* end = nullptr;
-    uint64_t rid = strtoull(dbJson.c_str() + vp + 1, &end, 10);
-    return (jlong)rid;
+    return result;
 }
 
 // ── get max rowid from SQL file in tar ──
