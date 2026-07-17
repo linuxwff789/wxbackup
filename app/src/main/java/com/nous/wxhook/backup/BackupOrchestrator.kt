@@ -617,15 +617,27 @@ object BackupOrchestrator {
                     callback?.onProgress("[$hash] ⚠️ 链为空，跳过保存", 0, 0)
                 }
 
-                // Per-user manifest (live scan)
-                callback?.onProgress("[$hash] 扫描附件清单...", 0, 0)
+                // Per-user manifest: extract from full archive (snapshot at backup time)
+                callback?.onProgress("[$hash] 提取附件清单...", 0, 0)
                 val userDir = File(BackupEnv.backupDataDir, hash)
                 RootGateways.mkdirs(userDir.absolutePath)
-                val userFiles = wxPaths.filter { WeChatSourceResolver.extractUserHash(it) == hash }
-                    .flatMap { wxBasePath2 ->
-                        FileManifest.scanWeChatAttachments(wxBasePath2, hash, ATT_DIRS)
+                val manifestJson = try {
+                    NativeArchive.readFileFromTar(fullArchives.firstOrNull() ?: "", "$hash/file_manifest.json")
+                } catch (e: Throwable) {
+                    Log.e("wxhook:rebuild", "read file_manifest from archive failed", e)
+                    ""
+                }
+                if (manifestJson.isNotBlank()) {
+                    try {
+                        val manifest = JSONObject(manifestJson)
+                        FileManifest.save(userDir, manifest)
+                        Log.i("wxhook:rebuild", "file_manifest saved from archive, entries=${manifest.optJSONArray("entries")?.length() ?: 0}")
+                    } catch (e: Throwable) {
+                        Log.e("wxhook:rebuild", "save file_manifest failed", e)
                     }
-                FileManifest.save(userDir, FileManifest.toManifest(userFiles, "rebuild_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}"))
+                } else {
+                    Log.e("wxhook:rebuild", "file_manifest empty in archive for $hash")
+                }
 
                 // Records from bestChain
                 for (p in bestChain) {
