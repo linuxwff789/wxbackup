@@ -522,9 +522,12 @@ object BackupOrchestrator {
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    // Shell pipe: wrap in sh -c for reliable pipe handling
-                    val shell = "sh -c 'LD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc ${arc} 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$hash/EnMicroMsg_baseline.sql\" 2>/dev/null | tail -c 4096'"
-                    val cmdResult = com.nous.wxhook.rootbridge.RootCommandRunner.runSu(shell, 180_000)
+                    // Write shell pipe to temp script file to avoid quoting issues with su -c
+                    val scriptFile = java.io.File.createTempFile("rebuild_rowid", ".sh")
+                    scriptFile.writeText("#!/system/bin/sh\nLD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc \"${arc}\" 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$hash/EnMicroMsg_baseline.sql\" 2>/dev/null | tail -c 4096\n")
+                    scriptFile.setExecutable(true)
+                    val cmdResult = com.nous.wxhook.rootbridge.RootCommandRunner.runSu("sh ${scriptFile.absolutePath}", 180_000)
+                    scriptFile.delete()
                     Log.i("wxhook:rebuild", "shell exit=${cmdResult.exitCode} err=${cmdResult.stderr.take(200)} out_len=${cmdResult.stdout.length}")
                     val tail = cmdResult.stdout
                     val rowId = if (tail.isNotBlank()) {
