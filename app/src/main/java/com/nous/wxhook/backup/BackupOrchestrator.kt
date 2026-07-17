@@ -536,26 +536,22 @@ object BackupOrchestrator {
                 callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
 
-                // Full archives: use NativeArchive if storage permission, else Binder
-                val useNative = hasStoragePermission()
-                callback?.onProgress("[$hash] 分析全量包 (JNI=${useNative})...", 0, 0)
+                // Full archives: NativeArchive JNI — direct app-process read, no Binder
+                callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
                     val rowId = try {
-                        if (useNative) {
-                            Log.i("wxhook:rebuild", "calling NativeArchive.getFullArchiveRowId($arc, $hash)")
-                            NativeArchive.getFullArchiveRowId(arc, hash)
-                        } else {
-                            RootGateways.getFullArchiveRowId(arc, hash)
-                        }
+                        NativeArchive.getFullArchiveRowId(arc, hash)
                     } catch (e: Throwable) {
-                        Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name} (native=$useNative)", e)
+                        Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name}", e)
                         0L
                     }
                     if (rowId > 0) points += ChainPoint(
                         centralized.optLong("lastMessageRowIdFrom", 0L), rowId,
                         f.lastModified(), f.name, true, hash)
-                    Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=$rowId (native=$useNative)")
+                    Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=$rowId")
+                }
+                }
                 }
 
                 // Incremental archives: extract db_state.json for from/to

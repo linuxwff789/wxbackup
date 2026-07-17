@@ -410,7 +410,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 if (last && err == 0) break;
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
             }
-            if (tr.found) break;
+            // removed: found check caused early break before SQL content fully read
             if (feof(f)) break;
         }
         ZSTD_freeDCtx(dctx);
