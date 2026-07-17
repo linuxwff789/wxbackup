@@ -94,6 +94,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun handleAction(action: String, data: Any?) {
         android.util.Log.d("wxhook:Settings", "handleAction: $action")
+        android.util.Log.e("wxhook:Settings", "HANDLE ACTION: $action")
         when {
             action == "save_webdav" -> {
                 val cfg = runCatching { JSONObject(File(filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())

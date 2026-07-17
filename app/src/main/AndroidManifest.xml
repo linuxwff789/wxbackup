@@ -53,6 +53,14 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".receiver.RebuildReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.nous.wxhook.REBUILD" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"
