@@ -591,11 +591,15 @@ object BackupOrchestrator {
                 val safeFrom = if (bestChain.isNotEmpty()) bestChain.minOf { it.from } else 0L
                 val safeRowId = if (bestChain.isNotEmpty()) bestChain.maxOf { it.to } else 0L
 
-                // Per-user db_state
-                callback?.onProgress("[$hash] 保存状态: $safeFrom→$safeRowId (链=${bestChain.size})", 0, 0)
-                if (!BackupManifest.saveDbState(hash, "rebuild", safeFrom, safeRowId)) {
-                    runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
-                    BackupManifest.saveDbState(hash, "rebuild", safeFrom, safeRowId)
+                // Per-user db_state (only if chain has data)
+                if (bestChain.isNotEmpty()) {
+                    callback?.onProgress("[$hash] 保存状态: $safeFrom→$safeRowId (链=${bestChain.size})", 0, 0)
+                    if (!BackupManifest.saveDbState(hash, "rebuild", safeFrom, safeRowId)) {
+                        runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
+                        BackupManifest.saveDbState(hash, "rebuild", safeFrom, safeRowId)
+                    }
+                } else {
+                    callback?.onProgress("[$hash] ⚠️ 链为空，跳过保存", 0, 0)
                 }
 
                 // Per-user manifest (live scan)
