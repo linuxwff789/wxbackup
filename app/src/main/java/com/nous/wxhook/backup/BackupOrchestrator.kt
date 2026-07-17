@@ -528,9 +528,25 @@ object BackupOrchestrator {
                         Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name}, reconnecting...", it)
                     }.getOrDefault(0L)
                     if (rowId == 0L) {
-                        // Binder was dead; reconnect and retry once
+                        // Binder dead → full reset + fresh bind
+                        com.nous.wxhook.root.libsu.RootManager.disconnect(com.nous.wxhook.App.instance)
                         runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
-                        Thread.sleep(1000)
+                        // Verify new Binder is alive with a ping
+                        var ready = false
+                        for (i in 0..20) {
+                            val b = com.nous.wxhook.root.libsu.RootManager.currentBinder()
+                            if (b != null) {
+                                try {
+                                    b.transact(0xFE, android.os.Parcel.obtain(), null, android.os.IBinder.FLAG_ONEWAY)
+                                    ready = true
+                                    break
+                                } catch (_: android.os.DeadObjectException) {
+                                    Thread.sleep(500)
+                                }
+                            }
+                            Thread.sleep(500)
+                        }
+                        if (!ready) Log.e("wxhook:rebuild", "Binder ping failed after reconnect")
                         rowId = runCatching {
                             RootGateways.getFullArchiveRowId(arc, hash)
                         }.onFailure {
