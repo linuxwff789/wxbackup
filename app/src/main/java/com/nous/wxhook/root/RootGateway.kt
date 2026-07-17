@@ -34,8 +34,10 @@ interface RootGateway {
     suspend fun listTar(archivePath: String): String
     /** Get max rowid from SQL file in a tar archive via JNI. */
     suspend fun getTarSqlMaxRowId(archivePath: String, filePath: String): Long
-    /** Get rowid from full archive via JNI. Tries db_state.json first, then SQL tail. Single scan. */
+    /** Get rowid from full archive via JNI. Returns -1 if async scan is pending, poll to get result. */
     suspend fun getFullArchiveRowId(archivePath: String, hash: String): Long
+    /** Poll async full archive rowid scan. Returns -2 if still running, >=0 when done. */
+    suspend fun pollFullArchiveRowId(hash: String): Long
     suspend fun run(command: String, timeoutMs: Long = 60_000): CommandResult
     suspend fun runQuiet(command: String, timeoutMs: Long = 60_000): String
     

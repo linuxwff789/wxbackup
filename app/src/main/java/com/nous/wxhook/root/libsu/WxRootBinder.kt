@@ -13,7 +13,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
     override fun asBinder(): android.os.IBinder = this
 
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-        if (code in TRANSACTION_EXEC..TRANSACTION_GET_FULL_ARCHIVE_ROWID) {
+        if (code in TRANSACTION_EXEC..TRANSACTION_POLL_FULL_ARCHIVE_ROWID) {
             data.enforceInterface(DESCRIPTOR)
         }
         return when (code) {
@@ -178,14 +178,40 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 true
             }
             TRANSACTION_GET_FULL_ARCHIVE_ROWID -> {
-                val archivePath = data.readString()
-                val hash = data.readString()
-                val result = try {
-                    NativeArchive.getFullArchiveRowId(archivePath ?: "", hash ?: "")
-                } catch (e: Throwable) {
-                    Log.e("wxhook:archive", "getFullArchiveRowId JNI failed", e)
-                    0L
+                val archivePath = data.readString() ?: return@when false
+                val hash = data.readString() ?: return@when false
+                // Fast path: try db_state only
+                val fastResult = NativeArchive.getFullArchiveRowId(archivePath, hash)
+                if (fastResult > 0) {
+                    reply?.writeNoException()
+                    reply?.writeLong(fastResult)
+                } else {
+                    // Slow path: start async SQL scan in background thread
+                    val resultFile = "/data/local/tmp/wxhook_full_rowid_${hash}.txt"
+                    File(resultFile).delete() // clear stale result
+                    Log.i("wxhook:archive", "Starting async SQL tail scan for $hash → $resultFile")
+                    Thread {
+                        try {
+                            val sqlPath = "$hash/EnMicroMsg_baseline.sql"
+                            val rowId = NativeArchive.getTarSqlMaxRowId(archivePath, sqlPath)
+                            File(resultFile).writeText(rowId.toString())
+                            Log.i("wxhook:archive", "Async SQL tail scan done: $rowId")
+                        } catch (e: Throwable) {
+                            Log.e("wxhook:archive", "Async SQL tail scan failed", e)
+                            File(resultFile).writeText("0")
+                        }
+                    }.start()
+                    reply?.writeNoException()
+                    reply?.writeLong(-1) // -1 = pending
                 }
+                true
+            }
+            TRANSACTION_POLL_FULL_ARCHIVE_ROWID -> {
+                val hash = data.readString() ?: return@when false
+                val resultFile = "/data/local/tmp/wxhook_full_rowid_${hash}.txt"
+                val result = if (File(resultFile).exists())
+                    runCatching { File(resultFile).readText().trim().toLongOrNull() ?: -2L }.getOrDefault(-2L)
+                else -2L // -2 = still running
                 reply?.writeNoException()
                 reply?.writeLong(result)
                 true
@@ -240,6 +266,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
         const val TRANSACTION_LIST_TAR = android.os.IBinder.FIRST_CALL_TRANSACTION + 14
         const val TRANSACTION_GET_TAR_SQL_MAX_ROWID = android.os.IBinder.FIRST_CALL_TRANSACTION + 15
         const val TRANSACTION_GET_FULL_ARCHIVE_ROWID = android.os.IBinder.FIRST_CALL_TRANSACTION + 16
+        const val TRANSACTION_POLL_FULL_ARCHIVE_ROWID = android.os.IBinder.FIRST_CALL_TRANSACTION + 17
         private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
 
         fun exec(shell: android.os.IBinder, command: String): ExecResult {
@@ -410,6 +437,11 @@ class WxRootBinder : android.os.Binder(), IInterface {
             shell,
             TRANSACTION_GET_FULL_ARCHIVE_ROWID,
         ) { data -> data.writeString(archivePath); data.writeString(hash) }
+
+        fun pollFullArchiveRowId(shell: android.os.IBinder, hash: String): Long = transactLong(
+            shell,
+            TRANSACTION_POLL_FULL_ARCHIVE_ROWID,
+        ) { data -> data.writeString(hash) }
 
         private fun transactInt(
             shell: android.os.IBinder,

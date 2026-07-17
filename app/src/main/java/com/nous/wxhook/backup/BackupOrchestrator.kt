@@ -518,7 +518,7 @@ object BackupOrchestrator {
                 callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
 
-                // Full archives: JNI db_state first, then shell SQL tail, then centralized
+                // Full archives: JNI db_state first, async poll for SQL tail, centralized fallback
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
@@ -527,30 +527,30 @@ object BackupOrchestrator {
                     }.onFailure {
                         Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name}", it)
                     }.getOrDefault(0L).let { nativeRowId ->
-                        if (nativeRowId > 0) nativeRowId
-                        else {
-                            // Binder may have died; fallback to shell pipe in root process
-                            val sqlPath = "$hash/EnMicroMsg_baseline.sql"
-                            val shell = "LD_LIBRARY_PATH=${BackupHookLocal.binPath} ${BackupHookLocal.binPath}/zstd -dc ${arc} 2>/dev/null | ${BackupHookLocal.binPath}/tar -xO '$sqlPath' 2>/dev/null | tail -c 4096"
-                            val result = RootGateways.run(shell, 120_000)
-                            val tail = result.stdout
-                            if (tail.isBlank()) {
-                                Log.e("wxhook:rebuild", "shell SQL tail empty for ${f.name}")
-                                0L
-                            } else {
-                                val r = Regex("INSERT[^;]*VALUES\\s*\\(\\s*(\\d+)")
-                                val m = r.find(tail)
-                                val shellRowId = m?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
-                                Log.i("wxhook:rebuild", "shell SQL tail for ${f.name}: parsed=$shellRowId tail_len=${tail.length}")
-                                shellRowId
+                        when {
+                            nativeRowId > 0 -> nativeRowId
+                            nativeRowId == -1L -> {
+                                // Async scan pending; poll with timeout
+                                val deadline = System.currentTimeMillis() + 120_000
+                                var polled = -2L
+                                while (polled == -2L && System.currentTimeMillis() < deadline) {
+                                    Thread.sleep(2000)
+                                    polled = runCatching {
+                                        RootGateways.pollFullArchiveRowId(hash)
+                                    }.onFailure {
+                                        Log.e("wxhook:rebuild", "pollFullArchiveRowId failed", it)
+                                    }.getOrDefault(-2L)
+                                }
+                                if (polled > 0) polled
+                                else centralized.optLong("lastMessageRowId", 0L)
                             }
+                            else -> centralized.optLong("lastMessageRowId", 0L)
                         }
                     }
-                    val finalRowId = if (rowId > 0) rowId else centralized.optLong("lastMessageRowId", 0L)
-                    if (finalRowId > 0) points += ChainPoint(
-                        centralized.optLong("lastMessageRowIdFrom", 0L), finalRowId,
+                    if (rowId > 0) points += ChainPoint(
+                        centralized.optLong("lastMessageRowIdFrom", 0L), rowId,
                         f.lastModified(), f.name, true, hash)
-                    Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=$finalRowId source=${if (rowId>0) "archive" else "centralized"}")
+                    Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=$rowId source=${if (rowId > 0) "archive" else "centralized"}")
                 }
 
                 // Incremental archives: extract db_state.json for from/to

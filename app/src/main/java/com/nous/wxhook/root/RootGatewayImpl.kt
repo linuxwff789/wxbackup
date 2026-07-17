@@ -143,6 +143,11 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
         com.nous.wxhook.root.libsu.WxRootBinder.getFullArchiveRowId(binder, archivePath, hash)
     }
 
+    override suspend fun pollFullArchiveRowId(hash: String): Long = withContext(Dispatchers.IO) {
+        val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder() ?: return@withContext -2L
+        com.nous.wxhook.root.libsu.WxRootBinder.pollFullArchiveRowId(binder, hash)
+    }
+
     override suspend fun run(command: String, timeoutMs: Long): CommandResult = exec(command, timeoutMs)
 
     override suspend fun exec(command: String, timeoutMs: Long): CommandResult = withContext(Dispatchers.IO) {
