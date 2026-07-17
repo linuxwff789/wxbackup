@@ -522,30 +522,39 @@ object BackupOrchestrator {
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    val rowId = runCatching {
+                    var nativeRowId = runCatching {
                         RootGateways.getFullArchiveRowId(arc, hash)
                     }.onFailure {
                         Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name}", it)
-                    }.getOrDefault(0L).let { nativeRowId ->
-                        when {
-                            nativeRowId > 0 -> nativeRowId
-                            nativeRowId == -1L -> {
-                                // Async scan pending; poll with timeout
-                                val deadline = System.currentTimeMillis() + 120_000
-                                var polled = -2L
-                                while (polled == -2L && System.currentTimeMillis() < deadline) {
-                                    Thread.sleep(2000)
-                                    polled = runCatching {
-                                        RootGateways.pollFullArchiveRowId(hash)
-                                    }.onFailure {
-                                        Log.e("wxhook:rebuild", "pollFullArchiveRowId failed", it)
-                                    }.getOrDefault(-2L)
-                                }
-                                if (polled > 0) polled
-                                else centralized.optLong("lastMessageRowId", 0L)
+                    }.getOrDefault(-9L) // -9 = Binder dead
+                    // Retry once with Binder reconnect
+                    if (nativeRowId == -9L) {
+                        runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
+                        Thread.sleep(1000)
+                        nativeRowId = runCatching {
+                            RootGateways.getFullArchiveRowId(arc, hash)
+                        }.onFailure {
+                            Log.e("wxhook:rebuild", "getFullArchiveRowId retry failed for ${f.name}", it)
+                        }.getOrDefault(-9L)
+                    }
+                    val rowId = when {
+                        nativeRowId > 0 -> nativeRowId
+                        nativeRowId == -1L -> {
+                            // Async scan pending; poll with timeout
+                            val deadline = System.currentTimeMillis() + 120_000
+                            var polled = -2L
+                            while (polled == -2L && System.currentTimeMillis() < deadline) {
+                                Thread.sleep(2000)
+                                polled = runCatching {
+                                    RootGateways.pollFullArchiveRowId(hash)
+                                }.onFailure {
+                                    Log.e("wxhook:rebuild", "pollFullArchiveRowId failed", it)
+                                }.getOrDefault(-2L)
                             }
-                            else -> centralized.optLong("lastMessageRowId", 0L)
+                            if (polled > 0) polled
+                            else centralized.optLong("lastMessageRowId", 0L)
                         }
+                        else -> centralized.optLong("lastMessageRowId", 0L)
                     }
                     if (rowId > 0) points += ChainPoint(
                         centralized.optLong("lastMessageRowIdFrom", 0L), rowId,
