@@ -15,17 +15,25 @@ object WeChatSourceResolver {
     fun findWxPaths(): List<String> {
         val paths = mutableListOf<String>()
         try {
-            val pid = TargetAppController.findWeChatPid() ?: return emptyList()
-            val basePath = "/proc/$pid/root/data/data/com.tencent.mm/MicroMsg"
-            val dirsOutput = RootGateways.runQuiet("ls $basePath 2>/dev/null")
-            val dirs = dirsOutput.lines().filter { it.isNotBlank() }
-            for (d in dirs) {
-                val dbCheck = RootGateways.runQuiet("ls $basePath/$d/EnMicroMsg.db 2>/dev/null")
-                if (dbCheck.trim().isNotEmpty()) {
-                    paths.add("$basePath/$d")
-                }
+            val pid = TargetAppController.findWeChatPid()
+            if (pid == null) {
+                android.util.Log.e("wxhook:discover", "WeChat PID not found")
+                return emptyList()
             }
-        } catch (_: Exception) {}
+            val basePath = "/proc/$pid/root/data/data/com.tencent.mm/MicroMsg"
+            val dirsResult = RootGateways.run("ls $basePath 2>&1", 10_000)
+            android.util.Log.i("wxhook:discover", "base=$basePath ls=${dirsResult.summary()} output=${dirsResult.output().take(1000)}")
+            val dirs = dirsResult.stdout.lines().filter { it.isNotBlank() }
+            for (d in dirs) {
+                val dbPath = "$basePath/$d/EnMicroMsg.db"
+                val dbResult = RootGateways.run("ls $dbPath 2>&1", 10_000)
+                android.util.Log.i("wxhook:discover", "db=$dbPath result=${dbResult.summary()} output=${dbResult.output().take(300)}")
+                if (dbResult.isSuccess) paths.add("$basePath/$d")
+            }
+            android.util.Log.i("wxhook:discover", "resolved paths=$paths")
+        } catch (e: Throwable) {
+            android.util.Log.e("wxhook:discover", "findWxPaths failed", e)
+        }
         return paths
     }
 

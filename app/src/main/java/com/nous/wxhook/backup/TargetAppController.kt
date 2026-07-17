@@ -12,9 +12,12 @@ object TargetAppController {
      * Returns the PID of com.tencent.mm, or null if not running.
      */
     fun findWeChatPid(): String? {
-        val result = RootGateways.run("pidof com.tencent.mm", 10_000)
-        val pid = result.stdout.trim()
-        return if (pid.isNotEmpty()) pid else null
+        val result = runCatching { RootGateways.run("pidof com.tencent.mm", 10_000) }
+            .onFailure { android.util.Log.e("wxhook:discover", "pidof failed", it) }
+            .getOrNull() ?: return null
+        val pid = result.stdout.trim().split(Regex("\\s+")).firstOrNull { it.all(Char::isDigit) }
+        android.util.Log.i("wxhook:discover", "pidof com.tencent.mm: stdout=${result.stdout.trim()} stderr=${result.stderr.trim()} exit=${result.exitCode} selected=$pid")
+        return pid
     }
 
     /**
