@@ -508,41 +508,30 @@ object BackupOrchestrator {
                 callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
 
-                // Full archives: use NativeArchive JNI directly (no Binder, no timeout)
+                // Full archives: use JNI via Binder (root process has file access)
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
-                try {
-                    // Force load native library if not already loaded
-                    NativeArchive::class.java
-                } catch (e: Throwable) {
-                    Log.e("wxhook:rebuild", "NativeArchive load failed", e)
-                    callback?.onProgress("[$hash] 加载NativeArchive失败: ${e.message}", 0, 0)
-                }
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    var fullRowId = 0L
-                    try {
-                        val dbJson = NativeArchive.readFileFromTar(arc, "$hash/db_state.json")
-                        val toDb = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
-                        if (toDb > 0) {
-                            val fromDb = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
-                            points += ChainPoint(fromDb, toDb, f.lastModified(), f.name, true, hash)
-                            fullRowId = toDb
-                        }
-                    } catch (e1: Throwable) {
-                        Log.e("wxhook:rebuild", "readFileFromTar failed for $hash/db_state.json in $arc", e1)
-                    }
-                    if (fullRowId == 0L) {
-                        try {
-                            val maxRowId = NativeArchive.getTarSqlMaxRowId(arc, "$hash/EnMicroMsg_baseline.sql")
-                            if (maxRowId > 0) {
-                                points += ChainPoint(0L, maxRowId, f.lastModified(), f.name, true, hash)
-                                fullRowId = maxRowId
-                            }
-                        } catch (e2: Throwable) {
-                            Log.e("wxhook:rebuild", "getTarSqlMaxRowId failed for $hash/EnMicroMsg_baseline.sql in $arc", e2)
+                    // Try db_state.json via Binder (fast, small file)
+                    val dbJson = RootGateways.readFileFromTar(arc, "$hash/db_state.json")
+                    val toDb = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
+                    if (toDb > 0) {
+                        val fromDb = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
+                        points += ChainPoint(fromDb, toDb, f.lastModified(), f.name, true, hash)
+                    } else {
+                        // Old format: read SQL tail via Binder JNI (returns long only)
+                        val maxRowId = RootGateways.getTarSqlMaxRowId(arc, "$hash/EnMicroMsg_baseline.sql")
+                        if (maxRowId > 0) {
+                            points += ChainPoint(0L, maxRowId, f.lastModified(), f.name, true, hash)
+                        } else {
+                            // Fallback: use centralized db_state if archive provides nothing
+                            val existing = BackupManifest.loadDbState(hash)
+                            val oldRowId = existing.optLong("lastMessageRowId", 0L)
+                            if (oldRowId > 0)
+                                points += ChainPoint(0L, oldRowId, f.lastModified(), f.name, true, hash)
                         }
                     }
-                    Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=$fullRowId")
+                    Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=${points.lastOrNull { it.name == f.name }?.to ?: 0}")
                 }
 
                 // Incremental archives: extract db_state.json for from/to
@@ -551,7 +540,7 @@ object BackupOrchestrator {
                     val f = File(arc)
                     var incrFrom = 0L; var incrTo = 0L
                     try {
-                        val dbJson = NativeArchive.readFileFromTar(arc, "$hash/db_state.json")
+                        val dbJson = RootGateways.readFileFromTar(arc, "$hash/db_state.json")
                         incrFrom = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
                         incrTo = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
                     } catch (e: Throwable) {
@@ -561,7 +550,7 @@ object BackupOrchestrator {
                         points += ChainPoint(incrFrom, incrTo, f.lastModified(), f.name, false, hash)
                     } else if (incrTo > 0) {
                         try {
-                            val listing = NativeArchive.listTar(arc)
+                            val listing = RootGateways.listTar(arc)
                             val m = Regex("incr_(\\d+)_to_(\\d+)\\.sql").find(listing)
                             incrFrom = m?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
                             points += ChainPoint(incrFrom, incrTo, f.lastModified(), f.name, false, hash)
