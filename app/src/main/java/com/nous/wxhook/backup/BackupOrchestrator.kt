@@ -611,29 +611,43 @@ object BackupOrchestrator {
                     callback?.onProgress("[$hash] ⚠️ 链为空，跳过保存", 0, 0)
                 }
 
-                // Per-user manifest: extract from full archive (snapshot at backup time)
+                // Per-user manifest: merge from all archives in chain
                 callback?.onProgress("[$hash] 提取附件清单...", 0, 0)
                 val userDir = File(BackupEnv.backupDataDir, hash)
                 RootGateways.mkdirs(userDir.absolutePath)
-                val manifestJson = try {
-                    NativeArchive.readFileFromTar(fullArchives.firstOrNull() ?: "", "$hash/file_manifest.json")
-                } catch (e: Throwable) {
-                    Log.e("wxhook:rebuild", "read file_manifest from archive failed", e)
-                    ""
-                }
-                if (manifestJson.isNotBlank()) {
+                val mergedFiles = mutableListOf<JSONObject>()
+                for (cp in bestChain) {
+                    val arcPath = File(BackupEnv.backupDataDir, cp.name).absolutePath
                     try {
-                        val manifest = JSONObject(manifestJson)
-                        FileManifest.save(userDir, manifest)
-                        Log.i("wxhook:rebuild", "file_manifest saved from archive, entries=${manifest.optJSONArray("entries")?.length() ?: 0}")
+                        val json = NativeArchive.readFileFromTar(arcPath, "$hash/file_manifest.json")
+                        if (json.isNotBlank()) {
+                            val manifest = JSONObject(json)
+                            val files = manifest.optJSONArray("files") ?: manifest.optJSONArray("entries")
+                            if (files != null) {
+                                for (i in 0 until files.length()) {
+                                    mergedFiles.add(files.getJSONObject(i))
+                                }
+                                Log.i("wxhook:rebuild", "manifest from ${cp.name}: +${files.length()} files")
+                            }
+                        }
                     } catch (e: Throwable) {
-                        Log.e("wxhook:rebuild", "save file_manifest failed", e)
+                        Log.e("wxhook:rebuild", "read manifest from ${cp.name} failed", e)
                     }
+                }
+                if (mergedFiles.isNotEmpty()) {
+                    val finalManifest = JSONObject().apply {
+                        put("version", 1)
+                        put("tag", "rebuild_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}")
+                        put("fileCount", mergedFiles.size)
+                        put("files", JSONArray(mergedFiles))
+                    }
+                    FileManifest.save(userDir, finalManifest)
+                    Log.i("wxhook:rebuild", "manifest saved: ${mergedFiles.size} files from ${bestChain.size} archives")
                 } else {
-                    Log.e("wxhook:rebuild", "file_manifest empty in archive for $hash")
+                    Log.e("wxhook:rebuild", "no manifest extracted for $hash")
                 }
 
-                // Records from bestChain
+// Records from bestChain
                 for (p in bestChain) {
                     rebuiltRecords.put(JSONObject().apply {
                         put("tag", SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date(p.time)))
