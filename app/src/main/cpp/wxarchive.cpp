@@ -359,8 +359,16 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 if (h->prefix[0]) { pl = strlen(h->prefix); memcpy(path, h->prefix, pl); path[pl++] = '/'; }
                 size_t nl = strlen(h->name); memcpy(path + pl, h->name, nl); pl += nl;
                 path[pl] = '\0';
+                // Debug: log first few tar headers
+                if (pl > 0 && pl < 200) {
+                    FILE* dbg5 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+                    if (dbg5) { fprintf(dbg5, "header: path=%s size=%lu prefix=%s\n", path, (unsigned long)entry_size, h->prefix); fclose(dbg5); }
+                }
                 if (strcmp(path, target) == 0) {
                     found = true;
+                    __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "FOUND target=%s entry_size=%lu", target, (unsigned long)entry_size);
+                    FILE* dbg4 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+                    if (dbg4) { fprintf(dbg4, "FOUND target=%s entry_size=%lu\n", target, (unsigned long)entry_size); fclose(dbg4); }
                     if (h->typeflag == '0' || h->typeflag == '\0') {
                         if (maxSize == 0) result.reserve((size_t)entry_size);
                         content_remaining = (off_t)entry_size;
