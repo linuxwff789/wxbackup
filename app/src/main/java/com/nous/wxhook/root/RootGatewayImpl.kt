@@ -120,8 +120,22 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
     }
 
     override suspend fun readFileFromTar(archivePath: String, filePath: String): String = withContext(Dispatchers.IO) {
-        val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder() ?: return@withContext ""
-        com.nous.wxhook.root.libsu.WxRootBinder.readFileFromTar(binder, archivePath, filePath)
+        // Try JNI first (direct, no Binder)
+        val jniResult = try {
+            com.nous.wxhook.backup.NativeArchive.readFileFromTar(archivePath, filePath)
+        } catch (_: Throwable) { "" }
+        if (jniResult.isNotBlank()) return@withContext jniResult
+
+        // Fallback: Binder
+        val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder()
+        if (binder != null) {
+            val binderResult = com.nous.wxhook.root.libsu.WxRootBinder.readFileFromTar(binder, archivePath, filePath)
+            if (binderResult.isNotBlank()) return@withContext binderResult
+        }
+
+        // Fallback: shell tar -xO
+        val cmd = "tar -xf ${ShellEscaper.quote(archivePath)} -O ${ShellEscaper.quote(filePath)} 2>/dev/null"
+        runQuiet(cmd, 30_000)
     }
 
     override suspend fun listTar(archivePath: String): String = withContext(Dispatchers.IO) {
