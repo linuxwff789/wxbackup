@@ -525,8 +525,18 @@ object BackupOrchestrator {
                     var rowId = runCatching {
                         RootGateways.getFullArchiveRowId(arc, hash)
                     }.onFailure {
-                        Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name}", it)
+                        Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name}, reconnecting...", it)
                     }.getOrDefault(0L)
+                    if (rowId == 0L) {
+                        // Binder was dead; reconnect and retry once
+                        runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
+                        Thread.sleep(1000)
+                        rowId = runCatching {
+                            RootGateways.getFullArchiveRowId(arc, hash)
+                        }.onFailure {
+                            Log.e("wxhook:rebuild", "getFullArchiveRowId retry failed for ${f.name}", it)
+                        }.getOrDefault(0L)
+                    }
                     if (rowId == -1L) {
                         // Async scan running; poll with timeout
                         val deadline = System.currentTimeMillis() + 180_000
