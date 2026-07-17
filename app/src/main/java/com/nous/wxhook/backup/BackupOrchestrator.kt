@@ -522,11 +522,10 @@ object BackupOrchestrator {
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    // Write shell pipe to temp script in world-readable location
-                    val scriptFile = java.io.File("/data/local/tmp/rebuild_rowid_${System.currentTimeMillis()}.sh")
+                    // Write shell pipe to temp script (app cache dir, readable by root)
+                    val scriptFile = java.io.File(com.nous.wxhook.App.instance.cacheDir, "rebuild_rowid_${System.currentTimeMillis()}.sh")
                     scriptFile.writeText("#!/system/bin/sh\nLD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc \"${arc}\" 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$hash/EnMicroMsg_baseline.sql\" 2>/dev/null | tail -c 4096\n")
-                    scriptFile.setExecutable(true, false)
-                    scriptFile.setReadable(true, false)
+                    scriptFile.setExecutable(true)
                     val cmdResult = com.nous.wxhook.rootbridge.RootCommandRunner.runSu("sh ${scriptFile.absolutePath}", 180_000)
                     scriptFile.delete()
                     Log.i("wxhook:rebuild", "shell exit=${cmdResult.exitCode} err=${cmdResult.stderr.take(200)} out_len=${cmdResult.stdout.length}")
