@@ -300,6 +300,7 @@ static int detect_compression(const char* path); // forward
 static std::string read_file_from_tar(const char* input, int comp, const char* target, size_t maxSize = 0) {
     FILE* f = fopen(input, "rb");
     if (!f) return "";
+    (void)maxSize;
 
     const size_t BUF = 256 * 1024;
     char inbuf[BUF];
