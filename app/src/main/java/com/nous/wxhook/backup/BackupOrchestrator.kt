@@ -518,31 +518,28 @@ object BackupOrchestrator {
                 callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
 
-                // Full archives: new format → db_state, old format → SQL tail
+                // Full archives: JNI async scan (db_state fast, SQL tail async)
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    var rowId = 0L
-                    // 1. Try archive's db_state.json (new format, fast via Binder)
-                    val dbJson = runCatching {
-                        RootGateways.readFileFromTar(arc, "$hash/db_state.json")
-                    }.onFailure { Log.e("wxhook:rebuild","read db_state failed for ${f.name}",it) }.getOrNull() ?: ""
-                    if (dbJson.isNotBlank()) {
-                        rowId = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
-                        Log.i("wxhook:rebuild", "full arc ${f.name}: db_state rowId=$rowId")
-                    }
-                    // 2. No db_state → old format → extract SQL tail via shell
-                    if (rowId == 0L) {
-                        val script = "#!/system/bin/sh\nLD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc \"${arc}\" 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$hash/EnMicroMsg_baseline.sql\" 2>/dev/null | tail -c 4096\n"
-                        val cmdResult = runBlocking { com.nous.wxhook.rootbridge.RootCommandRunner.execStdin(script, 180_000) }
-                        Log.i("wxhook:rebuild", "shell exit=${cmdResult.exitCode} err=${cmdResult.stderr.take(200)} out_len=${cmdResult.stdout.length}")
-                        val tail = cmdResult.stdout
-                        if (tail.isNotBlank()) {
-                            rowId = Regex("INSERT[^;]*VALUES\\s*\\(\\s*(\\d+)").find(tail)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
-                            Log.i("wxhook:rebuild", "shell SQL tail: parsed=$rowId tail_len=${tail.length}")
-                        } else {
-                            Log.e("wxhook:rebuild", "shell SQL tail empty for ${f.name}, skipping")
+                    var rowId = runCatching {
+                        RootGateways.getFullArchiveRowId(arc, hash)
+                    }.onFailure {
+                        Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name}", it)
+                    }.getOrDefault(0L)
+                    if (rowId == -1L) {
+                        // Async scan running; poll with timeout
+                        val deadline = System.currentTimeMillis() + 180_000
+                        var polled = -2L
+                        while (polled == -2L && System.currentTimeMillis() < deadline) {
+                            Thread.sleep(2000)
+                            polled = runCatching {
+                                RootGateways.pollFullArchiveRowId(hash)
+                            }.onFailure {
+                                Log.e("wxhook:rebuild", "poll failed for ${f.name}", it)
+                            }.getOrDefault(-2L)
                         }
+                        rowId = if (polled > 0) polled else 0L
                     }
                     if (rowId > 0) points += ChainPoint(
                         centralized.optLong("lastMessageRowIdFrom", 0L), rowId,
