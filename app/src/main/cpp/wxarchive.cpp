@@ -353,7 +353,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 if (h->name[0] == '\0') return;
                 if (memcmp(h->magic, "ustar", 5) != 0) { off += 512; continue; }
                 uint64_t entry_size = 0;
-                for (int i = 0; i < 12; i++) entry_size = (entry_size << 3) | (h->size[i] - '0');
+                for (int i = 0; i < 12 && h->size[i] >= '0' && h->size[i] <= '7'; i++) entry_size = (entry_size << 3) | (h->size[i] - '0');
                 char path[512];
                 size_t pl = 0;
                 if (h->prefix[0]) { pl = strlen(h->prefix); memcpy(path, h->prefix, pl); path[pl++] = '/'; }
@@ -543,7 +543,7 @@ static std::string list_tar_contents(const char* input, int comp) {
             path[pl] = '\0';
             result += path; result += '\n';
             uint64_t es = 0;
-            for (int i = 0; i < 12; i++) es = (es << 3) | (h->size[i] - '0');
+            for (int i = 0; i < 12 && h->size[i] >= '0' && h->size[i] <= '7'; i++) es = (es << 3) | (h->size[i] - '0');
             off += 512 + ((es + 511) & ~511);
         }
     };
