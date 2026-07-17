@@ -23,6 +23,29 @@ object RootCommandRunner {
         return r.output()
     }
 
+    /** Feed script content to su -c sh via stdin (avoids file permission issues). */
+    fun execStdin(script: String, timeoutMs: Long): CommandResult {
+        return try {
+            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "sh"))
+            val out = StringBuilder()
+            val err = StringBuilder()
+            val outThread = Thread {
+                try { proc.inputStream.bufferedReader().useLines { lines -> lines.forEach { out.appendLine(it) } } } catch (_: Exception) {}
+            }
+            val errThread = Thread {
+                try { proc.errorStream.bufferedReader().useLines { lines -> lines.forEach { err.appendLine(it) } } } catch (_: Exception) {}
+            }
+            outThread.start(); errThread.start()
+            proc.outputStream.bufferedWriter().use { it.write(script); it.flush() }
+            val finished = proc.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (!finished) { proc.destroyForcibly(); outThread.join(1000); errThread.join(1000); return CommandResult(-1, out.toString().trim(), (err.toString() + "\nTIMEOUT").trim(), timedOut = true) }
+            outThread.join(1000); errThread.join(1000)
+            CommandResult(proc.exitValue(), out.toString().trim(), err.toString().trim(), timedOut = false)
+        } catch (e: Exception) {
+            CommandResult(-1, "", e.toString(), false)
+        }
+    }
+
     fun run(cmd: Array<String>, timeoutMs: Long = 60_000): CommandResult {
         return try {
             exec(cmd, timeoutMs)
