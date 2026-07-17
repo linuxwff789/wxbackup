@@ -13,7 +13,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
     override fun asBinder(): android.os.IBinder = this
 
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-        if (code in TRANSACTION_EXEC..TRANSACTION_LIST_TAR) {
+        if (code in TRANSACTION_EXEC..TRANSACTION_GET_TAR_SQL_MAX_ROWID) {
             data.enforceInterface(DESCRIPTOR)
         }
         return when (code) {
@@ -164,6 +164,19 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 reply?.writeString(result)
                 true
             }
+            TRANSACTION_GET_TAR_SQL_MAX_ROWID -> {
+                val archivePath = data.readString()
+                val filePath = data.readString()
+                val result = try {
+                    NativeArchive.getTarSqlMaxRowId(archivePath ?: "", filePath ?: "")
+                } catch (e: Throwable) {
+                    Log.e("wxhook:archive", "getTarSqlMaxRowId JNI failed", e)
+                    0L
+                }
+                reply?.writeNoException()
+                reply?.writeLong(result)
+                true
+            }
             TRANSACTION_WEBDAV_UPLOAD -> {
                 val url = data.readString()
                 val user = data.readString()
@@ -212,6 +225,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
         const val TRANSACTION_WEBDAV_UPLOAD = android.os.IBinder.FIRST_CALL_TRANSACTION + 12
         const val TRANSACTION_READ_FILE_FROM_TAR = android.os.IBinder.FIRST_CALL_TRANSACTION + 13
         const val TRANSACTION_LIST_TAR = android.os.IBinder.FIRST_CALL_TRANSACTION + 14
+        const val TRANSACTION_GET_TAR_SQL_MAX_ROWID = android.os.IBinder.FIRST_CALL_TRANSACTION + 15
         private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
 
         fun exec(shell: android.os.IBinder, command: String): ExecResult {
@@ -373,6 +387,11 @@ class WxRootBinder : android.os.Binder(), IInterface {
             TRANSACTION_LIST_TAR,
         ) { data -> data.writeString(archivePath) }
 
+        fun getTarSqlMaxRowId(shell: android.os.IBinder, archivePath: String, filePath: String): Long = transactLong(
+            shell,
+            TRANSACTION_GET_TAR_SQL_MAX_ROWID,
+        ) { data -> data.writeString(archivePath); data.writeString(filePath) }
+
         private fun transactInt(
             shell: android.os.IBinder,
             transaction: Int,
@@ -405,6 +424,25 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 shell.transact(transaction, data, reply, 0)
                 reply.readException()
                 return reply.readString() ?: ""
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+
+        private fun transactLong(
+            shell: android.os.IBinder,
+            transaction: Int,
+            write: (Parcel) -> Unit,
+        ): Long {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                write(data)
+                shell.transact(transaction, data, reply, 0)
+                reply.readException()
+                return reply.readLong()
             } finally {
                 data.recycle()
                 reply.recycle()

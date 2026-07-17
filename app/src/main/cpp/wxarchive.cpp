@@ -428,6 +428,131 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     return env->NewStringUTF(content.c_str());
 }
 
+// ── read tail of a file from tar (only last ~maxBytes) ──
+static std::string read_tail_from_tar(const char* input, int comp, const char* target, size_t maxBytes = 4096) {
+    FILE* f = fopen(input, "rb");
+    if (!f) return "";
+
+    const size_t BUF = 256 * 1024;
+    char inbuf[BUF];
+    char outbuf[2 * BUF];
+
+    struct TailReader {
+        std::string ring;
+        size_t maxBytes;
+        const char* target;
+        bool found = false;
+        bool collecting = false;
+        off_t content_remaining = 0;
+
+        void feed(const char* data, size_t size) {
+            size_t off = 0;
+            while (off < size) {
+                if (collecting && content_remaining > 0) {
+                    size_t take = (size_t)content_remaining < (size - off) ? (size_t)content_remaining : (size - off);
+                    ring.append(data + off, take);
+                    if (ring.size() > maxBytes) ring.erase(0, ring.size() - maxBytes);
+                    content_remaining -= take;
+                    off += take;
+                    if (content_remaining == 0) { found = true; content_remaining = -1; return; }
+                    continue;
+                }
+                if (off + 512 > size) break;
+                const ustar_header* h = (const ustar_header*)(data + off);
+                if (h->name[0] == '\0') { found = true; content_remaining = -1; return; }
+                if (memcmp(h->magic, "ustar", 5) != 0) { off += 512; continue; }
+                char path[512]; size_t pl = 0;
+                if (h->prefix[0]) { pl = strlen(h->prefix); memcpy(path, h->prefix, pl); path[pl++] = '/'; }
+                size_t nl = strlen(h->name); memcpy(path + pl, h->name, nl); pl += nl;
+                path[pl] = '\0';
+                uint64_t es = 0;
+                for (int i = 0; i < 12; i++) es = (es << 3) | (h->size[i] - '0');
+                if (strcmp(path, target) == 0 && (h->typeflag == '0' || h->typeflag == '\0')) {
+                    collecting = true;
+                    ring.clear();
+                    content_remaining = (off_t)es;
+                } else {
+                    content_remaining = (off_t)es;
+                }
+                off += 512;
+            }
+        }
+    };
+
+    TailReader tr;
+    tr.maxBytes = maxBytes;
+    tr.target = target;
+
+    auto scan = [&](const char* data, size_t size) { tr.feed(data, size); };
+
+    if (comp == 1) {
+        ZSTD_DCtx* dctx = ZSTD_createDCtx();
+        if (!dctx) { fclose(f); return ""; }
+        ZSTD_outBuffer ob = {outbuf, sizeof(outbuf), 0};
+        ZSTD_inBuffer ib = {inbuf, 0, 0};
+        while (true) {
+            ib.size = fread(inbuf, 1, sizeof(inbuf), f); ib.pos = 0;
+            if (ferror(f)) break;
+            bool last = feof(f) != 0;
+            while (true) {
+                ob.pos = 0;
+                size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
+                if (ZSTD_isError(err)) break;
+                if (ob.pos > 0) scan(outbuf, ob.pos);
+                if (tr.found) break;
+                if (last && err == 0) break;
+                if (ob.pos == 0 && ib.pos >= ib.size) break;
+            }
+            if (tr.found) break;
+            if (feof(f)) break;
+        }
+        ZSTD_freeDCtx(dctx);
+    } else if (comp == 2) {
+        z_stream strm; memset(&strm, 0, sizeof(strm));
+        if (inflateInit2(&strm, 15 | 16) != Z_OK) { fclose(f); return ""; }
+        while (true) {
+            strm.avail_in = fread(inbuf, 1, sizeof(inbuf), f); strm.next_in = (Bytef*)inbuf;
+            if (ferror(f)) break;
+            bool last = feof(f) != 0;
+            do {
+                strm.avail_out = sizeof(outbuf); strm.next_out = (Bytef*)outbuf;
+                int ret = inflate(&strm, Z_NO_FLUSH);
+                if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR) break;
+                size_t produced = sizeof(outbuf) - strm.avail_out;
+                if (produced > 0) scan(outbuf, produced);
+                if (tr.found) break;
+                if (ret == Z_STREAM_END) { last = true; break; }
+            } while (strm.avail_out == 0);
+            if (tr.found) break;
+            if (last) break;
+        }
+        inflateEnd(&strm);
+    }
+    fclose(f);
+    return tr.ring;
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_nous_wxhook_backup_NativeArchive_getTarSqlMaxRowId(
+    JNIEnv* env, jobject, jstring archivePath_, jstring filePath_) {
+    const char* archivePath = env->GetStringUTFChars(archivePath_, nullptr);
+    const char* filePath = env->GetStringUTFChars(filePath_, nullptr);
+    if (!archivePath || !filePath) return 0;
+    int comp = detect_compression(archivePath);
+    std::string tail = read_tail_from_tar(archivePath, comp, filePath, 4096);
+    env->ReleaseStringUTFChars(archivePath_, archivePath);
+    env->ReleaseStringUTFChars(filePath_, filePath);
+    if (tail.empty()) return 0;
+    size_t pos = tail.rfind("INSERT");
+    if (pos == std::string::npos) return 0;
+    size_t vpos = tail.find("VALUES(", pos);
+    if (vpos == std::string::npos) return 0;
+    vpos += 7;
+    char* end = nullptr;
+    uint64_t rowid = strtoull(tail.c_str() + vpos, &end, 10);
+    return (jlong)rowid;
+}
+
 // ── list tar entries (newline-separated filenames) ──
 static std::string list_tar_contents(const char* input, int comp) {
     FILE* f = fopen(input, "rb");

@@ -508,7 +508,7 @@ object BackupOrchestrator {
                 callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
 
-                // Full archives: extract SQL or db_state.json for max rowid
+                // Full archives: extract SQL via JNI (tail only, no binder overflow)
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
@@ -518,12 +518,10 @@ object BackupOrchestrator {
                     if (toDb > 0) {
                         points += ChainPoint(fromDb, toDb, f.lastModified(), f.name, true, hash)
                     } else {
-                        // Old format without db_state.json — use centralized db_state if available
-                        val existingState = BackupManifest.loadDbState(hash)
-                        val oldRowId = existingState.optLong("lastMessageRowId", 0L)
-                        if (oldRowId > 0)
-                            points += ChainPoint(0L, oldRowId, f.lastModified(), f.name, true, hash)
-                        // else: skip — no rowid info for this full archive
+                        // Old format — use JNI to read only tail of SQL
+                        val maxRowId = RootGateways.getTarSqlMaxRowId(arc, "$hash/EnMicroMsg_baseline.sql")
+                        if (maxRowId > 0)
+                            points += ChainPoint(0L, maxRowId, f.lastModified(), f.name, true, hash)
                     }
                 }
 

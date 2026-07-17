@@ -16,4 +16,7 @@ object NativeArchive {
     @JvmStatic
     /** List files in a tar[.zst|.gz] archive. Returns newline-separated filenames. */
     external fun listTar(archivePath: String): String
+    @JvmStatic
+    /** Get max rowid from SQL file in a tar archive. Returns 0 if not found. */
+    external fun getTarSqlMaxRowId(archivePath: String, filePath: String): Long
 }

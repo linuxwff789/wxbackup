@@ -133,6 +133,11 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
         com.nous.wxhook.root.libsu.WxRootBinder.listTar(binder, archivePath)
     }
 
+    override suspend fun getTarSqlMaxRowId(archivePath: String, filePath: String): Long = withContext(Dispatchers.IO) {
+        val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder() ?: return@withContext 0L
+        com.nous.wxhook.root.libsu.WxRootBinder.getTarSqlMaxRowId(binder, archivePath, filePath)
+    }
+
     override suspend fun run(command: String, timeoutMs: Long): CommandResult = exec(command, timeoutMs)
 
     override suspend fun exec(command: String, timeoutMs: Long): CommandResult = withContext(Dispatchers.IO) {

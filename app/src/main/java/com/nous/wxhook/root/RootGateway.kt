@@ -32,6 +32,8 @@ interface RootGateway {
     suspend fun readFileFromTar(archivePath: String, filePath: String): String
     /** List files in a tar[.zst|.gz] archive via JNI. */
     suspend fun listTar(archivePath: String): String
+    /** Get max rowid from SQL file in a tar archive via JNI. */
+    suspend fun getTarSqlMaxRowId(archivePath: String, filePath: String): Long
     suspend fun run(command: String, timeoutMs: Long = 60_000): CommandResult
     suspend fun runQuiet(command: String, timeoutMs: Long = 60_000): String
     
