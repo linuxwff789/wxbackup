@@ -480,9 +480,27 @@ object BackupOrchestrator {
 
     // ── Rebuild DB State ──
 
+    private fun hasStoragePermission(): Boolean =
+        android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R ||
+        android.os.Environment.isExternalStorageManager()
+
+    private fun requestStoragePermission() {
+        val ctx = com.nous.wxhook.App.instance ?: return
+        val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+            data = android.net.Uri.parse("package:${ctx.packageName}")
+            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        try { ctx.startActivity(intent) } catch (_: Exception) {}
+    }
+
     fun rebuildDbState(callback: BackupHookLocal.ProgressCallback? = null): String {
         val results = mutableListOf<String>()
         val rebuiltRecords = JSONArray()
+        if (!hasStoragePermission()) {
+            Log.e("wxhook:rebuild", "MANAGE_EXTERNAL_STORAGE not granted, requesting...")
+            requestStoragePermission()
+            callback?.onProgress("⚠️ 请在设置中授权「所有文件访问」权限", 0, 0)
+        }
         return try {
             callback?.onProgress("检查微信登录状态...", 0, 0)
             // 1. Check WeChat is running (needed for manifest scan)
@@ -518,20 +536,25 @@ object BackupOrchestrator {
                 callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
 
-                // Full archives: NativeArchive JNI directly (app process, no Binder)
-                callback?.onProgress("[$hash] 分析全量包...", 0, 0)
+                // Full archives: use NativeArchive if storage permission, else Binder
+                val useNative = hasStoragePermission()
+                callback?.onProgress("[$hash] 分析全量包 (JNI=${useNative})...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
                     val rowId = try {
-                        NativeArchive.getFullArchiveRowId(arc, hash)
+                        if (useNative) {
+                            NativeArchive.getFullArchiveRowId(arc, hash)
+                        } else {
+                            RootGateways.getFullArchiveRowId(arc, hash)
+                        }
                     } catch (e: Throwable) {
-                        Log.e("wxhook:rebuild", "NativeArchive.getFullArchiveRowId failed for ${f.name}", e)
+                        Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name} (native=$useNative)", e)
                         0L
                     }
                     if (rowId > 0) points += ChainPoint(
                         centralized.optLong("lastMessageRowIdFrom", 0L), rowId,
                         f.lastModified(), f.name, true, hash)
-                    Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=$rowId")
+                    Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=$rowId (native=$useNative)")
                 }
 
                 // Incremental archives: extract db_state.json for from/to
