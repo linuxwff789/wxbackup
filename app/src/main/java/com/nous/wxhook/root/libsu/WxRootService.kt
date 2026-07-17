@@ -11,7 +11,12 @@ class WxRootService : RootService() {
 
     override fun onCreate() {
         super.onCreate()
-        // 进入 root 进程，UID=0，直接可访问 /data/data/com.tencent.mm/
+        android.util.Log.i("wxhook:Root", "WxRootService created, PID=${android.os.Process.myPid()}")
+    }
+
+    override fun onDestroy() {
+        android.util.Log.w("wxhook:Root", "WxRootService destroyed — system may have killed it")
+        super.onDestroy()
     }
 
     companion object {
