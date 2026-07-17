@@ -22,8 +22,17 @@ object RootManager {
     @Volatile private var connectionLatch = CountDownLatch(0)
     private val bindLock = Any()
 
+    private val deathRecipient = IBinder.DeathRecipient {
+        Log.w("wxhook:Root", "Binder died — clearing proxy")
+        service = null
+        bound = false
+        binding = false
+    }
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            service?.unlinkToDeath(deathRecipient, 0)
+            binder?.linkToDeath(deathRecipient, 0)
             service = binder
             bound = binder != null
             binding = false
@@ -40,10 +49,8 @@ object RootManager {
     }
 
     suspend fun ensureConnected(context: Context): Boolean = withContext(Dispatchers.IO) {
-        if (bound && service != null) return@withContext true
-
+        // Always attempt fresh bind — cached proxy may be dead
         val latch = synchronized(bindLock) {
-            if (bound && service != null) return@synchronized CountDownLatch(0)
             if (!binding) {
                 binding = true
                 connectionLatch = CountDownLatch(1)
@@ -62,6 +69,14 @@ object RootManager {
         }
 
         latch.await(10, TimeUnit.SECONDS)
+        if (!bound && service != null) {
+            // bound may be false but proxy exists — try ping
+            try {
+                service?.transact(0xFE, android.os.Parcel.obtain(), null, android.os.IBinder.FLAG_ONEWAY)
+            } catch (_: android.os.DeadObjectException) {
+                service = null; bound = false
+            }
+        }
         bound && service != null
     }
 

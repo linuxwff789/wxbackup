@@ -13,19 +13,15 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
     private var useLibsu = false
 
     suspend fun ensureRootService(): Boolean {
-        if (com.nous.wxhook.root.libsu.RootManager.currentBinder() != null) {
-            useLibsu = true
-            return true
-        }
         val appContext = context ?: return false
         return try {
             com.nous.wxhook.root.libsu.RootManager.ensureConnected(appContext).also { connected ->
                 useLibsu = connected && com.nous.wxhook.root.libsu.RootManager.currentBinder() != null
-                Log.i("wxhook:Root", "RootService connected=$connected binder=${useLibsu}")
+                Log.i("wxhook:Root", "RootService ensureConnected=$connected binder=${useLibsu}")
             }
         } catch (e: Exception) {
             useLibsu = false
-            Log.e("wxhook:Root", "RootService bind failed", e)
+            Log.e("wxhook:Root", "RootService ensureConnected failed", e)
             false
         }
     }
