@@ -512,24 +512,35 @@ object BackupOrchestrator {
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    // Try db_state.json via Binder (fast, small file)
-                    val dbJson = RootGateways.readFileFromTar(arc, "$hash/db_state.json")
-                    val toDb = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
-                    if (toDb > 0) {
-                        val fromDb = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
-                        points += ChainPoint(fromDb, toDb, f.lastModified(), f.name, true, hash)
-                    } else {
-                        // Old format: read SQL tail via Binder JNI (returns long only)
-                        val maxRowId = RootGateways.getTarSqlMaxRowId(arc, "$hash/EnMicroMsg_baseline.sql")
-                        if (maxRowId > 0) {
-                            points += ChainPoint(0L, maxRowId, f.lastModified(), f.name, true, hash)
+                    try {
+                        // Try db_state.json via Binder (fast, small file)
+                        val dbJson = RootGateways.readFileFromTar(arc, "$hash/db_state.json")
+                        val toDb = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
+                        if (toDb > 0) {
+                            val fromDb = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
+                            points += ChainPoint(fromDb, toDb, f.lastModified(), f.name, true, hash)
                         } else {
-                            // Fallback: use centralized db_state if archive provides nothing
-                            val existing = BackupManifest.loadDbState(hash)
-                            val oldRowId = existing.optLong("lastMessageRowId", 0L)
-                            if (oldRowId > 0)
-                                points += ChainPoint(0L, oldRowId, f.lastModified(), f.name, true, hash)
+                            // Old format: read SQL tail via Binder JNI (returns long only)
+                            val maxRowId = runCatching {
+                                RootGateways.getTarSqlMaxRowId(arc, "$hash/EnMicroMsg_baseline.sql")
+                            }.getOrDefault(0L)
+                            if (maxRowId > 0) {
+                                points += ChainPoint(0L, maxRowId, f.lastModified(), f.name, true, hash)
+                            } else {
+                                // Fallback: use centralized db_state
+                                val existing = BackupManifest.loadDbState(hash)
+                                val oldRowId = existing.optLong("lastMessageRowId", 0L)
+                                if (oldRowId > 0)
+                                    points += ChainPoint(0L, oldRowId, f.lastModified(), f.name, true, hash)
+                            }
                         }
+                    } catch (e: Throwable) {
+                        Log.e("wxhook:rebuild", "full archive processing failed for ${f.name}", e)
+                        // Fallback to centralized db_state
+                        val existing = BackupManifest.loadDbState(hash)
+                        val oldRowId = existing.optLong("lastMessageRowId", 0L)
+                        if (oldRowId > 0)
+                            points += ChainPoint(0L, oldRowId, f.lastModified(), f.name, true, hash)
                     }
                     Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=${points.lastOrNull { it.name == f.name }?.to ?: 0}")
                 }
