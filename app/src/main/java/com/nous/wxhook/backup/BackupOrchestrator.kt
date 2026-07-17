@@ -551,8 +551,6 @@ object BackupOrchestrator {
                         f.lastModified(), f.name, true, hash)
                     Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=$rowId")
                 }
-                }
-                }
 
                 // Incremental archives: extract db_state.json for from/to
                 callback?.onProgress("[$hash] 分析增量包...", 0, 0)
