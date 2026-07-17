@@ -4,7 +4,9 @@ import com.nous.wxhook.core.command.CommandResult
 
 import android.util.Log
 import com.nous.wxhook.root.RootGateways
+import com.nous.wxhook.root.RootGatewayImpl
 import com.nous.wxhook.storage.WxHookPaths
+import kotlinx.coroutines.runBlocking
 import com.nous.wxhook.sync.WebDavClient
 import org.json.JSONArray
 import org.json.JSONObject
