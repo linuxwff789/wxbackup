@@ -518,12 +518,12 @@ object BackupOrchestrator {
                     if (toDb > 0) {
                         points += ChainPoint(fromDb, toDb, f.lastModified(), f.name, true, hash)
                     } else {
-                        val sql = RootGateways.readFileFromTar(arc, "$hash/EnMicroMsg_baseline.sql")
-                        val maxRowId = sql.lineSequence().lastOrNull { it.startsWith("INSERT") }
-                            ?.let { line -> "\\d+".toRegex().find(line.substringAfter("VALUES("))?.value?.toLongOrNull() }
-                            ?: 0L
-                        if (maxRowId > 0)
-                            points += ChainPoint(0L, maxRowId, f.lastModified(), f.name, true, hash)
+                        // Old format without db_state.json — use centralized db_state if available
+                        val existingState = BackupManifest.loadDbState(hash)
+                        val oldRowId = existingState.optLong("lastMessageRowId", 0L)
+                        if (oldRowId > 0)
+                            points += ChainPoint(0L, oldRowId, f.lastModified(), f.name, true, hash)
+                        // else: skip — no rowid info for this full archive
                     }
                 }
 
