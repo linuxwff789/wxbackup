@@ -484,7 +484,7 @@ Java_com_nous_wxhook_backup_NativeArchive_getFullArchiveRowId(
     }
     if (result == 0) {
         std::string sqlPath = std::string(hash) + "/EnMicroMsg_baseline.sql";
-        std::string tail = read_file_from_tar(archivePath, comp, sqlPath.c_str(), 65536);
+        std::string tail = read_file_from_tar(archivePath, comp, sqlPath.c_str(), 1048576);
         __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "sql_tail len=%zu first100=%.100s", tail.size(), tail.c_str());
         FILE* dbg3 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
         if (dbg3) { fprintf(dbg3, "sql_tail_len=%zu first100=%.100s\n", tail.size(), tail.c_str()); fclose(dbg3); }
