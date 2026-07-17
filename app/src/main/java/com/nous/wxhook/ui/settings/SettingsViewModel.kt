@@ -113,6 +113,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 .getOrElse { "重建失败: ${it.message}" }
             withContext(Dispatchers.Main) {
                 _uiState.value = _uiState.value.copy(actionTitle = "设置 ✅ 重建完成")
+                val app = getApplication<Application>()
+                android.widget.Toast.makeText(app, result, android.widget.Toast.LENGTH_LONG).show()
             }
         }
     }
