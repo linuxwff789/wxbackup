@@ -508,7 +508,7 @@ object BackupOrchestrator {
                 callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
 
-                // Full archives: get rowid via combined JNI (single scan)
+                // Full archives: get rowid from archive's db_state.json (fast, no SQL tail)
                 callback?.onProgress("[$hash] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
