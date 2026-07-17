@@ -543,6 +543,7 @@ object BackupOrchestrator {
                     val f = File(arc)
                     val rowId = try {
                         if (useNative) {
+                            Log.i("wxhook:rebuild", "calling NativeArchive.getFullArchiveRowId($arc, $hash)")
                             NativeArchive.getFullArchiveRowId(arc, hash)
                         } else {
                             RootGateways.getFullArchiveRowId(arc, hash)
