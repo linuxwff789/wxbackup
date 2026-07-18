@@ -469,9 +469,13 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     if (!compressed) { fclose(f); return env->NewStringUTF(""); }
     fread(compressed, 1, fsize, f);
     fclose(f);
+    FILE* dbg2 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+    if (dbg2) { fprintf(dbg2, "oneshot: fsize=%ld\n", fsize); fclose(dbg2); }
     
     // Decompress entire file in one shot
     unsigned long long dsize = ZSTD_getFrameContentSize(compressed, fsize);
+    FILE* dbg3 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+    if (dbg3) { fprintf(dbg3, "oneshot: dsize=%llu\n", dsize); fclose(dbg3); }
     if (dsize == ZSTD_CONTENTSIZE_ERROR || dsize == ZSTD_CONTENTSIZE_UNKNOWN) {
         free(compressed);
         return env->NewStringUTF("");
