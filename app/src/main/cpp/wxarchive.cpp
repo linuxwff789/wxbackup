@@ -455,7 +455,7 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     std::string result = read_file_from_tar(archivePath, comp, filePath);
 
     FILE* dbg = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-    if (dbg) { fprintf(dbg, "readFileFromTar: path=%s target=%s result_len=%zu\n", archivePath, filePath, result.size()); fclose(dbg); }
+    if (dbg) { fprintf(dbg, "readFileFromTar: path=%s target=%s result_len=%zu comp=%d\n", archivePath, filePath, result.size(), comp); fclose(dbg); }
 
     env->ReleaseStringUTFChars(archivePath_, archivePath);
     env->ReleaseStringUTFChars(filePath_, filePath);
