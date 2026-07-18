@@ -49,9 +49,20 @@ struct TarReader {
     size_t entry_padding = 0;
     size_t maxSize = 0;
     int entries_scanned = 0;
+    char partial[512];
+    size_t partial_len = 0;
 
     void feed(const char* data, size_t size) {
         size_t off = 0;
+        // Prepend partial block from previous call
+        if (partial_len > 0) {
+            char buf[1024];
+            memcpy(buf, partial, partial_len);
+            memcpy(buf + partial_len, data, size);
+            data = buf;
+            size += partial_len;
+            partial_len = 0;
+        }
         while (off < size) {
             if (content_remaining > 0) {
                 size_t take = (size_t)content_remaining < (size - off)
@@ -90,7 +101,11 @@ struct TarReader {
             }
             // At header boundary
             if (off + 512 > size) {
-                fprintf(stderr, "  feed: need more data (off=%zu, size=%zu, off+512=%zu)\n", off, size, off+512);
+                // Save partial block for next feed call
+                if (size > off) {
+                    memcpy(partial, data + off, size - off);
+                    partial_len = size - off;
+                }
                 break;
             }
             const ustar_header* h = reinterpret_cast<const ustar_header*>(data + off);
@@ -183,16 +198,14 @@ static std::string read_file_from_tar_streaming(const char* path, const char* ta
                     break;
                 }
                 if (ob.pos > 0) scan(outbuf, ob.pos);
-                fprintf(stderr, "  inner[%d]: ob.pos=%zu ib.pos=%zu/%zu err=%zu complete=%d\n",
-                        inner, ob.pos, ib.pos, ib.size, err, tr.complete);
                 inner++;
-                if (tr.complete) { fprintf(stderr, "  inner: complete break\n"); break; }
-                if (last && err == 0) { fprintf(stderr, "  inner: last+err0 break\n"); break; }
+                if (last && err == 0) { fprintf(stderr, "  inner[%d]: last+err0 break\n", inner-1); break; }
                 if (ob.pos == 0 && ib.pos >= ib.size) {
-                    fprintf(stderr, "  inner: no-output+input-exhausted break\n");
+                    fprintf(stderr, "  inner[%d]: no-output+input-exhausted break\n", inner-1);
                     break;
                 }
             }
+            if (tr.complete) { fprintf(stderr, "outer: complete break after %d chunks\n", chunk); break; }
             if (tr.complete) break;
             if (last) {
                 fprintf(stderr, "chunk[%d]: last chunk done, complete=%d result_len=%zu\n",
