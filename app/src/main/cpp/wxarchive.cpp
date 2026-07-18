@@ -299,7 +299,7 @@ Java_com_nous_wxhook_backup_NativeArchive_writeTar(
 static int detect_compression(const char* path); // forward
 static std::string read_file_from_tar(const char* input, int comp, const char* target, size_t maxSize = 0) {
     FILE* f = fopen(input, "rb");
-    if (!f) return "";
+    if (!f) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "FOPEN FAILED: %s\n", input); fclose(e); } return ""; }
 
     const size_t BUF = 256 * 1024;
     char inbuf[BUF];
@@ -407,7 +407,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
             while (true) {
                 ob.pos = 0;
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
-                if (ZSTD_isError(err)) break;
+                if (ZSTD_isError(err)) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "ZSTD_ERROR: %s\n", ZSTD_getErrorName(err)); fclose(e); } break; }
                 if (ob.pos > 0) scan(outbuf, ob.pos);
                 if (tr.complete) break;
                 if (last && err == 0) break;
@@ -530,7 +530,7 @@ Java_com_nous_wxhook_backup_NativeArchive_getTarSqlMaxRowId(
 // ── list tar entries (newline-separated filenames) ──
 static std::string list_tar_contents(const char* input, int comp) {
     FILE* f = fopen(input, "rb");
-    if (!f) return "";
+    if (!f) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "FOPEN FAILED: %s\n", input); fclose(e); } return ""; }
 
     const size_t BUF = 256 * 1024;
     char inbuf[BUF];
@@ -568,7 +568,7 @@ static std::string list_tar_contents(const char* input, int comp) {
             while (true) {
                 ob.pos = 0;
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
-                if (ZSTD_isError(err)) break;
+                if (ZSTD_isError(err)) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "ZSTD_ERROR: %s\n", ZSTD_getErrorName(err)); fclose(e); } break; }
                 if (ob.pos > 0) (*scan)(outbuf, ob.pos);
                 if (last && err == 0) break;
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
