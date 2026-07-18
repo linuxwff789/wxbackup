@@ -246,10 +246,11 @@ object BackupOrchestrator {
                 }
             }
 
-            // 2. Attachments incremental via manifest diff (not find -newermt)
-            val oldManifest = FileManifest.load(dir)
+            // 2. Attachments incremental via per-user manifest diff
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                val userDir = File(BackupEnv.backupDataDir, userHash)
+                val userOldManifest = FileManifest.load(userDir)
                 for (attDir in ATT_DIRS) {
                     val src = "$wxBasePath/$attDir"
                     try {
@@ -257,9 +258,9 @@ object BackupOrchestrator {
                         val currentFiles = FileManifest.scanWeChatAttachments(
                             wxBasePath, userHash, listOf(attDir)
                         )
-                        // Filter to only added or modified relative to old manifest
+                        // Filter to only added or modified relative to per-user manifest
                         val toCopy = currentFiles.filter { entry ->
-                            val oldEntry = FileManifest.findEntry(oldManifest, entry.path)
+                            val oldEntry = FileManifest.findEntry(userOldManifest, entry.path)
                             oldEntry == null || oldEntry.size != entry.size || oldEntry.mtime != entry.mtime
                         }
                         if (toCopy.isEmpty()) continue
@@ -288,39 +289,35 @@ object BackupOrchestrator {
                 }
             }
 
-            // 3. Update manifest with current state, then package
-            val currentSourceFiles = wxPaths.flatMap { wxBasePath ->
-                FileManifest.scanWeChatAttachments(
-                    wxBasePath,
-                    WeChatSourceResolver.extractUserHash(wxBasePath),
-                    ATT_DIRS,
-                )
-            }
-            val diff = FileManifest.diff(oldManifest, currentSourceFiles)
-            if (diff.added.isNotEmpty() || diff.modified.isNotEmpty() || diff.deleted.isNotEmpty()) {
-                val updatedManifest = FileManifest.toManifest(currentSourceFiles, tag)
-                FileManifest.save(dir, updatedManifest)
-                // Per-user manifest: only save files that changed in this increment
-                for (wxBasePath in wxPaths) {
-                    val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                    val uDir = File(BackupEnv.backupDataDir, hash)
-                    RootGateways.mkdirs(uDir.absolutePath)
-                    val changedFiles = (diff.added + diff.modified).filter {
-                        it.path.startsWith("$hash/")
-                    }
-                    if (changedFiles.isNotEmpty()) {
-                        val incrManifest = FileManifest.toManifest(changedFiles, tag)
-                        incrManifest.put("incrFrom", incrFrom)
-                        incrManifest.put("incrTo", incrTo)
-                        FileManifest.save(uDir, incrManifest)
-                    }
+            // 3. Update per-user manifest with full current state, then package
+            val allCurrentFiles = mutableListOf<FileEntry>()
+            for (wxBasePath in wxPaths) {
+                val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                val userDir = File(BackupEnv.backupDataDir, hash)
+                RootGateways.mkdirs(userDir.absolutePath)
+
+                val userCurrentFiles = FileManifest.scanWeChatAttachments(wxBasePath, hash, ATT_DIRS)
+                allCurrentFiles.addAll(userCurrentFiles)
+
+                val userOldManifest = FileManifest.load(userDir)
+                val userDiff = FileManifest.diff(userOldManifest, userCurrentFiles)
+                if (userDiff.added.isNotEmpty() || userDiff.modified.isNotEmpty() || userDiff.deleted.isNotEmpty()) {
+                    // Save FULL per-user manifest (merge), not just incremental changes
+                    val userUpdatedManifest = FileManifest.toManifest(userCurrentFiles, tag)
+                    userUpdatedManifest.put("incrFrom", incrFrom)
+                    userUpdatedManifest.put("incrTo", incrTo)
+                    FileManifest.save(userDir, userUpdatedManifest)
+
+                    callback?.onProgress(
+                        "[$hash] 清单已更新: +${userDiff.added.size} ~${userDiff.modified.size} -${userDiff.deleted.size}",
+                        totalFiles, totalSize,
+                    )
                 }
-                callback?.onProgress(
-                    "清单已更新: +${diff.added.size} ~${diff.modified.size} -${diff.deleted.size}",
-                    totalFiles,
-                    totalSize,
-                )
             }
+
+            // Update global manifest for backward compat (not used for diff anymore)
+            val globalManifest = FileManifest.toManifest(allCurrentFiles, tag)
+            FileManifest.save(dir, globalManifest)
 
             // 3b. Package incremental changes into tar.zst via JNI
 

@@ -25,3 +25,4 @@ xposed/build/
 tmp_fix*.py
 *.orig
 .hermes/
+.codegraph/
