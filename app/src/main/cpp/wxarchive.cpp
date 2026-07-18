@@ -409,7 +409,8 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 if (ZSTD_isError(err)) { ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only); ib.pos = ib.size; break; }
                 if (ob.pos > 0) scan(outbuf, ob.pos);
                 if (tr.complete) break;
-                if (err == 0) break; // end of zstd frame
+                if (last && err == 0) break;
+                if (err == 0 && ob.pos == 0) break; // done-no-more-output
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
             }
             // removed: found check caused early break before SQL content fully read
@@ -569,7 +570,8 @@ static std::string list_tar_contents(const char* input, int comp) {
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
                 if (ZSTD_isError(err)) { ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only); ib.pos = ib.size; break; }
                 if (ob.pos > 0) (*scan)(outbuf, ob.pos);
-                if (err == 0) break; // end of zstd frame
+                if (last && err == 0) break;
+                if (err == 0 && ob.pos == 0) break; // done-no-more-output
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
             }
             if (feof(f)) break;
@@ -690,7 +692,8 @@ Java_com_nous_wxhook_backup_NativeArchive_verifyTar(JNIEnv* env, jobject, jstrin
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
                 if (ZSTD_isError(err)) { ok = false; break; }
                 if (ob.pos > 0) scan_tar_blocks(outbuf, ob.pos);
-                if (err == 0) break; // end of zstd frame
+                if (last && err == 0) break;
+                if (err == 0 && ob.pos == 0) break; // done-no-more-output
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
             }
             if (!ok) break;
