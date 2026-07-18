@@ -639,6 +639,17 @@ object BackupOrchestrator {
                         Log.e("wxhook:rebuild", "manifest extract failed for ${cp.name}", e)
                     }
                 }
+                // Save merged manifest to disk (was being read but not persisted)
+                if (mergedFiles.isNotEmpty()) {
+                    val mergedManifest = JSONObject().apply {
+                        put("version", 1)
+                        put("tag", "rebuild_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}")
+                        put("fileCount", mergedFiles.size)
+                        put("files", JSONArray(mergedFiles.toList()))
+                    }
+                    FileManifest.save(userDir, mergedManifest)
+                    Log.i("wxhook:rebuild", "merged manifest saved: ${mergedFiles.size} files to $userDir")
+                }
 
 // Records from bestChain
                 for (p in bestChain) {
