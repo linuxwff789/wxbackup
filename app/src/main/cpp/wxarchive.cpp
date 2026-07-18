@@ -421,11 +421,10 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
                 if (ZSTD_isError(err)) { ZSTD_DCtx_reset(dctx, ZSTD_reset_session_and_parameters); ib.pos = ib.size; break; }
                 if (ob.pos > 0) scan(outbuf, ob.pos);
-                if (tr.complete) break;
                 if (last && err == 0) break;
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
             }
-            // removed: found check caused early break before SQL content fully read
+            if (tr.complete) break;
             if (feof(f)) break;
         }
         ZSTD_freeDCtx(dctx);
