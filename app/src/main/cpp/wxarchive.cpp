@@ -473,25 +473,39 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     if (dbg2) { fprintf(dbg2, "oneshot: fsize=%ld\n", fsize); fclose(dbg2); }
     
     // Decompress entire file in one shot
-    unsigned long long dsize = ZSTD_getFrameContentSize(compressed, fsize);
+    unsigned long long dsize = ZSTD_findDecompressedSize(compressed, fsize);
     FILE* dbg3 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
     if (dbg3) { fprintf(dbg3, "oneshot: dsize=%llu\n", dsize); fclose(dbg3); }
+    std::string decompressed;
     if (dsize == ZSTD_CONTENTSIZE_ERROR || dsize == ZSTD_CONTENTSIZE_UNKNOWN) {
-        free(compressed);
-        return env->NewStringUTF("");
+        // Streaming decompression for unknown content size
+        ZSTD_DCtx* dctx = ZSTD_createDCtx();
+        if (!dctx) { free(compressed); return env->NewStringUTF(""); }
+        char outbuf[262144];
+        ZSTD_outBuffer ob = {outbuf, sizeof(outbuf), 0};
+        ZSTD_inBuffer ib = {compressed, (size_t)fsize, 0};
+        while (ib.pos < ib.size) {
+            ob.pos = 0;
+            size_t ret = ZSTD_decompressStream(dctx, &ob, &ib);
+            if (ZSTD_isError(ret)) { ZSTD_freeDCtx(dctx); free(compressed); return env->NewStringUTF(""); }
+            if (ob.pos > 0) decompressed.append(outbuf, ob.pos);
+            if (ret == 0 && ob.pos == 0) break;
+        }
+        ZSTD_freeDCtx(dctx);
+    } else {
+        decompressed.resize(dsize + 512);
+        size_t dresult = ZSTD_decompress(&decompressed[0], dsize, compressed, fsize);
+        if (ZSTD_isError(dresult)) { free(compressed); return env->NewStringUTF(""); }
+        decompressed.resize(dresult);
     }
-    char* decompressed = (char*)malloc(dsize + 512); // extra space for safety
-    if (!decompressed) { free(compressed); return env->NewStringUTF(""); }
-    size_t dresult = ZSTD_decompress(decompressed, dsize, compressed, fsize);
-    if (ZSTD_isError(dresult)) { free(compressed); free(decompressed); return env->NewStringUTF(""); }
     free(compressed);
     
     // Scan tar headers from decompressed buffer
     std::string result;
     size_t pos = 0;
-    while (pos + 512 <= dsize) {
+    while (pos + 512 <= decompressed.size()) {
         // Read tar header
-        const ustar_header* h = reinterpret_cast<const ustar_header*>(decompressed + pos);
+        const ustar_header* h = reinterpret_cast<const ustar_header*>(decompressed.data() + pos);
         if (h->name[0] == '\0') break;
         if (memcmp(h->magic, "ustar", 5) != 0) { pos += 512; continue; }
         
@@ -511,8 +525,8 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
             if (h->typeflag == '0' || h->typeflag == '\0') {
                 size_t data_start = pos + 512;
                 size_t total_size = entry_size;
-                if (data_start + total_size <= dsize) {
-                    result.assign(decompressed + data_start, total_size);
+                if (data_start + total_size <= decompressed.size()) {
+                    result.assign(decompressed.data() + data_start, total_size);
                 }
             }
             break;
