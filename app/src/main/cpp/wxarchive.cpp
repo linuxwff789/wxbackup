@@ -298,16 +298,26 @@ Java_com_nous_wxhook_backup_NativeArchive_writeTar(
 // ── read one file from tar.zst ──
 static int detect_compression(const char* path); // forward
 static std::string read_file_from_tar(const char* input, int comp, const char* target, size_t maxSize = 0) {
-    int fd = open(input, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "OPEN FAILED: %s errno=%d\n", input, errno); fclose(e); } return ""; }
+    FILE* f = fopen(input, "rb");
+    if (!f) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "FOPEN FAILED: %s\n", input); fclose(e); } return ""; }
 
-    // Debug: open success
+    // Debug: fopen success
     FILE* d1 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
     if (d1) { fprintf(d1, "read_file_from_tar: enter input=%s comp=%d target=%s maxSize=%zu\n", input, comp, target, maxSize); fclose(d1); }
 
-    const size_t BUF = 256 * 1024;
-    char inbuf[BUF];
-    char outbuf[2 * BUF];
+    // Read entire compressed file into memory — avoids chunked-read hangs on FUSE
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (fsize <= 0) { fclose(f); return ""; }
+    char* compressed = (char*)malloc(fsize);
+    if (!compressed) { fclose(f); return ""; }
+    size_t nread = fread(compressed, 1, fsize, f);
+    fclose(f);
+    if (nread != (size_t)fsize) { free(compressed); return ""; }
+
+    const size_t OUT_SIZE = 512 * 1024;
+    char outbuf[OUT_SIZE];
 
     struct TarReader {
         std::string result;
@@ -319,21 +329,9 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
         size_t entry_padding = 0;
         size_t maxSize = 0; // 0 = read all, >0 = keep only last N bytes
         int entries_scanned = 0;
-        char partial[512];
-        size_t partial_len = 0;
 
         void feed(const char* data, size_t size) {
             size_t off = 0;
-            // If we have leftover from last call, prepend
-            if (partial_len > 0) {
-                size_t total = partial_len + size;
-                char* buf = (char*)alloca(total);
-                memcpy(buf, partial, partial_len);
-                memcpy(buf + partial_len, data, size);
-                data = buf;
-                size = total;
-                partial_len = 0;
-            }
             while (off < size) {
                 if (content_remaining > 0) {
                     size_t take = (size_t)content_remaining < (size - off) ? (size_t)content_remaining : (size - off);
@@ -365,14 +363,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                     continue;
                 }
                 // At a header boundary
-                if (off + 512 > size) {
-                    // Save partial block for next feed call
-                    if (size > off) {
-                        memcpy(partial, data + off, size - off);
-                        partial_len = size - off;
-                    }
-                    break; // need more data
-                }
+                if (off + 512 > size) return; // need more data (partial buf not needed — single buffer)
                 const ustar_header* h = reinterpret_cast<const ustar_header*>(data + off);
                 if (h->name[0] == '\0') return;
                 if (memcmp(h->magic, "ustar", 5) != 0) { off += 512; continue; }
@@ -387,21 +378,18 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 // Debug: log first 5 tar headers + target match
                 static int header_count = 0;
                 if (header_count++ < 5 || strcmp(path, target) == 0) {
-                    __android_log_print(ANDROID_LOG_DEBUG, "wxhook:native", 
+                    __android_log_print(ANDROID_LOG_DEBUG, "wxhook:native",
                         "header[%d]: path=%s size=%lu", header_count-1, path, (unsigned long)entry_size);
                 }
                 if (strcmp(path, target) == 0) {
                     found = true;
                     __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "FOUND target=%s entry_size=%lu", target, (unsigned long)entry_size);
-                    FILE* dbg4 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-                    if (dbg4) { fprintf(dbg4, "FOUND target=%s entry_size=%lu\n", target, (unsigned long)entry_size); fclose(dbg4); }
-                    if (dbg4) { fprintf(dbg4, "typeflag=%c size=%lu\n", h->typeflag, (unsigned long)entry_size); fclose(dbg4); }
                     if (h->typeflag == '0' || h->typeflag == '\0') {
                         if (maxSize == 0) result.reserve((size_t)entry_size);
                         content_remaining = (off_t)entry_size;
                         entry_padding = (512 - (entry_size % 512)) % 512;
                     } else {
-                        // Skip non-regular entry (symlink, PAX header, etc.) and continue
+                        // Skip non-regular entry and continue
                         content_remaining = (off_t)entry_size;
                     }
                 } else {
@@ -420,52 +408,37 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
 
     if (comp == 1) {
         ZSTD_DCtx* dctx = ZSTD_createDCtx();
-        if (!dctx) { close(fd); return ""; }
+        if (!dctx) { free(compressed); return ""; }
         ZSTD_outBuffer ob = {outbuf, sizeof(outbuf), 0};
-        ZSTD_inBuffer ib = {inbuf, 0, 0};
-        while (true) {
-            ssize_t nread = read(fd, inbuf, sizeof(inbuf));
-            if (nread <= 0) break;
-            ib.size = (size_t)nread;
-            ib.pos = 0;
-            bool last = ((size_t)nread < sizeof(inbuf));
-            while (true) {
-                ob.pos = 0;
-                size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
-                if (ZSTD_isError(err)) { ZSTD_DCtx_reset(dctx, ZSTD_reset_session_and_parameters); ib.pos = ib.size; break; }
-                if (ob.pos > 0) scan(outbuf, ob.pos);
-                if (last && err == 0) break;
-                if (ob.pos == 0 && ib.pos >= ib.size) break;
-            }
+        ZSTD_inBuffer ib = {compressed, (size_t)fsize, 0};
+        while (ib.pos < ib.size) {
+            ob.pos = 0;
+            size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
+            if (ZSTD_isError(err)) { ZSTD_DCtx_reset(dctx, ZSTD_reset_session_and_parameters); ib.pos = ib.size; break; }
+            if (ob.pos > 0) scan(outbuf, ob.pos);
             if (tr.complete) break;
-            if (feof(f)) break;
+            if (err == 0) break;
         }
         ZSTD_freeDCtx(dctx);
     } else if (comp == 2) {
         z_stream strm;
         memset(&strm, 0, sizeof(strm));
-        if (inflateInit2(&strm, 15 | 16) != Z_OK) { fclose(f); return ""; }
-        while (true) {
-            strm.avail_in = fread(inbuf, 1, sizeof(inbuf), f);
-            strm.next_in = (Bytef*)inbuf;
-            if (ferror(f)) break;
-            bool last = feof(f) != 0;
-            do {
-                strm.avail_out = sizeof(outbuf);
-                strm.next_out = (Bytef*)outbuf;
-                int ret = inflate(&strm, Z_NO_FLUSH);
-                if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR) break;
-                size_t produced = sizeof(outbuf) - strm.avail_out;
-                if (produced > 0) scan(outbuf, produced);
-                if (tr.found) break;
-                if (ret == Z_STREAM_END) { last = true; break; }
-            } while (strm.avail_out == 0);
-            if (tr.found) break;
-            if (last) break;
-        }
+        if (inflateInit2(&strm, 15 | 16) != Z_OK) { free(compressed); return ""; }
+        strm.avail_in = (uInt)fsize;
+        strm.next_in = (Bytef*)compressed;
+        do {
+            strm.avail_out = sizeof(outbuf);
+            strm.next_out = (Bytef*)outbuf;
+            int ret = inflate(&strm, Z_NO_FLUSH);
+            if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR) break;
+            size_t produced = sizeof(outbuf) - strm.avail_out;
+            if (produced > 0) scan(outbuf, produced);
+            if (tr.complete) break;
+            if (ret == Z_STREAM_END) break;
+        } while (strm.avail_out == 0);
         inflateEnd(&strm);
     }
-    close(fd);
+    free(compressed);
     FILE* d2 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
     if (d2) { fprintf(d2, "read_file_from_tar: exit result_len=%zu found=%d complete=%d entries=%d\n", tr.result.size(), tr.found, tr.complete, tr.entries_scanned); fclose(d2); }
     return tr.result;
