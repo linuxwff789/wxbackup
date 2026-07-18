@@ -326,11 +326,12 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
             size_t off = 0;
             // If we have leftover from last call, prepend
             if (partial_len > 0) {
-                char buf[1024];
+                size_t total = partial_len + size;
+                char* buf = (char*)alloca(total);
                 memcpy(buf, partial, partial_len);
                 memcpy(buf + partial_len, data, size);
                 data = buf;
-                size += partial_len;
+                size = total;
                 partial_len = 0;
             }
             while (off < size) {
