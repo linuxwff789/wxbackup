@@ -621,8 +621,13 @@ object BackupOrchestrator {
                     try {
                         // Shell pipe: zstd→tar→extract manifest (bypass JNI typeflag issue)
                         val sqlFile = "$hash/file_manifest.json"
-                        val cmd = "LD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc \"$arcPath\" 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$sqlFile\" 2>/dev/null"
-                        val json = com.nous.wxhook.rootbridge.RootCommandRunner.runSuQuiet(cmd, 60_000).trim()
+                        val sqlFile = "$hash/file_manifest.json"
+                        val script = java.io.File(BackupEnv.backupDataDir, "_manifest_extract.sh")
+                        script.writeText("#!/system/bin/sh\nLD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc \"$arcPath\" 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$sqlFile\" 2>/dev/null\n")
+                        script.setExecutable(true)
+                        val json = try {
+                            com.nous.wxhook.rootbridge.RootCommandRunner.runSuQuiet("sh ${script.absolutePath}", 60_000).trim()
+                        } finally { script.delete() }
                         if (json.isNotBlank()) {
                             val manifest = JSONObject(json)
                             val files = manifest.optJSONArray("files") ?: manifest.optJSONArray("entries")
