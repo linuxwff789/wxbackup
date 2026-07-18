@@ -621,7 +621,6 @@ object BackupOrchestrator {
                     try {
                         // Shell pipe: zstd→tar→extract manifest (bypass JNI typeflag issue)
                         val sqlFile = "$hash/file_manifest.json"
-                        val sqlFile = "$hash/file_manifest.json"
                         val script = java.io.File(BackupEnv.backupDataDir, "_manifest_extract.sh")
                         script.writeText("#!/system/bin/sh\nLD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc \"$arcPath\" 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$sqlFile\" 2>/dev/null\n")
                         script.setExecutable(true)
