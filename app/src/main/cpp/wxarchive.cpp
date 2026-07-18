@@ -472,32 +472,21 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     FILE* dbg2 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
     if (dbg2) { fprintf(dbg2, "oneshot: fsize=%ld\n", fsize); fclose(dbg2); }
     
-    // Decompress entire file in one shot
-    unsigned long long dsize = ZSTD_findDecompressedSize(compressed, fsize);
-    FILE* dbg3 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-    if (dbg3) { fprintf(dbg3, "oneshot: dsize=%llu\n", dsize); fclose(dbg3); }
+    // Streaming decompression (unknown content size)
+    ZSTD_DCtx* dctx = ZSTD_createDCtx();
+    if (!dctx) { free(compressed); return env->NewStringUTF(""); }
     std::string decompressed;
-    if (dsize == ZSTD_CONTENTSIZE_ERROR || dsize == ZSTD_CONTENTSIZE_UNKNOWN) {
-        // Streaming decompression for unknown content size
-        ZSTD_DCtx* dctx = ZSTD_createDCtx();
-        if (!dctx) { free(compressed); return env->NewStringUTF(""); }
-        char outbuf[262144];
-        ZSTD_outBuffer ob = {outbuf, sizeof(outbuf), 0};
-        ZSTD_inBuffer ib = {compressed, (size_t)fsize, 0};
-        while (ib.pos < ib.size) {
-            ob.pos = 0;
-            size_t ret = ZSTD_decompressStream(dctx, &ob, &ib);
-            if (ZSTD_isError(ret)) { ZSTD_freeDCtx(dctx); free(compressed); return env->NewStringUTF(""); }
-            if (ob.pos > 0) decompressed.append(outbuf, ob.pos);
-            if (ret == 0 && ob.pos == 0) break;
-        }
-        ZSTD_freeDCtx(dctx);
-    } else {
-        decompressed.resize(dsize + 512);
-        size_t dresult = ZSTD_decompress(&decompressed[0], dsize, compressed, fsize);
-        if (ZSTD_isError(dresult)) { free(compressed); return env->NewStringUTF(""); }
-        decompressed.resize(dresult);
+    char outbuf[262144];
+    ZSTD_outBuffer ob = {outbuf, sizeof(outbuf), 0};
+    ZSTD_inBuffer ib = {compressed, (size_t)fsize, 0};
+    while (ib.pos < ib.size) {
+        ob.pos = 0;
+        size_t ret = ZSTD_decompressStream(dctx, &ob, &ib);
+        if (ZSTD_isError(ret)) { ZSTD_freeDCtx(dctx); free(compressed); return env->NewStringUTF(""); }
+        if (ob.pos > 0) decompressed.append(outbuf, ob.pos);
+        if (ret == 0 && ob.pos == 0) break;
     }
+    ZSTD_freeDCtx(dctx);
     free(compressed);
     
     // Scan tar headers from decompressed buffer
