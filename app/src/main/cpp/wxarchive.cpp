@@ -452,8 +452,14 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     const char* filePath = env->GetStringUTFChars(filePath_, nullptr);
     if (!archivePath || !filePath) return env->NewStringUTF("");
     
+    FILE* dbg = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+    if (dbg) { fprintf(dbg, "readFileFromTar_oneshot: path=%s target=%s\n", archivePath, filePath); fclose(dbg); }
     FILE* f = fopen(archivePath, "rb");
-    if (!f) { env->ReleaseStringUTFChars(archivePath_, archivePath); env->ReleaseStringUTFChars(filePath_, filePath); return env->NewStringUTF(""); }
+    if (!f) { 
+        FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+        if (e) { fprintf(e, "readFileFromTar_oneshot: FOPEN FAILED: %s\n", archivePath); fclose(e); }
+        env->ReleaseStringUTFChars(archivePath_, archivePath); env->ReleaseStringUTFChars(filePath_, filePath); return env->NewStringUTF("");
+    }
     
     // Read entire compressed file into memory
     fseek(f, 0, SEEK_END);
