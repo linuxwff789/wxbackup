@@ -407,7 +407,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
             while (true) {
                 ob.pos = 0;
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
-                if (ZSTD_isError(err)) { ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only); ib.pos = ib.size; break; }
+                if (ZSTD_isError(err)) { ZSTD_DCtx_reset(dctx, ZSTD_reset_session_and_parameters); ib.pos = ib.size; break; }
                 if (ob.pos > 0) scan(outbuf, ob.pos);
                 if (tr.complete) break;
                 if (last && err == 0) break;
@@ -482,7 +482,7 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     while (pos + 512 <= dsize) {
         // Read tar header
         const ustar_header* h = reinterpret_cast<const ustar_header*>(decompressed + pos);
-        if (h->name[0] == '\\0') break;
+        if (h->name[0] == '\0') break;
         if (memcmp(h->magic, "ustar", 5) != 0) { pos += 512; continue; }
         
         uint64_t entry_size = 0;
@@ -492,13 +492,13 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
         // Build path
         char path[512];
         size_t pl = 0;
-        if (h->prefix[0]) { memcpy(path, h->prefix, 155); pl = 155; while (pl > 0 && (path[pl-1] == '\\0' || path[pl-1] == ' ')) pl--; path[pl++] = '/'; }
-        memcpy(path + pl, h->name, 100); size_t nl = 100; while (nl > 0 && (path[pl+nl-1] == '\\0' || path[pl+nl-1] == ' ')) nl--; pl += nl;
-        path[pl] = '\\0';
+        if (h->prefix[0]) { memcpy(path, h->prefix, 155); pl = 155; while (pl > 0 && (path[pl-1] == '\0' || path[pl-1] == ' ')) pl--; path[pl++] = '/'; }
+        memcpy(path + pl, h->name, 100); size_t nl = 100; while (nl > 0 && (path[pl+nl-1] == '\0' || path[pl+nl-1] == ' ')) nl--; pl += nl;
+        path[pl] = '\0';
         
         if (strcmp(path, filePath) == 0) {
             // Found target: read its content
-            if (h->typeflag == '0' || h->typeflag == '\\0') {
+            if (h->typeflag == '0' || h->typeflag == '\0') {
                 size_t data_start = pos + 512;
                 size_t padding = (512 - (entry_size % 512)) % 512;
                 size_t total_size = entry_size;
@@ -627,7 +627,7 @@ static std::string list_tar_contents(const char* input, int comp) {
             while (true) {
                 ob.pos = 0;
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
-                if (ZSTD_isError(err)) { ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only); ib.pos = ib.size; break; }
+                if (ZSTD_isError(err)) { ZSTD_DCtx_reset(dctx, ZSTD_reset_session_and_parameters); ib.pos = ib.size; break; }
                 if (ob.pos > 0) (*scan)(outbuf, ob.pos);
                 if (last && err == 0) break;
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
