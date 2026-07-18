@@ -298,10 +298,10 @@ Java_com_nous_wxhook_backup_NativeArchive_writeTar(
 // ── read one file from tar.zst ──
 static int detect_compression(const char* path); // forward
 static std::string read_file_from_tar(const char* input, int comp, const char* target, size_t maxSize = 0) {
-    FILE* f = fopen(input, "rb");
-    if (!f) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "FOPEN FAILED: %s\n", input); fclose(e); } return ""; }
+    int fd = open(input, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "OPEN FAILED: %s errno=%d\n", input, errno); fclose(e); } return ""; }
 
-    // Debug: fopen success
+    // Debug: open success
     FILE* d1 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
     if (d1) { fprintf(d1, "read_file_from_tar: enter input=%s comp=%d target=%s maxSize=%zu\n", input, comp, target, maxSize); fclose(d1); }
 
@@ -420,14 +420,15 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
 
     if (comp == 1) {
         ZSTD_DCtx* dctx = ZSTD_createDCtx();
-        if (!dctx) { fclose(f); return ""; }
+        if (!dctx) { close(fd); return ""; }
         ZSTD_outBuffer ob = {outbuf, sizeof(outbuf), 0};
         ZSTD_inBuffer ib = {inbuf, 0, 0};
         while (true) {
-            ib.size = fread(inbuf, 1, sizeof(inbuf), f);
+            ssize_t nread = read(fd, inbuf, sizeof(inbuf));
+            if (nread <= 0) break;
+            ib.size = (size_t)nread;
             ib.pos = 0;
-            if (ferror(f)) break;
-            bool last = feof(f) != 0;
+            bool last = ((size_t)nread < sizeof(inbuf));
             while (true) {
                 ob.pos = 0;
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
@@ -464,7 +465,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
         }
         inflateEnd(&strm);
     }
-    fclose(f);
+    close(fd);
     FILE* d2 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
     if (d2) { fprintf(d2, "read_file_from_tar: exit result_len=%zu found=%d complete=%d entries=%d\n", tr.result.size(), tr.found, tr.complete, tr.entries_scanned); fclose(d2); }
     return tr.result;
