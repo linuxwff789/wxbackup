@@ -446,7 +446,6 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-extern "C" JNIEXPORT jstring JNICALL
 Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     JNIEnv* env, jobject, jstring archivePath_, jstring filePath_) {
     const char* archivePath = env->GetStringUTFChars(archivePath_, nullptr);
