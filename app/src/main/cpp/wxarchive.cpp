@@ -411,7 +411,6 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 if (ob.pos > 0) scan(outbuf, ob.pos);
                 if (tr.complete) break;
                 if (last && err == 0) break;
-                if (err == 0 && ob.pos == 0) break; // done-no-more-output
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
             }
             // removed: found check caused early break before SQL content fully read
@@ -447,23 +446,83 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
 }
 
 extern "C" JNIEXPORT jstring JNICALL
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     JNIEnv* env, jobject, jstring archivePath_, jstring filePath_) {
     const char* archivePath = env->GetStringUTFChars(archivePath_, nullptr);
     const char* filePath = env->GetStringUTFChars(filePath_, nullptr);
     if (!archivePath || !filePath) return env->NewStringUTF("");
-    int comp = detect_compression(archivePath);
+    
+    FILE* f = fopen(archivePath, "rb");
+    if (!f) { env->ReleaseStringUTFChars(archivePath_, archivePath); env->ReleaseStringUTFChars(filePath_, filePath); return env->NewStringUTF(""); }
+    
+    // Read entire compressed file into memory
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char* compressed = (char*)malloc(fsize);
+    if (!compressed) { fclose(f); return env->NewStringUTF(""); }
+    fread(compressed, 1, fsize, f);
+    fclose(f);
+    
+    // Decompress entire file in one shot
+    unsigned long long dsize = ZSTD_getFrameContentSize(compressed, fsize);
+    if (dsize == ZSTD_CONTENTSIZE_ERROR || dsize == ZSTD_CONTENTSIZE_UNKNOWN) {
+        free(compressed);
+        return env->NewStringUTF("");
+    }
+    char* decompressed = (char*)malloc(dsize + 512); // extra space for safety
+    if (!decompressed) { free(compressed); return env->NewStringUTF(""); }
+    size_t dresult = ZSTD_decompress(decompressed, dsize, compressed, fsize);
+    if (ZSTD_isError(dresult)) { free(compressed); free(decompressed); return env->NewStringUTF(""); }
+    free(compressed);
+    
+    // Scan tar headers from decompressed buffer
+    std::string result;
+    size_t pos = 0;
+    while (pos + 512 <= dsize) {
+        // Read tar header
+        const ustar_header* h = reinterpret_cast<const ustar_header*>(decompressed + pos);
+        if (h->name[0] == '\\0') break;
+        if (memcmp(h->magic, "ustar", 5) != 0) { pos += 512; continue; }
+        
+        uint64_t entry_size = 0;
+        for (int i = 0; i < 12 && h->size[i] >= '0' && h->size[i] <= '7'; i++)
+            entry_size = (entry_size << 3) | (h->size[i] - '0');
+        
+        // Build path
+        char path[512];
+        size_t pl = 0;
+        if (h->prefix[0]) { memcpy(path, h->prefix, 155); pl = 155; while (pl > 0 && (path[pl-1] == '\\0' || path[pl-1] == ' ')) pl--; path[pl++] = '/'; }
+        memcpy(path + pl, h->name, 100); size_t nl = 100; while (nl > 0 && (path[pl+nl-1] == '\\0' || path[pl+nl-1] == ' ')) nl--; pl += nl;
+        path[pl] = '\\0';
+        
+        if (strcmp(path, filePath) == 0) {
+            // Found target: read its content
+            if (h->typeflag == '0' || h->typeflag == '\\0') {
+                size_t data_start = pos + 512;
+                size_t padding = (512 - (entry_size % 512)) % 512;
+                size_t total_size = entry_size;
+                if (data_start + total_size <= dsize) {
+                    result.assign(decompressed + data_start, total_size);
+                }
+            }
+            break;
+        }
+        // Skip to next entry
+        size_t padding = (512 - (entry_size % 512)) % 512;
+        pos += 512 + entry_size + padding;
+    }
+    
+    free(decompressed);
+    
     FILE* dbg = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-    if (dbg) { fprintf(dbg, "readFileFromTar path=%s target=%s comp=%d\n", archivePath, filePath, comp); fclose(dbg); }
-    std::string content = read_file_from_tar(archivePath, comp, filePath);
-    if (dbg) { dbg = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (dbg) { fprintf(dbg, "readFileFromTar result len=%zu\n", content.size()); fclose(dbg); } }
+    if (dbg) { fprintf(dbg, "readFileFromTar: direct path=%s target=%s result_len=%zu\n", archivePath, filePath, result.size()); fclose(dbg); }
+    
     env->ReleaseStringUTFChars(archivePath_, archivePath);
     env->ReleaseStringUTFChars(filePath_, filePath);
-    return env->NewStringUTF(content.c_str());
+    return env->NewStringUTF(result.c_str());
 }
-
-// ── get rowid from full archive: one native scan ──
-//     db_state.json first, SQL tail fallback for old archives.
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_nous_wxhook_backup_NativeArchive_getFullArchiveRowId(
     JNIEnv* env, jobject, jstring archivePath_, jstring hash_) {
@@ -572,7 +631,6 @@ static std::string list_tar_contents(const char* input, int comp) {
                 if (ZSTD_isError(err)) { ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only); ib.pos = ib.size; break; }
                 if (ob.pos > 0) (*scan)(outbuf, ob.pos);
                 if (last && err == 0) break;
-                if (err == 0 && ob.pos == 0) break; // done-no-more-output
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
             }
             if (feof(f)) break;
@@ -694,7 +752,6 @@ Java_com_nous_wxhook_backup_NativeArchive_verifyTar(JNIEnv* env, jobject, jstrin
                 if (ZSTD_isError(err)) { ok = false; break; }
                 if (ob.pos > 0) scan_tar_blocks(outbuf, ob.pos);
                 if (last && err == 0) break;
-                if (err == 0 && ob.pos == 0) break; // done-no-more-output
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
             }
             if (!ok) break;
