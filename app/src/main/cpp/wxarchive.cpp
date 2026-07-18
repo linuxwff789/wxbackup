@@ -520,7 +520,6 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     
     free(decompressed);
     
-    FILE* dbg = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
     if (dbg) { fprintf(dbg, "readFileFromTar: direct path=%s target=%s result_len=%zu\n", archivePath, filePath, result.size()); fclose(dbg); }
     
     env->ReleaseStringUTFChars(archivePath_, archivePath);
