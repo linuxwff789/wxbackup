@@ -403,6 +403,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
             ib.size = fread(inbuf, 1, sizeof(inbuf), f);
             ib.pos = 0;
             if (ferror(f)) break;
+            bool last = feof(f) != 0;
             while (true) {
                 ob.pos = 0;
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
@@ -564,7 +565,7 @@ static std::string list_tar_contents(const char* input, int comp) {
         while (true) {
             ib.size = fread(inbuf, 1, sizeof(inbuf), f); ib.pos = 0;
             if (ferror(f)) break;
-            (void)feof(f);
+            bool last = feof(f) != 0;
             while (true) {
                 ob.pos = 0;
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
