@@ -525,7 +525,6 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
         pos += 512 + entry_size + padding;
     }
     
-    free(decompressed);
     
     if (dbg) { fprintf(dbg, "readFileFromTar: direct path=%s target=%s result_len=%zu\n", archivePath, filePath, result.size()); fclose(dbg); }
     
