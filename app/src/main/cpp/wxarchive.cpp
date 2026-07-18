@@ -319,9 +319,20 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
         size_t entry_padding = 0;
         size_t maxSize = 0; // 0 = read all, >0 = keep only last N bytes
         int entries_scanned = 0;
+        char partial[512];
+        size_t partial_len = 0;
 
         void feed(const char* data, size_t size) {
             size_t off = 0;
+            // If we have leftover from last call, prepend
+            if (partial_len > 0) {
+                char buf[1024];
+                memcpy(buf, partial, partial_len);
+                memcpy(buf + partial_len, data, size);
+                data = buf;
+                size += partial_len;
+                partial_len = 0;
+            }
             while (off < size) {
                 if (content_remaining > 0) {
                     size_t take = (size_t)content_remaining < (size - off) ? (size_t)content_remaining : (size - off);
@@ -353,7 +364,14 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                     continue;
                 }
                 // At a header boundary
-                if (off + 512 > size) break; // need more data
+                if (off + 512 > size) {
+                    // Save partial block for next feed call
+                    if (size > off) {
+                        memcpy(partial, data + off, size - off);
+                        partial_len = size - off;
+                    }
+                    break; // need more data
+                }
                 const ustar_header* h = reinterpret_cast<const ustar_header*>(data + off);
                 if (h->name[0] == '\0') return;
                 if (memcmp(h->magic, "ustar", 5) != 0) { off += 512; continue; }
@@ -398,7 +416,6 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
     tr.maxSize = maxSize;
 
     auto scan = [&](const char* data, size_t size) { tr.feed(data, size); };
-    int chunks = 0;
 
     if (comp == 1) {
         ZSTD_DCtx* dctx = ZSTD_createDCtx();
