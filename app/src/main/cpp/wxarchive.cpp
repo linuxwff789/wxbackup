@@ -318,6 +318,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
         size_t content_padding = 0;
         size_t entry_padding = 0;
         size_t maxSize = 0; // 0 = read all, >0 = keep only last N bytes
+        int entries_scanned = 0;
 
         void feed(const char* data, size_t size) {
             size_t off = 0;
@@ -356,6 +357,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 const ustar_header* h = reinterpret_cast<const ustar_header*>(data + off);
                 if (h->name[0] == '\0') return;
                 if (memcmp(h->magic, "ustar", 5) != 0) { off += 512; continue; }
+                entries_scanned++;
                 uint64_t entry_size = 0;
                 for (int i = 0; i < 12 && h->size[i] >= '0' && h->size[i] <= '7'; i++) entry_size = (entry_size << 3) | (h->size[i] - '0');
                 char path[512];
@@ -446,7 +448,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
     }
     fclose(f);
     FILE* d2 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-    if (d2) { fprintf(d2, "read_file_from_tar: exit result_len=%zu found=%d complete=%d\n", tr.result.size(), tr.found, tr.complete); fclose(d2); }
+    if (d2) { fprintf(d2, "read_file_from_tar: exit result_len=%zu found=%d complete=%d entries=%d\n", tr.result.size(), tr.found, tr.complete, tr.entries_scanned); fclose(d2); }
     return tr.result;
 }
 
