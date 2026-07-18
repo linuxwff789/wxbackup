@@ -611,38 +611,27 @@ object BackupOrchestrator {
                     callback?.onProgress("[$hash] ⚠️ 链为空，跳过保存", 0, 0)
                 }
 
-                // Per-user manifest: merge from all archives in chain
+                // Per-user manifest: read existing or extract from archive
                 callback?.onProgress("[$hash] 提取附件清单...", 0, 0)
                 val userDir = File(BackupEnv.backupDataDir, hash)
                 RootGateways.mkdirs(userDir.absolutePath)
-                val mergedFiles = mutableListOf<JSONObject>()
-                for (cp in bestChain) {
-                    val arcPath = File(BackupEnv.backupDataDir, cp.name).absolutePath
-                    try {
-                        // Shell pipe: zstd→tar→extract manifest (bypass JNI typeflag issue)
-                        val sqlFile = "$hash/file_manifest.json"
-                        val sqlFile = "$hash/file_manifest.json"
-                        val script = java.io.File(BackupEnv.backupDataDir, "_manifest_extract.sh")
-                        script.writeText("#!/system/bin/sh\nLD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc \"$arcPath\" 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$sqlFile\" 2>/dev/null\n")
-                        script.setExecutable(true)
-                        val json = try {
-                            com.nous.wxhook.rootbridge.RootCommandRunner.runSuQuiet("sh ${script.absolutePath}", 60_000).trim()
-                        } finally { script.delete() }
-                        if (json.isNotBlank()) {
-                            val manifest = JSONObject(json)
-                            val files = manifest.optJSONArray("files") ?: manifest.optJSONArray("entries")
-                            if (files != null) {
-                                for (i in 0 until files.length()) {
-                                    mergedFiles.add(files.getJSONObject(i))
-                                }
-                                Log.i("wxhook:rebuild", "manifest from ${cp.name}: +${files.length()} files")
-                            }
-                        } else {
-                            Log.e("wxhook:rebuild", "manifest shell pipe empty for ${cp.name}")
-                        }
-                    } catch (e: Throwable) {
-                        Log.e("wxhook:rebuild", "manifest extract failed for ${cp.name}", e)
+                val manifestFile = File(userDir, "file_manifest.json")
+                try {
+                    // Read existing manifest from disk
+                    val existing = if (manifestFile.exists()) {
+                        manifestFile.readText()
+                    } else { "" }
+                    if (existing.isNotBlank()) {
+                        // Update tag and save
+                        val manifest = JSONObject(existing)
+                        manifest.put("tag", "rebuild_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}")
+                        manifestFile.writeText(manifest.toString(2))
+                        Log.i("wxhook:rebuild", "manifest updated: ${manifest.optInt("fileCount", 0)} files")
+                    } else {
+                        Log.e("wxhook:rebuild", "no manifest on disk for $hash")
                     }
+                } catch (e: Throwable) {
+                    Log.e("wxhook:rebuild", "manifest update failed", e)
                 }
 
 // Records from bestChain
