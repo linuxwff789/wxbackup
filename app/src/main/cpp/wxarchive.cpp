@@ -405,7 +405,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
             while (true) {
                 ob.pos = 0;
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
-                if (ZSTD_isError(err)) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "ZSTD_ERROR: %s\n", ZSTD_getErrorName(err)); fclose(e); } break; }
+                if (ZSTD_isError(err)) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "ZSTD_ERR: %s\n", ZSTD_getErrorName(err)); fclose(e); } ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only); break; }
                 if (ob.pos > 0) scan(outbuf, ob.pos);
                 if (tr.complete) break;
                 if (last && err == 0) break;
@@ -566,7 +566,7 @@ static std::string list_tar_contents(const char* input, int comp) {
             while (true) {
                 ob.pos = 0;
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
-                if (ZSTD_isError(err)) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "ZSTD_ERROR: %s\n", ZSTD_getErrorName(err)); fclose(e); } break; }
+                if (ZSTD_isError(err)) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "ZSTD_ERR: %s\n", ZSTD_getErrorName(err)); fclose(e); } ZSTD_DCtx_reset(dctx, ZSTD_reset_session_only); break; }
                 if (ob.pos > 0) (*scan)(outbuf, ob.pos);
                 if (last && err == 0) break;
                 if (ob.pos == 0 && ib.pos >= ib.size) break;
