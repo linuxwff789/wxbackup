@@ -620,10 +620,8 @@ object BackupOrchestrator {
                     val arcPath = File(BackupEnv.backupDataDir, cp.name).absolutePath
                     try {
                         // Shell pipe: zstd→tar→extract manifest (bypass JNI typeflag issue)
-                        val sqlFile = "$hash/file_manifest.json"
-                        val shellScript = "#!/system/bin/sh\nLD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc \"$arcPath\" 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$sqlFile\" 2>/dev/null\n"
                         val json = try {
-                            com.nous.wxhook.rootbridge.RootCommandRunner.execStdin(shellScript, 60_000).stdout.trim()
+                            NativeArchive.readFileFromTar(arcPath, "$hash/file_manifest.json")
                         } catch (e: Throwable) { "" }
                         if (json.isNotBlank()) {
                             val manifest = JSONObject(json)

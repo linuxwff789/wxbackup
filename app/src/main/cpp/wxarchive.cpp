@@ -375,10 +375,8 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                         content_remaining = (off_t)entry_size;
                         entry_padding = (512 - (entry_size % 512)) % 512;
                     } else {
-                        FILE* dbg6 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-                        if (dbg6) { fprintf(dbg6, "SKIP non-regular typeflag=%c\n", h->typeflag); fclose(dbg6); }
-                        complete = true;
-                        return;
+                        // Skip non-regular entry (symlink, PAX header, etc.) and continue
+                        content_remaining = (off_t)entry_size;
                     }
                 } else {
                     content_remaining = (off_t)entry_size;
