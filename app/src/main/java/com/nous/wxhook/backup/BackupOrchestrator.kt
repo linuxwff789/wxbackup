@@ -300,13 +300,20 @@ object BackupOrchestrator {
             if (diff.added.isNotEmpty() || diff.modified.isNotEmpty() || diff.deleted.isNotEmpty()) {
                 val updatedManifest = FileManifest.toManifest(currentSourceFiles, tag)
                 FileManifest.save(dir, updatedManifest)
-                // Per-user manifest
+                // Per-user manifest: only save files that changed in this increment
                 for (wxBasePath in wxPaths) {
                     val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                     val uDir = File(BackupEnv.backupDataDir, hash)
                     RootGateways.mkdirs(uDir.absolutePath)
-                    val uFiles = currentSourceFiles.filter { it.path.startsWith("$hash/") }
-                    FileManifest.save(uDir, FileManifest.toManifest(uFiles, tag))
+                    val changedFiles = (diff.added + diff.modified).filter {
+                        it.path.startsWith("$hash/")
+                    }
+                    if (changedFiles.isNotEmpty()) {
+                        val incrManifest = FileManifest.toManifest(changedFiles, tag)
+                        incrManifest.put("incrFrom", incrFrom)
+                        incrManifest.put("incrTo", incrTo)
+                        FileManifest.save(uDir, incrManifest)
+                    }
                 }
                 callback?.onProgress(
                     "清单已更新: +${diff.added.size} ~${diff.modified.size} -${diff.deleted.size}",
