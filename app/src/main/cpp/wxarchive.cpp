@@ -364,7 +364,9 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                     FILE* dbg5 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
                     if (dbg5) { fprintf(dbg5, "header: path=%s size=%lu prefix=%s\n", path, (unsigned long)entry_size, h->prefix); fclose(dbg5); }
                 }
-                if (strcmp(path, target) == 0) {
+                FILE* dbg_ = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+                    if (dbg_) { fprintf(dbg_, "CMP: path=[%s] target=[%s] pl=%zu nl=%zu pre=%d\n", path, target, pl, (size_t)strlen(h->name), h->prefix[0]); fclose(dbg_); }
+                    if (strcmp(path, target) == 0) {
                     found = true;
                     __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "FOUND target=%s entry_size=%lu", target, (unsigned long)entry_size);
                     FILE* dbg4 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
