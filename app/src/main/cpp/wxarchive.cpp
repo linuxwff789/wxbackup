@@ -356,8 +356,8 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 for (int i = 0; i < 12 && h->size[i] >= '0' && h->size[i] <= '7'; i++) entry_size = (entry_size << 3) | (h->size[i] - '0');
                 char path[512];
                 size_t pl = 0;
-                if (h->prefix[0]) { size_t pl2 = 0; while (pl2 < 155 && h->prefix[pl2] >= 32 && h->prefix[pl2] < 127) pl2++; memcpy(path, h->prefix, pl2); pl = pl2; path[pl++] = '/'; }
-                size_t nl = 0; while (nl < 100 && h->name[nl] >= 32 && h->name[nl] < 127) nl++; memcpy(path + pl, h->name, nl); pl += nl;
+                if (h->prefix[0]) { memcpy(path, h->prefix, 155); pl = 155; while (pl > 0 && (path[pl-1] == '\0' || path[pl-1] == ' ')) pl--; path[pl++] = '/'; }
+                memcpy(path + pl, h->name, 100); size_t nl = 100; while (nl > 0 && (path[pl+nl-1] == '\0' || path[pl+nl-1] == ' ')) nl--; pl += nl;
                 path[pl] = '\0';
                 // Debug: log first few tar headers
                 if (pl > 0 && pl < 200) {
@@ -544,8 +544,8 @@ static std::string list_tar_contents(const char* input, int comp) {
             if (h->name[0] == '\0') return;
             if (memcmp(h->magic, "ustar", 5) != 0) { off += 512; continue; }
             char path[512]; size_t pl = 0;
-            if (h->prefix[0]) { size_t pl2 = 0; while (pl2 < 155 && h->prefix[pl2] >= 32 && h->prefix[pl2] < 127) pl2++; memcpy(path, h->prefix, pl2); pl = pl2; path[pl++] = '/'; }
-            size_t nl = 0; while (nl < 100 && h->name[nl] >= 32 && h->name[nl] < 127) nl++; memcpy(path + pl, h->name, nl); pl += nl;
+            if (h->prefix[0]) { memcpy(path, h->prefix, 155); pl = 155; while (pl > 0 && (path[pl-1] == '\0' || path[pl-1] == ' ')) pl--; path[pl++] = '/'; }
+            memcpy(path + pl, h->name, 100); size_t nl = 100; while (nl > 0 && (path[pl+nl-1] == '\0' || path[pl+nl-1] == ' ')) nl--; pl += nl;
             path[pl] = '\0';
             result += path; result += '\n';
             uint64_t es = 0;
