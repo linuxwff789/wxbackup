@@ -329,9 +329,54 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
         size_t entry_padding = 0;
         size_t maxSize = 0; // 0 = read all, >0 = keep only last N bytes
         int entries_scanned = 0;
+        char partial[512];
+        size_t partial_len = 0;
+
+        // Process a single 512-byte tar header at data[off]
+        void feed_header(const ustar_header* h) {
+            if (h->name[0] == '\0') return;
+            if (memcmp(h->magic, "ustar", 5) != 0) return;
+            entries_scanned++;
+            uint64_t entry_size = 0;
+            for (int i = 0; i < 12 && h->size[i] >= '0' && h->size[i] <= '7'; i++)
+                entry_size = (entry_size << 3) | (h->size[i] - '0');
+            char path[512];
+            size_t pl = 0;
+            if (h->prefix[0]) { memcpy(path, h->prefix, 155); pl = 155; while (pl > 0 && (path[pl-1] == '\0' || path[pl-1] == ' ')) pl--; path[pl++] = '/'; }
+            memcpy(path + pl, h->name, 100); size_t nl = 100; while (nl > 0 && (path[pl+nl-1] == '\0' || path[pl+nl-1] == ' ')) nl--; pl += nl;
+            path[pl] = '\0';
+            static int header_count = 0;
+            if (header_count++ < 5 || strcmp(path, target) == 0) {
+                __android_log_print(ANDROID_LOG_DEBUG, "wxhook:native",
+                    "header[%d]: path=%s size=%lu", header_count-1, path, (unsigned long)entry_size);
+            }
+            if (strcmp(path, target) == 0) {
+                found = true;
+                __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "FOUND target=%s entry_size=%lu", target, (unsigned long)entry_size);
+                if (h->typeflag == '0' || h->typeflag == '\0') {
+                    if (maxSize == 0) result.reserve((size_t)entry_size);
+                }
+            }
+            content_remaining = (off_t)entry_size;
+            entry_padding = (512 - (entry_size % 512)) % 512;
+        }
 
         void feed(const char* data, size_t size) {
             size_t off = 0;
+            // Prepend partial header from last call
+            if (partial_len > 0) {
+                size_t need = 512 - partial_len;
+                size_t take = need < size ? need : size;
+                memcpy(partial + partial_len, data, take);
+                off += take;
+                if (partial_len + take >= 512) {
+                    feed_header((const ustar_header*)partial);
+                    partial_len = 0;
+                } else {
+                    partial_len += take;
+                    return;
+                }
+            }
             while (off < size) {
                 if (content_remaining > 0) {
                     size_t take = (size_t)content_remaining < (size - off) ? (size_t)content_remaining : (size - off);
@@ -363,38 +408,13 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                     continue;
                 }
                 // At a header boundary
-                if (off + 512 > size) return; // need more data (partial buf not needed — single buffer)
-                const ustar_header* h = reinterpret_cast<const ustar_header*>(data + off);
-                if (h->name[0] == '\0') return;
-                if (memcmp(h->magic, "ustar", 5) != 0) { off += 512; continue; }
-                entries_scanned++;
-                uint64_t entry_size = 0;
-                for (int i = 0; i < 12 && h->size[i] >= '0' && h->size[i] <= '7'; i++) entry_size = (entry_size << 3) | (h->size[i] - '0');
-                char path[512];
-                size_t pl = 0;
-                if (h->prefix[0]) { memcpy(path, h->prefix, 155); pl = 155; while (pl > 0 && (path[pl-1] == '\0' || path[pl-1] == ' ')) pl--; path[pl++] = '/'; }
-                memcpy(path + pl, h->name, 100); size_t nl = 100; while (nl > 0 && (path[pl+nl-1] == '\0' || path[pl+nl-1] == ' ')) nl--; pl += nl;
-                path[pl] = '\0';
-                // Debug: log first 5 tar headers + target match
-                static int header_count = 0;
-                if (header_count++ < 5 || strcmp(path, target) == 0) {
-                    __android_log_print(ANDROID_LOG_DEBUG, "wxhook:native",
-                        "header[%d]: path=%s size=%lu", header_count-1, path, (unsigned long)entry_size);
+                if (off + 512 > size) {
+                    // Save partial header for next call
+                    memcpy(partial, data + off, size - off);
+                    partial_len = size - off;
+                    break;
                 }
-                if (strcmp(path, target) == 0) {
-                    found = true;
-                    __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "FOUND target=%s entry_size=%lu", target, (unsigned long)entry_size);
-                    if (h->typeflag == '0' || h->typeflag == '\0') {
-                        if (maxSize == 0) result.reserve((size_t)entry_size);
-                        content_remaining = (off_t)entry_size;
-                        entry_padding = (512 - (entry_size % 512)) % 512;
-                    } else {
-                        // Skip non-regular entry and continue
-                        content_remaining = (off_t)entry_size;
-                    }
-                } else {
-                    content_remaining = (off_t)entry_size;
-                }
+                feed_header((const ustar_header*)(data + off));
                 off += 512;
             }
         }
