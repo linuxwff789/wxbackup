@@ -344,7 +344,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                     size_t take = content_padding < size - off ? content_padding : size - off;
                     off += take;
                     content_padding -= take;
-                    if (content_padding == 0) complete = found; found = false;
+                    if (content_padding == 0) { complete = found; found = false; }
                     continue;
                 }
                 // At a header boundary
@@ -359,14 +359,13 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                 if (h->prefix[0]) { memcpy(path, h->prefix, 155); pl = 155; while (pl > 0 && (path[pl-1] == '\0' || path[pl-1] == ' ')) pl--; path[pl++] = '/'; }
                 memcpy(path + pl, h->name, 100); size_t nl = 100; while (nl > 0 && (path[pl+nl-1] == '\0' || path[pl+nl-1] == ' ')) nl--; pl += nl;
                 path[pl] = '\0';
-                // Debug: log first few tar headers
-                if (pl > 0 && pl < 200) {
-                    FILE* dbg5 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-                    if (dbg5) { fprintf(dbg5, "header: path=%s size=%lu prefix=%s\n", path, (unsigned long)entry_size, h->prefix); fclose(dbg5); }
+                // Debug: log first 5 tar headers + target match
+                static int header_count = 0;
+                if (header_count++ < 5 || strcmp(path, target) == 0) {
+                    __android_log_print(ANDROID_LOG_DEBUG, "wxhook:native", 
+                        "header[%d]: path=%s size=%lu", header_count-1, path, (unsigned long)entry_size);
                 }
-                FILE* dbg_ = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-                    if (dbg_) { fprintf(dbg_, "CMP: path=[%s] target=[%s] pl=%zu nl=%zu pre=%d\n", path, target, pl, (size_t)strlen(h->name), h->prefix[0]); fclose(dbg_); }
-                    if (strcmp(path, target) == 0) {
+                if (strcmp(path, target) == 0) {
                     found = true;
                     __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "FOUND target=%s entry_size=%lu", target, (unsigned long)entry_size);
                     FILE* dbg4 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
@@ -451,83 +450,13 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
     const char* archivePath = env->GetStringUTFChars(archivePath_, nullptr);
     const char* filePath = env->GetStringUTFChars(filePath_, nullptr);
     if (!archivePath || !filePath) return env->NewStringUTF("");
-    
+
+    int comp = detect_compression(archivePath);
+    std::string result = read_file_from_tar(archivePath, comp, filePath);
+
     FILE* dbg = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-    if (dbg) { fprintf(dbg, "readFileFromTar_oneshot: path=%s target=%s\n", archivePath, filePath); fclose(dbg); }
-    FILE* f = fopen(archivePath, "rb");
-    if (!f) { 
-        FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-        if (e) { fprintf(e, "readFileFromTar_oneshot: FOPEN FAILED: %s\n", archivePath); fclose(e); }
-        env->ReleaseStringUTFChars(archivePath_, archivePath); env->ReleaseStringUTFChars(filePath_, filePath); return env->NewStringUTF("");
-    }
-    
-    // Read entire compressed file into memory
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char* compressed = (char*)malloc(fsize);
-    if (!compressed) { fclose(f); return env->NewStringUTF(""); }
-    fread(compressed, 1, fsize, f);
-    fclose(f);
-    FILE* dbg2 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-    if (dbg2) { fprintf(dbg2, "oneshot: fsize=%ld\n", fsize); fclose(dbg2); }
-    
-    // Streaming decompression (unknown content size)
-    ZSTD_DCtx* dctx = ZSTD_createDCtx();
-    if (!dctx) { free(compressed); return env->NewStringUTF(""); }
-    std::string decompressed;
-    char outbuf[262144];
-    ZSTD_outBuffer ob = {outbuf, sizeof(outbuf), 0};
-    ZSTD_inBuffer ib = {compressed, (size_t)fsize, 0};
-    while (ib.pos < ib.size) {
-        ob.pos = 0;
-        size_t ret = ZSTD_decompressStream(dctx, &ob, &ib);
-        if (ZSTD_isError(ret)) { ZSTD_freeDCtx(dctx); free(compressed); return env->NewStringUTF(""); }
-        if (ob.pos > 0) decompressed.append(outbuf, ob.pos);
-        if (ret == 0 && ob.pos == 0) break;
-    }
-    ZSTD_freeDCtx(dctx);
-    free(compressed);
-    
-    // Scan tar headers from decompressed buffer
-    std::string result;
-    size_t pos = 0;
-    while (pos + 512 <= decompressed.size()) {
-        // Read tar header
-        const ustar_header* h = reinterpret_cast<const ustar_header*>(decompressed.data() + pos);
-        if (h->name[0] == '\0') break;
-        if (memcmp(h->magic, "ustar", 5) != 0) { pos += 512; continue; }
-        
-        uint64_t entry_size = 0;
-        for (int i = 0; i < 12 && h->size[i] >= '0' && h->size[i] <= '7'; i++)
-            entry_size = (entry_size << 3) | (h->size[i] - '0');
-        
-        // Build path
-        char path[512];
-        size_t pl = 0;
-        if (h->prefix[0]) { memcpy(path, h->prefix, 155); pl = 155; while (pl > 0 && (path[pl-1] == '\0' || path[pl-1] == ' ')) pl--; path[pl++] = '/'; }
-        memcpy(path + pl, h->name, 100); size_t nl = 100; while (nl > 0 && (path[pl+nl-1] == '\0' || path[pl+nl-1] == ' ')) nl--; pl += nl;
-        path[pl] = '\0';
-        
-        if (strcmp(path, filePath) == 0) {
-            // Found target: read its content
-            if (h->typeflag == '0' || h->typeflag == '\0') {
-                size_t data_start = pos + 512;
-                size_t total_size = entry_size;
-                if (data_start + total_size <= decompressed.size()) {
-                    result.assign(decompressed.data() + data_start, total_size);
-                }
-            }
-            break;
-        }
-        // Skip to next entry
-        size_t padding = (512 - (entry_size % 512)) % 512;
-        pos += 512 + entry_size + padding;
-    }
-    
-    
-    if (dbg) { fprintf(dbg, "readFileFromTar: direct path=%s target=%s result_len=%zu\n", archivePath, filePath, result.size()); fclose(dbg); }
-    
+    if (dbg) { fprintf(dbg, "readFileFromTar: path=%s target=%s result_len=%zu\n", archivePath, filePath, result.size()); fclose(dbg); }
+
     env->ReleaseStringUTFChars(archivePath_, archivePath);
     env->ReleaseStringUTFChars(filePath_, filePath);
     return env->NewStringUTF(result.c_str());
