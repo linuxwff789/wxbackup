@@ -500,7 +500,6 @@ Java_com_nous_wxhook_backup_NativeArchive_readFileFromTar(
             // Found target: read its content
             if (h->typeflag == '0' || h->typeflag == '\0') {
                 size_t data_start = pos + 512;
-                size_t padding = (512 - (entry_size % 512)) % 512;
                 size_t total_size = entry_size;
                 if (data_start + total_size <= dsize) {
                     result.assign(decompressed + data_start, total_size);
