@@ -619,7 +619,10 @@ object BackupOrchestrator {
                 for (cp in bestChain) {
                     val arcPath = File(BackupEnv.backupDataDir, cp.name).absolutePath
                     try {
-                        val json = NativeArchive.readFileFromTar(arcPath, "$hash/file_manifest.json")
+                        // Shell pipe: zstd→tar→extract manifest (bypass JNI typeflag issue)
+                        val sqlFile = "$hash/file_manifest.json"
+                        val cmd = "LD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc \"$arcPath\" 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$sqlFile\" 2>/dev/null"
+                        val json = RootGateways.runQuiet(cmd, 60_000).trim()
                         if (json.isNotBlank()) {
                             val manifest = JSONObject(json)
                             val files = manifest.optJSONArray("files") ?: manifest.optJSONArray("entries")
@@ -629,22 +632,12 @@ object BackupOrchestrator {
                                 }
                                 Log.i("wxhook:rebuild", "manifest from ${cp.name}: +${files.length()} files")
                             }
+                        } else {
+                            Log.e("wxhook:rebuild", "manifest shell pipe empty for ${cp.name}")
                         }
                     } catch (e: Throwable) {
-                        Log.e("wxhook:rebuild", "read manifest from ${cp.name} failed", e)
+                        Log.e("wxhook:rebuild", "manifest extract failed for ${cp.name}", e)
                     }
-                }
-                if (mergedFiles.isNotEmpty()) {
-                    val finalManifest = JSONObject().apply {
-                        put("version", 1)
-                        put("tag", "rebuild_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}")
-                        put("fileCount", mergedFiles.size)
-                        put("files", JSONArray(mergedFiles))
-                    }
-                    FileManifest.save(userDir, finalManifest)
-                    Log.i("wxhook:rebuild", "manifest saved: ${mergedFiles.size} files from ${bestChain.size} archives")
-                } else {
-                    Log.e("wxhook:rebuild", "no manifest extracted for $hash")
                 }
 
 // Records from bestChain
