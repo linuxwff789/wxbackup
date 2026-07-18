@@ -622,7 +622,7 @@ object BackupOrchestrator {
                         // Shell pipe: zstd→tar→extract manifest (bypass JNI typeflag issue)
                         val sqlFile = "$hash/file_manifest.json"
                         val cmd = "LD_LIBRARY_PATH=${BackupEnv.binDir} ${BackupEnv.binDir}/zstd -dc \"$arcPath\" 2>/dev/null | ${BackupEnv.binDir}/tar -xO \"$sqlFile\" 2>/dev/null"
-                        val json = RootGateways.runQuiet(cmd, 60_000).trim()
+                        val json = com.nous.wxhook.rootbridge.RootCommandRunner.runSuQuiet(cmd, 60_000).trim()
                         if (json.isNotBlank()) {
                             val manifest = JSONObject(json)
                             val files = manifest.optJSONArray("files") ?: manifest.optJSONArray("entries")
