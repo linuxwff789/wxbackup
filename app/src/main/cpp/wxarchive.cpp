@@ -398,6 +398,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
     tr.maxSize = maxSize;
 
     auto scan = [&](const char* data, size_t size) { tr.feed(data, size); };
+    int chunks = 0;
 
     if (comp == 1) {
         ZSTD_DCtx* dctx = ZSTD_createDCtx();
@@ -408,7 +409,13 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
             ib.size = fread(inbuf, 1, sizeof(inbuf), f);
             ib.pos = 0;
             if (ferror(f)) break;
+            chunks++;
             bool last = feof(f) != 0;
+            // Log first/last chunk for debugging
+            if (chunks == 1 || chunks % 500 == 0 || last) {
+                FILE* dchunk = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+                if (dchunk) { fprintf(dchunk, "zstd_chunk: %d size=%zu last=%d\n", chunks, ib.size, last); fclose(dchunk); }
+            }
             while (true) {
                 ob.pos = 0;
                 size_t err = ZSTD_decompressStream(dctx, &ob, &ib);
@@ -448,7 +455,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
     }
     fclose(f);
     FILE* d2 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
-    if (d2) { fprintf(d2, "read_file_from_tar: exit result_len=%zu found=%d complete=%d entries=%d\n", tr.result.size(), tr.found, tr.complete, tr.entries_scanned); fclose(d2); }
+    if (d2) { fprintf(d2, "read_file_from_tar: exit result_len=%zu found=%d complete=%d entries=%d chunks=%d\n", tr.result.size(), tr.found, tr.complete, tr.entries_scanned, chunks); fclose(d2); }
     return tr.result;
 }
 
