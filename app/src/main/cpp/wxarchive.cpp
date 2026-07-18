@@ -369,7 +369,7 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
                     __android_log_print(ANDROID_LOG_INFO, "wxhook:native", "FOUND target=%s entry_size=%lu", target, (unsigned long)entry_size);
                     FILE* dbg4 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
                     if (dbg4) { fprintf(dbg4, "FOUND target=%s entry_size=%lu\n", target, (unsigned long)entry_size); fclose(dbg4); }
-                    if (dbg5) { fprintf(dbg5, "typeflag=%c size=%lu\n", h->typeflag, (unsigned long)entry_size); fclose(dbg5); }
+                    if (dbg4) { fprintf(dbg4, "typeflag=%c size=%lu\n", h->typeflag, (unsigned long)entry_size); fclose(dbg4); }
                     if (h->typeflag == '0' || h->typeflag == '\0') {
                         if (maxSize == 0) result.reserve((size_t)entry_size);
                         content_remaining = (off_t)entry_size;
