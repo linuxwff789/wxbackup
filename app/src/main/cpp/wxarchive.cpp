@@ -301,6 +301,10 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
     FILE* f = fopen(input, "rb");
     if (!f) { FILE* e = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a"); if (e) { fprintf(e, "FOPEN FAILED: %s\n", input); fclose(e); } return ""; }
 
+    // Debug: fopen success
+    FILE* d1 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+    if (d1) { fprintf(d1, "read_file_from_tar: enter input=%s comp=%d target=%s maxSize=%zu\n", input, comp, target, maxSize); fclose(d1); }
+
     const size_t BUF = 256 * 1024;
     char inbuf[BUF];
     char outbuf[2 * BUF];
@@ -441,6 +445,8 @@ static std::string read_file_from_tar(const char* input, int comp, const char* t
         inflateEnd(&strm);
     }
     fclose(f);
+    FILE* d2 = fopen("/sdcard/Download/wxhook_backup/debug_jni.log", "a");
+    if (d2) { fprintf(d2, "read_file_from_tar: exit result_len=%zu found=%d complete=%d\n", tr.result.size(), tr.found, tr.complete); fclose(d2); }
     return tr.result;
 }
 
