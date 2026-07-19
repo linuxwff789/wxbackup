@@ -11,7 +11,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.nous.wxhook.backup.BackupEnv
 import com.nous.wxhook.root.RootGateways
-import com.nous.wxhook.sync.WebDavClient
+import com.nous.wxhook.sync.Syncer
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -25,7 +25,6 @@ class SyncService : Service() {
         const val ACTION_FINISH = "com.nous.wxhook.SYNC_FINISH"
         const val EXTRA_OK = "ok"
         const val EXTRA_MSG = "msg"
-        private const val BACKUP_DIR = "/sdcard/Download/wxhook_backup/backupdata"
         private const val INTERVAL_KEY = "sync_interval_min"
 
         fun start(ctx: Context) {
@@ -48,70 +47,30 @@ class SyncService : Service() {
             try {
                 appendLog("同步服务启动")
 
-                // Read WebDAV config
-                val settingsCfgRaw = try { File(filesDir, "settings_config.json").readText() } catch (_: Exception) { "{}" }
-                val settingsCfg = org.json.JSONObject(settingsCfgRaw)
-                val webdavUrl = settingsCfg.optString("webdav_url", "")
-                val webdavUser = settingsCfg.optString("webdav_user", "")
-                val webdavPass = settingsCfg.optString("webdav_pass", "")
-                val remotePath = settingsCfg.optString("remote_path", "wxhook-backup")
-
-                if (webdavUrl.isBlank() || webdavUser.isBlank()) {
+                // Load config and check enabled
+                val config = Syncer.loadConfig()
+                if (!config.isValid) {
                     result = "WebDAV未配置"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
                 }
-
-                // Check remote config enabled
                 val remoteCfgRaw = RootGateways.runQuiet("cat \"${BackupEnv.backupDir}/remote_config.json\" 2>/dev/null").ifBlank { "{}" }
                 val remoteCfg = org.json.JSONObject(remoteCfgRaw)
                 if (!remoteCfg.optBoolean("enabled", false)) {
                     result = "同步未启用"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
                 }
 
-                // Find all files in backupdata to sync
-                updateNotification("扫描备份文件...")
-                val allFiles = RootGateways.runQuiet(
-                    "find $BACKUP_DIR -maxdepth 2 -type f ! -path '*/tmp/*' 2>/dev/null"
-                ).lines().filter { it.isNotBlank() }
-                if (allFiles.isEmpty()) {
-                    result = "无备份文件可同步"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
+                // Sync via shared Syncer
+                val syncResult = Syncer.sync(config) { p ->
+                    updateNotification(p.message)
                 }
 
-                // Connect to WebDAV
-                updateNotification("连接 WebDAV...")
-                val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
-                val testResult = kotlinx.coroutines.runBlocking { client.testConnection() }
-                if (testResult.isFailure) {
-                    result = "WebDAV连接失败: ${testResult.exceptionOrNull()?.message}"
-                    appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
-                }
-                updateNotification("确保远端目录存在...")
-                kotlinx.coroutines.runBlocking { client.ensureDirectory(remotePath) }
-
-                val remoteFiles = kotlinx.coroutines.runBlocking { client.list(remotePath) }.getOrNull() ?: emptyList()
-
-                for (pkgPath in allFiles) {
-                    val pkgName = File(pkgPath).name
-                    val pkgSize = RootGateways.runQuiet("stat -c %s \"$pkgPath\" 2>/dev/null").trim().toLongOrNull() ?: 0L
-                    if (pkgSize < 100L) continue
-                    val remoteMatch = remoteFiles.find { it.path.endsWith(pkgName) }
-                    if (remoteMatch != null && remoteMatch.size == pkgSize) {
-                        appendLog("跳过: $pkgName (远程已存在)")
-                        continue
-                    }
-                    updateNotification("上传 $pkgName (${formatSize(pkgSize)})...")
-                    appendLog("上传: $pkgName")
-                    // Upload via root process Binder (no external binary)
-                    val uploadUrl = "${webdavUrl.trimEnd('/')}/$remotePath/$pkgName"
-                    val ok = RootGateways.webdavUpload(uploadUrl, webdavUser, webdavPass, pkgPath)
-                    if (!ok) {
-                        appendLog("上传失败: $pkgName")
-                    }
-                }
-                result = "同步完成: ${allFiles.size}个文件"
+                result = syncResult.message
                 appendLog(result)
                 updateNotification(result)
-                sendResult(true, result)
+                sendResult(syncResult.success, result)
+
                 // Schedule next sync if interval configured
+                val settingsCfgRaw = try { File(filesDir, "settings_config.json").readText() } catch (_: Exception) { "{}" }
+                val settingsCfg = org.json.JSONObject(settingsCfgRaw)
                 val intervalMin = settingsCfg.optInt(INTERVAL_KEY, 0)
                 if (intervalMin > 0) {
                     appendLog("下次同步: ${intervalMin}分钟后")
@@ -179,12 +138,5 @@ class SyncService : Service() {
             .setContentText(text)
             .setOngoing(true)
             .build()
-    }
-
-    private fun formatSize(bytes: Long): String = when {
-        bytes > 1024 * 1024 * 1024 -> "%.1f GB".format(bytes.toFloat() / 1024 / 1024 / 1024)
-        bytes > 1024 * 1024 -> "%.1f MB".format(bytes.toFloat() / 1024 / 1024)
-        bytes > 1024 -> "%.1f KB".format(bytes.toFloat() / 1024)
-        else -> "$bytes B"
     }
 }

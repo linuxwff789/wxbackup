@@ -7,7 +7,7 @@ import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.root.RootGatewayImpl
 import com.nous.wxhook.storage.WxHookPaths
 import kotlinx.coroutines.runBlocking
-import com.nous.wxhook.sync.WebDavClient
+import com.nous.wxhook.sync.Syncer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -414,54 +414,26 @@ object BackupOrchestrator {
     // ── Remote sync via WebDAV ──
 
     fun cloudSync(callback: BackupHookLocal.ProgressCallback?, archivePath: String? = null, tarFiles: List<String> = emptyList()) {
-        try {
-            val configFile = File(BackupEnv.backupDir, "remote_config.json")
-            if (!configFile.exists()) return
-            val config = JSONObject(BackupEnv.suOut("cat \"${configFile.absolutePath}\" 2>/dev/null").ifBlank { "{}" })
-            if (!config.optBoolean("enabled", false)) return
+        val config = Syncer.loadConfig()
+        if (!config.isValid) return
+        // Also check legacy remote_config.json enabled flag
+        val configFile = File(BackupEnv.backupDir, "remote_config.json")
+        if (configFile.exists()) {
+            val rc = try { JSONObject(BackupEnv.suOut("cat \"${configFile.absolutePath}\" 2>/dev/null").ifBlank { "{}" }) } catch (_: Exception) { JSONObject() }
+            if (!rc.optBoolean("enabled", true)) return
+        }
 
-            val settingsCfg = try { JSONObject(File(BackupEnv.filesDirPath, "settings_config.json").readText()) } catch (_: Exception) { JSONObject() }
-            val webdavUrl = settingsCfg.optString("webdav_url", "")
-            val webdavUser = settingsCfg.optString("webdav_user", "")
-            val webdavPass = settingsCfg.optString("webdav_pass", "")
-            val remoteBase = settingsCfg.optString("remote_path", "wxhook-backup")
-            if (webdavUrl.isBlank() || webdavUser.isBlank()) return
+        val archives = if (archivePath != null && BackupEnv.backupExists(archivePath)) {
+            listOf(archivePath)
+        } else {
+            emptyList()
+        }
 
-            // Find the latest wxbackup_full_*.tar.zst
-            val pkgPath = if (archivePath != null && BackupEnv.backupExists(archivePath)) {
-                archivePath
-            } else {
-                val found = BackupEnv.suOut("ls -t ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null | head -1").trim()
-                if (found.isBlank()) { callback?.onProgress("无备份包可同步", 0, 0); return }
-                found
-            }
-
-            val pkgSize = BackupEnv.backupSize(pkgPath)
-            if (pkgSize < 100L) { callback?.onProgress("备份包为空", 0, 0); return }
-            val pkgName = File(pkgPath).name
-            callback?.onProgress("上传 $pkgName (${BackupManifest.formatSize(pkgSize)})...", 0, pkgSize)
-
-            val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
-            val testResult = kotlinx.coroutines.runBlocking { client.testConnection() }
-            if (testResult.isFailure) {
-                callback?.onProgress("WebDAV连接失败: ${testResult.exceptionOrNull()?.message}", 0, 0); return
-            }
-            kotlinx.coroutines.runBlocking { client.ensureDirectory(remoteBase) }
-
-            val remoteFiles = kotlinx.coroutines.runBlocking { client.list(remoteBase) }.getOrNull() ?: emptyList()
-            val remoteMatch = remoteFiles.find { it.path.endsWith(pkgName) }
-            if (remoteMatch != null && remoteMatch.size == pkgSize) {
-                callback?.onProgress("跳过: $pkgName (远程已存在)", 1, pkgSize)
-            } else {
-                val uploadResult = kotlinx.coroutines.runBlocking { client.upload(File(pkgPath), "$remoteBase/$pkgName") }
-                if (uploadResult.isFailure) {
-                    callback?.onProgress("上传失败: ${uploadResult.exceptionOrNull()?.message}", 0, 0); return
-                }
-                callback?.onProgress("已上传: $pkgName", 1, pkgSize)
-            }
-            callback?.onProgress("同步完成", 1, pkgSize)
-        } catch (e: Exception) {
-            callback?.onProgress("同步异常: ${e.message}", 0, 0)
+        val result = Syncer.sync(config, archives) { p ->
+            callback?.onProgress(p.message, p.current.toLong(), p.total.toLong())
+        }
+        if (result.uploaded > 0 || result.skipped > 0) {
+            callback?.onProgress(result.message, 1, 1)
         }
     }
 
