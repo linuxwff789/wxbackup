@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.nous.wxhook.db.BackupManager
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
+import com.nous.wxhook.sync.Syncer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -135,49 +136,20 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 withContext(Dispatchers.Main) { appendLog("☁️ 同步到 $remote...") }
 
-                // Read WebDAV config from settings_config.json
-                val cfg = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
-                val webdavUrl = cfg.optString("webdav_url", "")
-                val webdavUser = cfg.optString("webdav_user", "")
-                val webdavPass = cfg.optString("webdav_pass", "")
-
-                if (webdavUrl.isBlank() || webdavUser.isBlank()) {
+                val config = Syncer.loadConfig()
+                if (!config.isValid) {
                     withContext(Dispatchers.Main) { appendLog("☁️ WebDAV未配置") }
                     return@launch
                 }
+                // Override remotePath from module UI setting
+                val effectiveConfig = config.copy(remotePath = remote)
 
-                val client = com.nous.wxhook.sync.WebDavClient(webdavUrl, webdavUser, webdavPass)
-                val testResult = client.testConnection()
-                if (testResult.isFailure) {
-                    withContext(Dispatchers.Main) { appendLog("☁️ 连接失败: ${testResult.exceptionOrNull()?.message}") }
-                    return@launch
+                val result = Syncer.sync(effectiveConfig) { p ->
+                    appendLog(p.message)
                 }
-
-                client.ensureDirectory(remote)
-
-                // Incremental: list remote files and only upload new/changed
-                val remoteFiles = client.list(remote).getOrNull() ?: emptyList()
-                val backupDir = File("/sdcard/Download/wxhook_backup")
-                val localFiles = backupDir.listFiles() ?: emptyArray()
-                var uploaded = 0
-                var skipped = 0
-
-                for (local in localFiles) {
-                    if (!local.isFile) continue
-                    val remoteMatch = remoteFiles.find { it.path.endsWith(local.name) }
-                    if (remoteMatch == null || remoteMatch.size != local.length()) {
-                        val uploadResult = client.upload(local, "$remote/${local.name}")
-                        if (uploadResult.isSuccess) {
-                            uploaded++
-                        } else {
-                            withContext(Dispatchers.Main) { appendLog("☁️ 上传失败: ${local.name}") }
-                        }
-                    } else {
-                        skipped++
-                    }
+                withContext(Dispatchers.Main) {
+                    appendLog("☁️ ${result.message}")
                 }
-
-                withContext(Dispatchers.Main) { appendLog("☁️ 同步完成: 上传${uploaded}个, 跳过${skipped}个") }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { appendLog("☁️ 同步失败: ${e.message}") }
             }
