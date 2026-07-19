@@ -57,17 +57,18 @@ object Syncer {
     }
 
     /**
-     * Scan backupDataDir for archive files (full + incremental).
-     * Returns list of absolute paths, sorted newest-first.
+     * Scan backupDataDir for all files (archives + metadata), excluding tmp.
+     * Returns list of absolute paths, archives first then sorted.
      */
     fun scanArchives(): List<String> {
-        val full = RootGateways.runQuiet(
-            "ls -t ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null"
+        val all = RootGateways.runQuiet(
+            "find ${BackupEnv.backupDataDir} -maxdepth 2 -type f ! -path '*/tmp/*' 2>/dev/null"
         ).lines().filter { it.isNotBlank() }
-        val incr = RootGateways.runQuiet(
-            "ls -t ${BackupEnv.backupDataDir}/incr_attachments_*.tar.zst 2>/dev/null"
-        ).lines().filter { it.isNotBlank() }
-        return (full + incr).sortedByDescending { File(it).lastModified() }
+        // Archives first (full > incr), then other files
+        val archives = all.filter { it.endsWith(".tar.zst") }
+            .sortedByDescending { File(it).lastModified() }
+        val others = all.filter { !it.endsWith(".tar.zst") }.sorted()
+        return archives + others
     }
 
     /**
