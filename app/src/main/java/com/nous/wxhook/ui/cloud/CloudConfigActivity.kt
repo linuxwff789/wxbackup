@@ -252,7 +252,7 @@ class CloudConfigActivity : AppCompatActivity() {
                 var url = urlEt.text.toString().trim()
                 val user = userEt.text.toString().trim(); val pass = passEt.text.toString().trim()
                 val vendor = vSpin.selectedItem.toString()
-                val remotePath = pathEt.text.toString().trim()
+                val remotePath = pathEt.text.toString().trim().ifEmpty { "wxhook-backup" }
                 if (url.isEmpty() || user.isEmpty()) return@setPositiveButton
                 if (!url.startsWith("http")) url = "https://$url"
                 viewModel.saveWebdavConfig(name, url, vendor, user, pass, remotePath)

@@ -100,11 +100,9 @@ object Syncer {
             return Result(false, message = msg)
         }
 
-        // 2. Ensure remote directory (skip if root)
-        if (config.remotePath.isNotBlank()) {
-            onProgress?.invoke(Progress("确保远端目录..."))
-            kotlinx.coroutines.runBlocking { client.ensureDirectory(config.remotePath) }
-        }
+        // 2. Ensure remote directory
+        onProgress?.invoke(Progress("确保远端目录..."))
+        kotlinx.coroutines.runBlocking { client.ensureDirectory(config.remotePath) }
 
         // 3. Determine what to upload
         val toUpload = if (archives.isNotEmpty()) {
@@ -143,9 +141,8 @@ object Syncer {
 
             // Upload
             onProgress?.invoke(Progress("上传 $pkgName (${BackupManifest.formatSize(pkgSize)})...", idx + 1, toUpload.size))
-            val remoteUploadPath = if (config.remotePath.isNotBlank()) "${config.remotePath}/$pkgName" else pkgName
             val uploadResult = kotlinx.coroutines.runBlocking {
-                client.upload(File(pkgPath), remoteUploadPath)
+                client.upload(File(pkgPath), "${config.remotePath}/$pkgName")
             }
 
             if (uploadResult.isSuccess) {
