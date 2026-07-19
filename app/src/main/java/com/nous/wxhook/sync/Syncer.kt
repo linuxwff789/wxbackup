@@ -36,16 +36,23 @@ object Syncer {
         val message: String = "",
     )
 
-    /** Load WebDAV config from settings_config.json. */
+    /** Load WebDAV config from filesDir + fallback to legacy remote_config.json for remote path. */
     fun loadConfig(): Config {
         val cfg = try {
             JSONObject(File(BackupEnv.filesDirPath, "settings_config.json").readText())
         } catch (_: Exception) { JSONObject() }
+        // Legacy fallback: remote_config.json may have "remote" path
+        val remoteCfg = try {
+            val raw = RootGateways.runQuiet("cat \"${BackupEnv.backupDir}/remote_config.json\" 2>/dev/null")
+            if (raw.isNotBlank()) JSONObject(raw) else JSONObject()
+        } catch (_: Exception) { JSONObject() }
+        val remotePath = cfg.optString("remote_path", "").takeIf { it.isNotBlank() }
+            ?: remoteCfg.optString("remote", "wxhook-backup")
         return Config(
             url = cfg.optString("webdav_url", ""),
             user = cfg.optString("webdav_user", ""),
             pass = cfg.optString("webdav_pass", ""),
-            remotePath = cfg.optString("remote_path", "wxhook-backup"),
+            remotePath = remotePath,
         )
     }
 
