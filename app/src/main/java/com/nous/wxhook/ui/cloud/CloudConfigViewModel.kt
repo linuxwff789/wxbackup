@@ -77,13 +77,14 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
         return "remote${System.currentTimeMillis() % 10000}"
     }
 
-    fun saveWebdavConfig(name: String, url: String, vendor: String, user: String, pass: String) {
+    fun saveWebdavConfig(name: String, url: String, vendor: String, user: String, pass: String, remotePath: String = "wxhook-backup") {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val o = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
                 o.put("webdav_url", url)
                 o.put("webdav_user", user)
                 o.put("webdav_pass", pass)
+                o.put("remote_path", remotePath)
                 configFile.writeText(o.toString())
                 withContext(Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(toastMessage = "✅ $name 已保存")

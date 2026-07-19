@@ -244,14 +244,18 @@ class CloudConfigActivity : AppCompatActivity() {
         col.addView(TextView(ctx).apply { text = "密码"; textSize = 13f })
         val passEt = android.widget.EditText(ctx).apply { textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
         col.addView(passEt)
+        col.addView(TextView(ctx).apply { text = "远端目录（留空=根目录）"; textSize = 13f })
+        val pathEt = android.widget.EditText(ctx).apply { hint = "wxhook-backup"; textSize = 14f; setSingleLine(); setPadding(0,4,0,8) }
+        col.addView(pathEt)
         android.app.AlertDialog.Builder(ctx).setTitle("WebDAV").setView(col)
             .setPositiveButton("保存") { _, _ ->
                 var url = urlEt.text.toString().trim()
                 val user = userEt.text.toString().trim(); val pass = passEt.text.toString().trim()
                 val vendor = vSpin.selectedItem.toString()
+                val remotePath = pathEt.text.toString().trim().ifEmpty { "wxhook-backup" }
                 if (url.isEmpty() || user.isEmpty()) return@setPositiveButton
                 if (!url.startsWith("http")) url = "https://$url"
-                viewModel.saveWebdavConfig(name, url, vendor, user, pass)
+                viewModel.saveWebdavConfig(name, url, vendor, user, pass, remotePath)
             }.setNegativeButton("取消", null).show()
     }
 

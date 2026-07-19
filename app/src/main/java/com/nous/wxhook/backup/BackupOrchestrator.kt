@@ -424,14 +424,14 @@ object BackupOrchestrator {
             val webdavUrl = settingsCfg.optString("webdav_url", "")
             val webdavUser = settingsCfg.optString("webdav_user", "")
             val webdavPass = settingsCfg.optString("webdav_pass", "")
-            val remoteBase = config.optString("remote", "wxhook-backup")
+            val remoteBase = settingsCfg.optString("remote_path", "wxhook-backup")
             if (webdavUrl.isBlank() || webdavUser.isBlank()) return
 
             // Find the latest wxbackup_full_*.tar.zst
             val pkgPath = if (archivePath != null && BackupEnv.backupExists(archivePath)) {
                 archivePath
             } else {
-                val found = BackupEnv.suOut("ls -t ${BackupEnv.backupDir}/wxbackup_full_*.tar.zst 2>/dev/null | head -1").trim()
+                val found = BackupEnv.suOut("ls -t ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null | head -1").trim()
                 if (found.isBlank()) { callback?.onProgress("无备份包可同步", 0, 0); return }
                 found
             }
