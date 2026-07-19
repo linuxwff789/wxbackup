@@ -129,21 +129,21 @@ object Syncer {
 
         for ((idx, pkgPath) in toUpload.withIndex()) {
             val pkgSize = BackupEnv.backupSize(pkgPath)
-            val relPath = pkgPath.removePrefix("${BackupEnv.backupDataDir}/")
+            val pkgName = File(pkgPath).name
 
-            val progressMsg = "[${idx + 1}/${toUpload.size}] $relPath"
+            val progressMsg = "[${idx + 1}/${toUpload.size}] $pkgName"
             onProgress?.invoke(Progress(progressMsg, idx + 1, toUpload.size))
 
             // Skip if remote has same file with same size
-            val remoteMatch = remoteFiles.find { it.path.endsWith(relPath) }
+            val remoteMatch = remoteFiles.find { it.path.endsWith(pkgName) }
             if (remoteMatch != null && remoteMatch.size == pkgSize) {
                 skipped++
                 continue
             }
 
             // Upload
-            onProgress?.invoke(Progress("上传 $relPath (${BackupManifest.formatSize(pkgSize)})...", idx + 1, toUpload.size))
-            val remoteUploadPath = if (config.remotePath.isNotBlank()) "${config.remotePath}/$relPath" else relPath
+            onProgress?.invoke(Progress("上传 $pkgName (${BackupManifest.formatSize(pkgSize)})...", idx + 1, toUpload.size))
+            val remoteUploadPath = if (config.remotePath.isNotBlank()) "${config.remotePath}/$pkgName" else pkgName
             val uploadResult = kotlinx.coroutines.runBlocking {
                 client.upload(File(pkgPath), remoteUploadPath)
             }
@@ -152,7 +152,7 @@ object Syncer {
                 uploaded++
                 totalBytes += pkgSize
             } else {
-                onProgress?.invoke(Progress("上传失败: $relPath - ${uploadResult.exceptionOrNull()?.message}"))
+                onProgress?.invoke(Progress("上传失败: $pkgName - ${uploadResult.exceptionOrNull()?.message}"))
             }
         }
 
