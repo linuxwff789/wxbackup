@@ -302,11 +302,22 @@ object BackupOrchestrator {
                 val userOldManifest = FileManifest.load(userDir)
                 val userDiff = FileManifest.diff(userOldManifest, userCurrentFiles)
                 if (userDiff.added.isNotEmpty() || userDiff.modified.isNotEmpty() || userDiff.deleted.isNotEmpty()) {
-                    // Save FULL per-user manifest (merge), not just incremental changes
+                    // Save FULL per-user manifest to disk (for next incremental diff)
                     val userUpdatedManifest = FileManifest.toManifest(userCurrentFiles, tag)
                     userUpdatedManifest.put("incrFrom", incrFrom)
                     userUpdatedManifest.put("incrTo", incrTo)
                     FileManifest.save(userDir, userUpdatedManifest)
+
+                    // Save incremental-only manifest for archive (not full set)
+                    val incrFiles = userDiff.added + userDiff.modified
+                    if (incrFiles.isNotEmpty()) {
+                        val incrOnlyManifest = FileManifest.toManifest(incrFiles, tag)
+                        incrOnlyManifest.put("incrFrom", incrFrom)
+                        incrOnlyManifest.put("incrTo", incrTo)
+                        val tmpManifestDir = "${BackupEnv.backupDataDir}/tmp/${tag}_${hash}"
+                        RootGateways.mkdirs(tmpManifestDir)
+                        RootGateways.writeFile("$tmpManifestDir/file_manifest.json", incrOnlyManifest.toString())
+                    }
 
                     callback?.onProgress(
                         "[$hash] 清单已更新: +${userDiff.added.size} ~${userDiff.modified.size} -${userDiff.deleted.size}",
@@ -328,8 +339,15 @@ object BackupOrchestrator {
                     File(BackupEnv.backupDataDir, "$userHash/db_state.json").absolutePath, "$userHash/db_state.json")
                 incrSources += NativeArchivePlan.Source(
                     File(BackupEnv.backupDir, "db_config.json").absolutePath, "$userHash/db_config.json")
-                incrSources += NativeArchivePlan.Source(
-                    File(BackupEnv.backupDataDir, "$userHash/file_manifest.json").absolutePath, "$userHash/file_manifest.json")
+                // Use incremental-only manifest from tmp (not full disk version)
+                val incrManifestPath = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/file_manifest.json"
+                if (RootGateways.exists(incrManifestPath)) {
+                    incrSources += NativeArchivePlan.Source(incrManifestPath, "$userHash/file_manifest.json")
+                } else {
+                    // Fallback to full manifest if no incremental (shouldn't normally happen)
+                    incrSources += NativeArchivePlan.Source(
+                        File(BackupEnv.backupDataDir, "$userHash/file_manifest.json").absolutePath, "$userHash/file_manifest.json")
+                }
             }
             // Add changed attachments from tmp/ (find individual files, not directory trees)
             for (wxBasePath in wxPaths) {
