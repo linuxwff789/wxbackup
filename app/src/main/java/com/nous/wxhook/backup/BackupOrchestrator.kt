@@ -8,6 +8,7 @@ import com.nous.wxhook.root.RootGatewayImpl
 import com.nous.wxhook.storage.WxHookPaths
 import kotlinx.coroutines.runBlocking
 import com.nous.wxhook.sync.Syncer
+import com.nous.wxhook.sync.WebDavClient
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
