@@ -67,11 +67,6 @@ class SettingsActivity : AppCompatActivity() {
     private fun buildItems() {
         val items = mutableListOf<SettingsItem>()
 
-        // ── Cloud sync section ──
-        items.add(SettingsItem.Header("☁️ 云同步"))
-        items.add(SettingsItem.Toggle("启用云同步", "sync_enabled", false))
-        items.add(SettingsItem.Button("立即同步到云盘", "sync_now"))
-
         // ── WebDAV config section ──
         items.add(SettingsItem.Header("🔑 WebDAV 配置"))
         items.add(SettingsItem.Input("WebDAV 地址", "webdav_url", "", "https://example.com/dav/"))
@@ -121,7 +116,6 @@ class SettingsActivity : AppCompatActivity() {
                 }
                 viewModel.testWebDavConnection(url, user, pass)
             }
-            action == "sync_now" -> viewModel.doSync()
             action == "rebuild_state" -> {
                 viewModel.rebuildState()
                 Toast.makeText(this, "⏳ 重建中...", Toast.LENGTH_SHORT).show()
