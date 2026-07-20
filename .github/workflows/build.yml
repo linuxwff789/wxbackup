@@ -40,7 +40,7 @@ jobs:
       - name: Download OpenList AAR
         run: |
           mkdir -p app/libs
-          curl -fsSL "https://github.com/linuxwff789/openlist-android/releases/download/v0.2.2/openlistbridge.aar" \
+          curl -fsSL "https://github.com/linuxwff789/openlist-android/releases/download/v0.2.3/openlistbridge.aar" \
             -o app/libs/openlistbridge.aar
           ls -lh app/libs/openlistbridge.aar
 
