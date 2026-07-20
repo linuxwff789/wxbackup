@@ -2,11 +2,25 @@
 set -e
 
 MSG="${1:-chore: update}"
-cd /data/data/com.termux/files/home/wxbackup
+PROJECT="/data/data/com.termux/files/home/wxbackup"
 
-echo "=== 提交并推送 ==="
+echo "═══════════════════════════════════════════"
+echo "  推送代码 → GitHub Actions 自动构建"
+echo "═══════════════════════════════════════════"
+
+cd "$PROJECT"
 git add -A
-git diff --cached --quiet && echo "无改动" && exit 0
+
+if git diff --cached --quiet; then
+  echo "  无改动"
+  exit 0
+fi
+
 git commit -m "$MSG"
 git push
+
+echo ""
 echo "✅ 推送完成"
+echo "📦 GitHub Actions: https://github.com/linuxwff789/wxbackup/actions"
+echo "📥 安装: bash install.sh"
+echo ""

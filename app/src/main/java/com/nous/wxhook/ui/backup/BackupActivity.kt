@@ -1,56 +1,102 @@
 package com.nous.wxhook.ui.backup
 
-import android.app.Activity
 import android.os.Bundle
 import android.os.Environment
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
+import android.view.ViewGroup
+import androidx.appcompat.app.AppCompatActivity
+import com.nous.wxhook.ui.M3
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class BackupActivity : Activity() {
+class BackupActivity : AppCompatActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val sv = ScrollView(this)
-        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 48, 48, 48) }
+        supportActionBar?.title = "备份管理"
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
-        layout.addView(TextView(this).apply { text = "备份管理"; textSize = 20f })
+        val scrollView = android.widget.ScrollView(this)
+        val root = M3.vLayout(this)
+
+        val card = M3.card(this)
+        card.addView(M3.titleMedium(this, "📦 备份文件"))
 
         val dir = File("/sdcard/Download/wxhook_backup")
         if (dir.exists()) {
-            val files = dir.listFiles()?.filter { it.name.endsWith(".db") }?.sortedByDescending { it.lastModified() } ?: emptyList()
-            layout.addView(TextView(this).apply { text = "\n备份文件 (${files.size}个)"; textSize = 16f })
+            val files = dir.listFiles()
+                ?.filter { it.name.endsWith(".db") || it.name.endsWith(".tar.zst") || it.name.endsWith(".tar.gz") }
+                ?.sortedByDescending { it.lastModified() } ?: emptyList()
+
             if (files.isEmpty()) {
-                layout.addView(TextView(this).apply { text = "  暂无备份"; textSize = 14f; setPadding(0, 8, 0, 0) })
+                card.addView(M3.body(this, "暂无备份文件").apply {
+                    setPadding(0, M3.dp(this@BackupActivity, 8), 0, 0)
+                    setTextColor(M3.onSurfaceVariant(this@BackupActivity))
+                })
             } else {
-                val fmt = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
+                card.addView(M3.label(this, "共 ${files.size} 个备份文件").apply {
+                    setPadding(0, M3.dp(this@BackupActivity, 8), 0, 0)
+                })
+
+                val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
                 files.forEach { f ->
-                    val sizeMB = "%.1f".format(f.length().toFloat() / 1024 / 1024)
+                    val size = formatSize(f.length())
                     val time = fmt.format(Date(f.lastModified()))
-                    layout.addView(TextView(this).apply {
-                        text = "  📦 ${f.name}\n     ${sizeMB}MB · $time"
-                        textSize = 13f; setPadding(0, 8, 0, 0)
-                    })
+                    val fileCard = M3.outlinedCard(this).apply {
+                        val lp = android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { setMargins(0, M3.dp(this@BackupActivity, 6), 0, 0) }
+                        layoutParams = lp
+                    }
+                    fileCard.addView(M3.bodyMedium(this, f.name))
+                    fileCard.addView(M3.label(this, "$size · $time"))
+                    card.addView(fileCard)
                 }
             }
-            // 附件目录
+
+            // Attachment directories summary
             val attDirs = listOf("image2", "voice2", "video", "cdn")
+            card.addView(M3.sp(this, 12))
+            card.addView(M3.titleMedium(this, "📁 附件目录"))
+
             attDirs.forEach { d ->
                 val ad = File(dir, d)
                 if (ad.exists()) {
-                    val count = ad.walkTopDown().filter { it.isFile }.count()
-                    val sizeMB = "%.1f".format(ad.walkTopDown().filter { it.isFile }.sumOf { it.length() }.toFloat() / 1024 / 1024)
-                    layout.addView(TextView(this).apply { text = "  📁 $d/ ($count 文件, ${sizeMB}MB)"; textSize = 13f; setPadding(0, 4, 0, 0) })
+                    val filesList = ad.walkTopDown().filter { it.isFile }.toList()
+                    val count = filesList.size
+                    val totalSize = filesList.sumOf { it.length() }
+                    card.addView(M3.label(this, "📂 $d/  ·  $count 文件 ·  ${formatSize(totalSize)}").apply {
+                        setPadding(0, M3.dp(this@BackupActivity, 4), 0, 0)
+                    })
                 }
             }
         } else {
-            layout.addView(TextView(this).apply { text = "\n暂无备份\n通过模块入口页面进行备份"; textSize = 14f })
+            card.addView(M3.body(this, "暂无备份目录").apply {
+                setPadding(0, M3.dp(this@BackupActivity, 8), 0, 0)
+            })
+            card.addView(M3.label(this, "通过「模块入口 > 备份管理」进行备份").apply {
+                setPadding(0, M3.dp(this@BackupActivity, 4), 0, 0)
+            })
         }
 
-        sv.addView(layout)
-        setContentView(sv)
+        root.addView(card)
+        root.addView(M3.sp(this, 16))
+
+        scrollView.addView(root)
+        setContentView(scrollView)
+    }
+
+    private fun formatSize(bytes: Long): String = when {
+        bytes > 1024 * 1024 * 1024 -> "%.1f GB".format(bytes.toFloat() / (1024 * 1024 * 1024))
+        bytes > 1024 * 1024 -> "%.1f MB".format(bytes.toFloat() / (1024 * 1024))
+        bytes > 1024 -> "%.1f KB".format(bytes.toFloat() / 1024)
+        else -> "$bytes B"
+    }
+
+    override fun onSupportNavigateUp(): Boolean {
+        finish()
+        return true
     }
 }

@@ -1,12 +1,61 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="white">#FFFFFFFF</color>
-    <color name="black">#FF000000</color>
-    <color name="md_white">#FFFFFF</color>
-    <color name="md_bg">#FFF5F5F5</color>
-    <color name="md_surface">#FFFFFF</color>
-    <color name="md_text_primary">#DE000000</color>
-    <color name="md_text_secondary">#8A000000</color>
-    <color name="md_divider">#1F000000</color>
-    <color name="md_accent">#FF6200EE</color>
+    <!-- MD3 Primary palette (based on deep purple #6750A4) -->
+    <color name="md3_primary">#6750A4</color>
+    <color name="md3_on_primary">#FFFFFF</color>
+    <color name="md3_primary_container">#EADDFF</color>
+    <color name="md3_on_primary_container">#21005D</color>
+
+    <!-- MD3 Secondary -->
+    <color name="md3_secondary">#625B71</color>
+    <color name="md3_on_secondary">#FFFFFF</color>
+    <color name="md3_secondary_container">#E8DEF8</color>
+    <color name="md3_on_secondary_container">#1D192B</color>
+
+    <!-- MD3 Tertiary -->
+    <color name="md3_tertiary">#7D5260</color>
+    <color name="md3_on_tertiary">#FFFFFF</color>
+    <color name="md3_tertiary_container">#FFD8E4</color>
+    <color name="md3_on_tertiary_container">#31111D</color>
+
+    <!-- MD3 Error -->
+    <color name="md3_error">#B3261E</color>
+    <color name="md3_on_error">#FFFFFF</color>
+    <color name="md3_error_container">#F9DEDC</color>
+    <color name="md3_on_error_container">#410E0B</color>
+
+    <!-- MD3 Surface / Background -->
+    <color name="md3_background">#FFFBFE</color>
+    <color name="md3_on_background">#1C1B1F</color>
+    <color name="md3_surface">#FFFBFE</color>
+    <color name="md3_on_surface">#1C1B1F</color>
+    <color name="md3_surface_variant">#E7E0EC</color>
+    <color name="md3_on_surface_variant">#49454F</color>
+    <color name="md3_outline">#79747E</color>
+    <color name="md3_outline_variant">#CAC4D0</color>
+
+    <!-- MD3 Inverse -->
+    <color name="md3_inverse_surface">#313033</color>
+    <color name="md3_inverse_on_surface">#F4EFF4</color>
+    <color name="md3_inverse_primary">#D0BCFF</color>
+
+    <!-- MD3 Scrim (backdrop) -->
+    <color name="md3_scrim">#000000</color>
+
+    <!-- Utility -->
+    <color name="md3_white">#FFFFFF</color>
+    <color name="md3_unread_badge">#E53935</color>
+    <color name="md3_success">#2E7D32</color>
+    <color name="md3_warning">#ED6C02</color>
+    <color name="md3_info">#0288D1</color>
+
+    <!-- Avatar colors for chat list -->
+    <color name="avatar_1">#E91E63</color>
+    <color name="avatar_2">#9C27B0</color>
+    <color name="avatar_3">#6750A4</color>
+    <color name="avatar_4">#3F51B5</color>
+    <color name="avatar_5">#2196F3</color>
+    <color name="avatar_6">#009688</color>
+    <color name="avatar_7">#4CAF50</color>
+    <color name="avatar_8">#FF5722</color>
 </resources>

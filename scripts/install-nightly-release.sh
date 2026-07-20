@@ -2,13 +2,21 @@
 set -euo pipefail
 
 repo='linuxwff789/wxbackup'
-out="$HOME/wxbackup-nightly.apk"
 url="https://github.com/$repo/releases/download/nightly/app-debug.apk"
+out="$HOME/wxhook-nightly.apk"
 
-tmp="$(mktemp "$HOME/.cache/wxbackup-release-XXXXXX.apk")"
+echo "=== 下载 nightly APK ==="
+echo "  来源: $url"
+
+tmp="$(mktemp "$HOME/.cache/wxhook-release-XXXXXX.apk")"
 trap 'rm -f "$tmp"' EXIT
+
 curl -fL --retry 3 --retry-all-errors --progress-bar "$url" -o "$tmp"
 unzip -tqq "$tmp"
 mv "$tmp" "$out"
-su -c "pm install -r '$out'"
-echo "Installed: $out"
+
+echo "  保存: $out ($(ls -lh "$out" | awk '{print $5}'))"
+echo ""
+
+echo "=== 安装 ==="
+su -c "pm install -r '$out'" && echo "✅ 安装成功" || echo "❌ 安装失败"
