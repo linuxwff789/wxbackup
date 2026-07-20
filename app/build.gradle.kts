@@ -98,6 +98,9 @@ dependencies {
     implementation("com.github.topjohnwu.libsu:service:6.0.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // OpenList gomobile AAR — Go JNI bridge for cloud drives
+    implementation(files("libs/openlistbridge.aar"))
+
     testImplementation("junit:junit:4.13.2")
 
     // SQLCipher for WeChat DB decryption

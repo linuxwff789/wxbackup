@@ -34,11 +34,15 @@ jobs:
           # zstd remains for SQL dump and legacy .zst read paths.
           curl -fsSL "https://github.com/linuxwff789/wxhook/releases/download/native-binaries/zstd" \
             -o app/src/main/assets/bin/zstd
-          # openlist-cli for cloud drive operations (AliyunDrive, WebDAV)
-          curl -fsSL "https://github.com/linuxwff789/openlist-android/releases/download/v0.2.0/openlist-cli.arm64" \
-            -o app/src/main/assets/bin/openlist-cli
           chmod 755 app/src/main/assets/bin/*
           ls -lh app/src/main/assets/bin/
+
+      - name: Download OpenList AAR
+        run: |
+          mkdir -p app/libs
+          curl -fsSL "https://github.com/linuxwff789/openlist-android/releases/download/v0.2.1/openlistbridge.aar" \
+            -o app/libs/openlistbridge.aar
+          ls -lh app/libs/openlistbridge.aar
 
       - name: Setup signing
         env:

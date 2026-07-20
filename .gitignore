@@ -28,3 +28,4 @@ tmp_fix*.py
 .codegraph/
 
 app/src/main/assets/bin/openlist-cli
+app/libs/openlistbridge.aar
