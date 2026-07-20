@@ -19,22 +19,22 @@ class OpenListDriver private constructor(
             System.loadLibrary("openlist")
         }
 
-        // ── JNI native methods (all static — bridge.go uses jclass) ──
-        private external fun nCreate(driverType: String, configJson: String): String
-        private external fun nList(handle: String, path: String): String
-        private external fun nGet(handle: String, path: String): String
-        private external fun nGetDownloadUrl(handle: String, path: String): String
-        private external fun nUploadFromFile(
+        // ── JNI native methods ──
+        @JvmStatic private external fun nCreate(driverType: String, configJson: String): String
+        @JvmStatic private external fun nList(handle: String, path: String): String
+        @JvmStatic private external fun nGet(handle: String, path: String): String
+        @JvmStatic private external fun nGetDownloadUrl(handle: String, path: String): String
+        @JvmStatic private external fun nUploadFromFile(
             handle: String, parentPath: String, fileName: String,
             localFilePath: String, mimeType: String
         ): String
-        private external fun nMkdir(handle: String, parentPath: String, dirName: String): String
-        private external fun nDelete(handle: String, path: String): String
-        private external fun nRename(handle: String, path: String, newName: String): String
-        private external fun nMove(handle: String, srcPath: String, dstDirPath: String): String
-        private external fun nCopy(handle: String, srcPath: String, dstDirPath: String): String
-        private external fun nGetStorageDetails(handle: String): String
-        private external fun nDestroy(handle: String)
+        @JvmStatic private external fun nMkdir(handle: String, parentPath: String, dirName: String): String
+        @JvmStatic private external fun nDelete(handle: String, path: String): String
+        @JvmStatic private external fun nRename(handle: String, path: String, newName: String): String
+        @JvmStatic private external fun nMove(handle: String, srcPath: String, dstDirPath: String): String
+        @JvmStatic private external fun nCopy(handle: String, srcPath: String, dstDirPath: String): String
+        @JvmStatic private external fun nGetStorageDetails(handle: String): String
+        @JvmStatic private external fun nDestroy(handle: String)
 
         /** Create a new driver instance. */
         suspend fun create(driverType: String, configJson: String): OpenListDriver {
