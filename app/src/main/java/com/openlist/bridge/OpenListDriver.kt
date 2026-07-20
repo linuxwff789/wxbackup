@@ -17,9 +17,12 @@ class OpenListDriver private constructor(
     companion object {
         init {
             System.loadLibrary("openlist")
+            // Warm up Go runtime (scheduler, GC) before complex JNI calls
+            try { nWarmup() } catch (_: Throwable) { }
         }
 
         // ── JNI native methods ──
+        @JvmStatic private external fun nWarmup(): String
         @JvmStatic private external fun nCreate(driverType: String, configJson: String): String
         @JvmStatic private external fun nList(handle: String, path: String): String
         @JvmStatic private external fun nGet(handle: String, path: String): String
