@@ -26,3 +26,6 @@ tmp_fix*.py
 *.orig
 .hermes/
 .codegraph/
+
+# OpenList JNI lib - downloaded by CI
+app/src/main/jniLibs/

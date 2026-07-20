@@ -10,16 +10,31 @@ import java.io.File
  * Shared sync logic — used by BackupOrchestrator (backup-time sync)
  * and SyncService (manual/timed sync). Only syncs archive files
  * (.tar.zst), not loose metadata files.
+ *
+ * Supports multiple cloud providers:
+ * - "webdav":       WebDAV (via WebDavClient or OpenListDriver)
+ * - "aliyundrive":  阿里云盘 Open (via OpenListDriver)
  */
 object Syncer {
 
     data class Config(
+        val provider: String = "webdav",
+        // WebDAV fields
         val url: String = "",
         val user: String = "",
         val pass: String = "",
+        // Common
         val remotePath: String = "wxhook-backup",
+        // AliyunDrive fields
+        val aliyunRefreshToken: String = "",
+        val aliyunApiUrl: String = "https://api.oplist.org/alicloud/renewapi",
+        val aliyunRootFolder: String = "root",
     ) {
-        val isValid: Boolean get() = url.isNotBlank() && user.isNotBlank()
+        val isValid: Boolean get() = when (provider) {
+            "webdav" -> url.isNotBlank() && user.isNotBlank()
+            "aliyundrive" -> aliyunRefreshToken.isNotBlank()
+            else -> false
+        }
     }
 
     data class Progress(
@@ -36,11 +51,19 @@ object Syncer {
         val message: String = "",
     )
 
-    /** Load WebDAV config from filesDir + fallback to legacy remote_config.json for remote path. */
+    /** Load config from settings_config.json + legacy remote_config.json. */
     fun loadConfig(): Config {
         val cfg = try {
             JSONObject(File(BackupEnv.filesDirPath, "settings_config.json").readText())
         } catch (_: Exception) { JSONObject() }
+
+        // Detect provider type
+        val provider = when {
+            cfg.optString("aliyundrive_refresh_token", "").isNotBlank() -> "aliyundrive"
+            cfg.optString("webdav_url", "").isNotBlank() -> "webdav"
+            else -> "webdav"
+        }
+
         // Legacy fallback: remote_config.json may have "remote" path
         val remoteCfg = try {
             val raw = RootGateways.runQuiet("cat \"${BackupEnv.backupDir}/remote_config.json\" 2>/dev/null")
@@ -48,12 +71,36 @@ object Syncer {
         } catch (_: Exception) { JSONObject() }
         val remotePath = cfg.optString("remote_path", "").takeIf { it.isNotBlank() }
             ?: remoteCfg.optString("remote", "wxhook-backup")
+
         return Config(
+            provider = provider,
             url = cfg.optString("webdav_url", ""),
             user = cfg.optString("webdav_user", ""),
             pass = cfg.optString("webdav_pass", ""),
             remotePath = remotePath,
+            aliyunRefreshToken = cfg.optString("aliyundrive_refresh_token", ""),
+            aliyunApiUrl = cfg.optString("aliyundrive_api_url", "https://api.oplist.org/alicloud/renewapi"),
+            aliyunRootFolder = cfg.optString("aliyundrive_root_folder", "root"),
         )
+    }
+
+    /** Create a CloudClient for the given config. */
+    fun createClient(config: Config): CloudClient? {
+        return when (config.provider) {
+            "aliyundrive" -> {
+                val configJson = OpenListCloudClient.aliyunConfig(
+                    refreshToken = config.aliyunRefreshToken,
+                    apiUrl = config.aliyunApiUrl,
+                    rootFolderId = config.aliyunRootFolder,
+                )
+                try {
+                    OpenListCloudClient("AliyundriveOpen", configJson)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            else -> WebDavClient(config.url, config.user, config.pass)
+        }
     }
 
     /**
@@ -64,7 +111,6 @@ object Syncer {
         val all = RootGateways.runQuiet(
             "find ${BackupEnv.backupDataDir} -maxdepth 2 -type f ! -path '*/tmp/*' 2>/dev/null"
         ).lines().filter { it.isNotBlank() }
-        // Archives first (full > incr), then other files
         val archives = all.filter { it.endsWith(".tar.zst") }
             .sortedByDescending { File(it).lastModified() }
         val others = all.filter { !it.endsWith(".tar.zst") }.sorted()
@@ -72,9 +118,9 @@ object Syncer {
     }
 
     /**
-     * Sync archives to WebDAV.
+     * Sync archives to cloud storage.
      *
-     * @param config WebDAV connection config
+     * @param config cloud connection config
      * @param archives specific archives to upload (empty = auto-scan)
      * @param onProgress progress callback (runs on calling thread)
      * @return sync result
@@ -85,17 +131,29 @@ object Syncer {
         onProgress: ((Progress) -> Unit)? = null,
     ): Result {
         if (!config.isValid) {
-            onProgress?.invoke(Progress("WebDAV未配置"))
-            return Result(false, message = "WebDAV未配置")
+            val label = when (config.provider) {
+                "aliyundrive" -> "阿里云盘"
+                else -> "WebDAV"
+            }
+            onProgress?.invoke(Progress("$label 未配置"))
+            return Result(false, message = "$label 未配置")
         }
 
-        val client = WebDavClient(config.url, config.user, config.pass)
+        val client = createClient(config) ?: run {
+            onProgress?.invoke(Progress("创建云存储客户端失败"))
+            return Result(false, message = "创建云存储客户端失败")
+        }
+
+        val providerLabel = when (config.provider) {
+            "aliyundrive" -> "阿里云盘"
+            else -> "WebDAV"
+        }
 
         // 1. Test connection
-        onProgress?.invoke(Progress("连接 WebDAV..."))
+        onProgress?.invoke(Progress("连接 $providerLabel..."))
         val testResult = kotlinx.coroutines.runBlocking { client.testConnection() }
         if (testResult.isFailure) {
-            val msg = "WebDAV连接失败: ${testResult.exceptionOrNull()?.message}"
+            val msg = "$providerLabel 连接失败: ${testResult.exceptionOrNull()?.message}"
             onProgress?.invoke(Progress(msg))
             return Result(false, message = msg)
         }

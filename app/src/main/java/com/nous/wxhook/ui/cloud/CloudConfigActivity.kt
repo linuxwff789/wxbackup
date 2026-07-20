@@ -116,7 +116,7 @@ class CloudConfigActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
-        for ((label, provider) in listOf("+ WebDAV" to "webdav", "+ S3" to "s3")) {
+        for ((label, provider) in listOf("+ WebDAV" to "webdav", "+ S3" to "s3", "+ 阿里云盘" to "aliyundrive")) {
             addRow.addView(Button(this).apply {
                 text = label; textSize = 13f
                 setTextColor(0xFF6200EE.toInt())
@@ -190,6 +190,7 @@ class CloudConfigActivity : AppCompatActivity() {
         when (provider) {
             "webdav" -> showWebdavDialog(name)
             "s3" -> showS3Dialog(name)
+            "aliyundrive" -> showAliyundriveDialog(name)
         }
     }
 
@@ -256,6 +257,30 @@ class CloudConfigActivity : AppCompatActivity() {
                 if (url.isEmpty() || user.isEmpty()) return@setPositiveButton
                 if (!url.startsWith("http")) url = "https://$url"
                 viewModel.saveWebdavConfig(name, url, vendor, user, pass, remotePath)
+            }.setNegativeButton("取消", null).show()
+    }
+
+    // ── AliyunDrive Dialog ──
+    private fun showAliyundriveDialog(name: String) {
+        val ctx = this
+        val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 16, 40, 16) }
+        col.addView(TextView(ctx).apply { text = "阿里云盘配置"; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setPadding(0,0,0,12) })
+        col.addView(TextView(ctx).apply { text = "Refresh Token"; textSize = 13f })
+        val tokenEt = EditText(ctx).apply { textSize = 14f; setSingleLine(); hint = "eyJ0eXAiOiJKV1Qi..." }
+        col.addView(tokenEt)
+        col.addView(TextView(ctx).apply { text = "API 地址（默认即可）"; textSize = 13f; setPadding(0,8,0,0) })
+        val apiEt = EditText(ctx).apply { textSize = 14f; setSingleLine(); setText("https://api.oplist.org/alicloud/renewapi") }
+        col.addView(apiEt)
+        col.addView(TextView(ctx).apply { text = "远端目录（留空=wxhook-backup）"; textSize = 13f; setPadding(0,8,0,0) })
+        val pathEt = EditText(ctx).apply { textSize = 14f; setSingleLine(); hint = "wxhook-backup" }
+        col.addView(pathEt)
+        android.app.AlertDialog.Builder(ctx).setTitle("阿里云盘").setView(col)
+            .setPositiveButton("保存") { _, _ ->
+                val token = tokenEt.text.toString().trim()
+                if (token.isEmpty()) return@setPositiveButton
+                val apiUrl = apiEt.text.toString().trim().ifEmpty { "https://api.oplist.org/alicloud/renewapi" }
+                val remotePath = pathEt.text.toString().trim().ifEmpty { "wxhook-backup" }
+                viewModel.saveAliyundriveConfig(name, token, apiUrl, "root", remotePath)
             }.setNegativeButton("取消", null).show()
     }
 

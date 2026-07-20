@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nous.wxhook.root.RootGateways
+import com.nous.wxhook.sync.OpenListCloudClient
+import com.nous.wxhook.sync.WebDavClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,16 +48,17 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
             _uiState.value = _uiState.value.copy(testResult = "⏳ 测试 $name...")
             try {
                 val cfg = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
-                val url = cfg.optString("webdav_url", "")
-                val user = cfg.optString("webdav_user", "")
-                val pass = cfg.optString("webdav_pass", "")
-                if (url.isBlank() || user.isBlank()) {
-                    _uiState.value = _uiState.value.copy(testResult = "⚠️ WebDAV未配置")
-                    return@launch
+
+                val provider = when {
+                    cfg.optString("aliyundrive_refresh_token", "").isNotBlank() -> "aliyundrive"
+                    else -> "webdav"
                 }
-                val client = com.nous.wxhook.sync.WebDavClient(url, user, pass)
-                val result = client.testConnection()
-                val msg = if (result.isSuccess) "✅ 连接成功" else "❌ ${result.exceptionOrNull()?.message}"
+
+                val msg = if (provider == "aliyundrive") {
+                    testAliyundriveInternal(cfg)
+                } else {
+                    testWebdavInternal(cfg)
+                }
                 _uiState.value = _uiState.value.copy(
                     testResult = msg,
                     toastMessage = msg
@@ -69,6 +72,30 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    private fun testWebdavInternal(cfg: JSONObject): String {
+        val url = cfg.optString("webdav_url", "")
+        val user = cfg.optString("webdav_user", "")
+        val pass = cfg.optString("webdav_pass", "")
+        if (url.isBlank() || user.isBlank()) return "⚠️ WebDAV未配置"
+        val client = WebDavClient(url, user, pass)
+        val result = kotlinx.coroutines.runBlocking { client.testConnection() }
+        return if (result.isSuccess) "✅ WebDAV 连接成功" else "❌ ${result.exceptionOrNull()?.message}"
+    }
+
+    private fun testAliyundriveInternal(cfg: JSONObject): String {
+        val token = cfg.optString("aliyundrive_refresh_token", "")
+        val apiUrl = cfg.optString("aliyundrive_api_url", "https://api.oplist.org/alicloud/renewapi")
+        if (token.isBlank()) return "⚠️ 阿里云盘未配置"
+        return try {
+            val configJson = OpenListCloudClient.aliyunConfig(token, apiUrl)
+            val client = OpenListCloudClient("AliyundriveOpen", configJson)
+            val result = kotlinx.coroutines.runBlocking { client.testConnection() }
+            if (result.isSuccess) "✅ 阿里云盘连接成功" else "❌ ${result.exceptionOrNull()?.message}"
+        } catch (e: Exception) {
+            "❌ ${e.message}"
+        }
+    }
+
     fun clearToast() {
         _uiState.value = _uiState.value.copy(toastMessage = "")
     }
@@ -77,10 +104,16 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
         return "remote${System.currentTimeMillis() % 10000}"
     }
 
+    // ── WebDAV config ──
+
     fun saveWebdavConfig(name: String, url: String, vendor: String, user: String, pass: String, remotePath: String = "wxhook-backup") {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val o = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
+                // Clear AliyunDrive keys when switching to WebDAV
+                o.remove("aliyundrive_refresh_token")
+                o.remove("aliyundrive_api_url")
+                o.remove("aliyundrive_root_folder")
                 o.put("webdav_url", url)
                 o.put("webdav_user", user)
                 o.put("webdav_pass", pass)
@@ -97,6 +130,35 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
             }
         }
     }
+
+    // ── AliyunDrive config ──
+
+    fun saveAliyundriveConfig(name: String, refreshToken: String, apiUrl: String = "https://api.oplist.org/alicloud/renewapi", rootFolder: String = "root", remotePath: String = "wxhook-backup") {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val o = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
+                // Clear WebDAV keys when switching to AliyunDrive
+                o.remove("webdav_url")
+                o.remove("webdav_user")
+                o.remove("webdav_pass")
+                o.put("aliyundrive_refresh_token", refreshToken)
+                o.put("aliyundrive_api_url", apiUrl)
+                o.put("aliyundrive_root_folder", rootFolder)
+                o.put("remote_path", remotePath)
+                configFile.writeText(o.toString())
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(toastMessage = "✅ $name 已保存")
+                }
+                loadAll()
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(toastMessage = "❌ ${e.message}")
+                }
+            }
+        }
+    }
+
+    // ── S3 config ──
 
     fun getS3Endpoint(provider: String, region: String): String {
         return when (provider) {
@@ -136,18 +198,36 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
 
     private fun loadStatus(): String {
         val sb = StringBuilder()
-        val cfgRaw = try {
-            File("/sdcard/Download/wxhook_backup/remote_config.json").readText()
-        } catch (_: Exception) { "{}" }
-        val cfg = JSONObject(cfgRaw)
-        sb.appendLine("云同步: ${if (cfg.optBoolean("enabled", false)) "✅ 已启用" else "⛔ 未启用"}")
 
-        // Load WebDAV config
         val settingsCfg = try {
             JSONObject(configFile.readText())
         } catch (_: Exception) { JSONObject() }
-        val webdavUrl = settingsCfg.optString("webdav_url", "")
-        sb.appendLine("WebDAV: ${if (webdavUrl.isNotBlank()) "✅ 已配置 ($webdavUrl)" else "⚠️ 未配置"}")
+
+        // Detect active provider
+        val hasAliyun = settingsCfg.optString("aliyundrive_refresh_token", "").isNotBlank()
+        val hasWebdav = settingsCfg.optString("webdav_url", "").isNotBlank()
+
+        val remoteCfgRaw = try {
+            File("/sdcard/Download/wxhook_backup/remote_config.json").readText()
+        } catch (_: Exception) { "{}" }
+        val remoteCfg = JSONObject(remoteCfgRaw)
+
+        sb.appendLine("云同步: ${if (remoteCfg.optBoolean("enabled", false) || hasAliyun) "✅ 已启用" else "⛔ 未启用"}")
+
+        if (hasAliyun) {
+            sb.appendLine("阿里云盘: ✅ 已配置")
+            val tokenPreview = settingsCfg.optString("aliyundrive_refresh_token", "").take(12)
+            sb.appendLine("  Token: ${tokenPreview}...")
+            sb.appendLine("  远端目录: ${settingsCfg.optString("remote_path", "wxhook-backup")}")
+        }
+        if (hasWebdav) {
+            val webdavUrl = settingsCfg.optString("webdav_url", "")
+            sb.appendLine("WebDAV: ✅ 已配置 ($webdavUrl)")
+        }
+        if (!hasAliyun && !hasWebdav) {
+            sb.appendLine("WebDAV: ⚠️ 未配置")
+        }
+
         return sb.toString()
     }
 }

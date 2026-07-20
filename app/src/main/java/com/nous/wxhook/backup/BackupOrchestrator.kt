@@ -438,21 +438,34 @@ object BackupOrchestrator {
         }
     }
 
-    // ── Test remote (WebDAV) ──
+    // ── Test remote connection ──
 
     fun testRemoteConnection(remote: String, configPath: String = ""): String {
         val settingsCfg = try {
             val settingsFile = File(BackupEnv.filesDirPath, "settings_config.json")
             JSONObject(settingsFile.readText())
         } catch (_: Exception) { JSONObject() }
+
+        // Detect provider
+        val aliyunToken = settingsCfg.optString("aliyundrive_refresh_token", "")
+        val webdavUrl = settingsCfg.optString("webdav_url", "")
+
+        if (aliyunToken.isNotBlank()) {
+            return testAliyundriveConnection(aliyunToken, settingsCfg)
+        }
+
+        if (webdavUrl.isBlank()) {
+            val webdavUser = settingsCfg.optString("webdav_user", "")
+            if (webdavUser.isBlank()) return "⚠️ 未配置云存储（请先添加 WebDAV 或阿里云盘）"
+        }
+
+        return testWebdavConnection(settingsCfg, remote)
+    }
+
+    private fun testWebdavConnection(settingsCfg: JSONObject, remote: String): String {
         val webdavUrl = settingsCfg.optString("webdav_url", "")
         val webdavUser = settingsCfg.optString("webdav_user", "")
         val webdavPass = settingsCfg.optString("webdav_pass", "")
-
-        if (webdavUrl.isBlank() || webdavUser.isBlank()) {
-            return "⚠️ WebDAV未配置"
-        }
-
         return try {
             val client = WebDavClient(webdavUrl, webdavUser, webdavPass)
             val result = kotlinx.coroutines.runBlocking { client.testConnection() }
@@ -468,6 +481,18 @@ object BackupOrchestrator {
             } else {
                 "连接失败: ${result.exceptionOrNull()?.message ?: "未知错误"}"
             }
+        } catch (e: Exception) {
+            "启动失败: ${e.message}"
+        }
+    }
+
+    private fun testAliyundriveConnection(token: String, settingsCfg: JSONObject): String {
+        val apiUrl = settingsCfg.optString("aliyundrive_api_url", "https://api.oplist.org/alicloud/renewapi")
+        return try {
+            val configJson = com.nous.wxhook.sync.OpenListCloudClient.aliyunConfig(token, apiUrl)
+            val client = com.nous.wxhook.sync.OpenListCloudClient("AliyundriveOpen", configJson)
+            val result = kotlinx.coroutines.runBlocking { client.testConnection() }
+            if (result.isSuccess) "✅ 阿里云盘连接成功" else "连接失败: ${result.exceptionOrNull()?.message}"
         } catch (e: Exception) {
             "启动失败: ${e.message}"
         }
