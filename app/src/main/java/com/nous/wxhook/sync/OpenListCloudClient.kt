@@ -75,10 +75,10 @@ class OpenListCloudClient(
             var current = "/"
             for (part in path.trim('/').split("/").filter { it.isNotBlank() }) {
                 val child = current.trimEnd('/') + "/" + part
-                try {
-                    Openlistbridge.list(h, child)
-                } catch (_: Exception) {
-                    Openlistbridge.mkdir(h, current, part)
+                val listR = Openlistbridge.list(h, child)
+                if (!JSONObject(listR).optBoolean("success", false)) {
+                    val mkR = Openlistbridge.mkdir(h, current, part)
+                    checkSuccess(mkR)
                 }
                 current = child
             }
