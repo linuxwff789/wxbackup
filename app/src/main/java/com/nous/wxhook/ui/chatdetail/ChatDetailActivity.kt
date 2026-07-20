@@ -322,7 +322,7 @@ class MessageAdapter(
         if (msg.isSend) {
             holder.card.setCardBackgroundColor(M3.colorPrimaryContainer(ctx))
             holder.card.strokeColor = android.graphics.Color.TRANSPARENT
-            holder.card.strokeWidth = 0f
+            holder.card.strokeWidth = 0
         } else {
             holder.card.setCardBackgroundColor(M3.colorSurface(ctx))
             holder.card.strokeColor = M3.onSurfaceVariant(ctx)

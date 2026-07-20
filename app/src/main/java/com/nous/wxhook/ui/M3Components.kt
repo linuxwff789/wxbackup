@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -92,7 +93,7 @@ object M3 {
                 .setAllCorners(CornerFamily.ROUNDED, dp(context, 12).toFloat())
                 .build()
             // Stroke for outline variant
-            strokeWidth = 0f
+            strokeWidth = 0
             block?.invoke(this)
         }
         return card

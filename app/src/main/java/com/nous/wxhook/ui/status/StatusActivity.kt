@@ -73,10 +73,11 @@ class StatusActivity : AppCompatActivity() {
 
         // Action buttons
         val btnRow = M3.hLayout(this)
+        val ctx0 = this@StatusActivity
         btnRow.addView(M3.filledButton(this, "🔄 刷新") {
             recreate()
         }.apply {
-            layoutParams = android.widget.LinearLayout.LayoutParams(0, M3.dp(this, 48), 1f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, M3.dp(ctx0, 48), 1f)
         })
         btnRow.addView(M3.sp(this, 12))
         btnRow.addView(M3.outlinedButton(this, "📁 打开备份目录") {
@@ -84,10 +85,10 @@ class StatusActivity : AppCompatActivity() {
                 val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
                 startActivity(intent)
             } catch (_: Exception) {
-                android.widget.Toast.makeText(this, "无法打开设置", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(ctx0, "无法打开设置", android.widget.Toast.LENGTH_SHORT).show()
             }
         }.apply {
-            layoutParams = android.widget.LinearLayout.LayoutParams(0, M3.dp(this, 48), 1f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, M3.dp(ctx0, 48), 1f)
         })
         root.addView(btnRow)
 

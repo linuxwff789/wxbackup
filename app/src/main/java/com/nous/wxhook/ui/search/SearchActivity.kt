@@ -34,7 +34,6 @@ class SearchActivity : AppCompatActivity() {
             this, null, com.google.android.material.R.attr.textInputStyle
         ).apply {
             hint = "输入搜索关键词..."
-            setStartIconDrawable(com.google.android.material.R.drawable.material_ic_search_black_24)
             setEndIconMode(com.google.android.material.textfield.TextInputLayout.END_ICON_CLEAR_TEXT)
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -42,7 +41,7 @@ class SearchActivity : AppCompatActivity() {
             )
         }
         keywordInput = com.google.android.material.textfield.TextInputEditText(this).apply {
-            singleLine = true
+            maxLines = 1
             imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
             setOnEditorActionListener { _, actionId, _ ->
                 if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) {

@@ -38,11 +38,10 @@ class SettingsActivity : AppCompatActivity() {
 
         val recyclerView = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@SettingsActivity)
-            id = View.generateViewId()
             setPadding(M3.dp(this@SettingsActivity, 0), M3.dp(this@SettingsActivity, 8), 0, 0)
         }
         setContentView(recyclerView)
-        buildItems()
+        buildItems(recyclerView)
     }
 
     override fun onSupportNavigateUp(): Boolean {
@@ -50,7 +49,7 @@ class SettingsActivity : AppCompatActivity() {
         return true
     }
 
-    private fun buildItems() {
+    private fun buildItems(recyclerView: RecyclerView) {
         val items = mutableListOf<SettingsItem>()
         items.add(SettingsItem.Header("🔑 WebDAV 配置"))
         items.add(SettingsItem.Input("WebDAV 地址", "webdav_url", "", "https://example.com/dav/"))
@@ -66,8 +65,7 @@ class SettingsActivity : AppCompatActivity() {
         items.add(SettingsItem.Header("🛠 工具"))
         items.add(SettingsItem.Action("🔄 重建备份状态", "rebuild_state"))
 
-        val adapter = SettingsAdapter(items, this) { action, _ -> handleAction(action) }
-        (findViewById<RecyclerView>(View.generateViewId()) ?: return).adapter = adapter
+        recyclerView.adapter = SettingsAdapter(items, this) { action, _ -> handleAction(action) }
     }
 
     private fun handleAction(action: String) {
