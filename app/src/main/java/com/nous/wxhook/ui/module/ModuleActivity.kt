@@ -145,6 +145,17 @@ class ModuleActivity : AppCompatActivity() {
         remotePathRow.addView(saveRemoteBtn)
         remoteCard.addView(remotePathRow)
 
+        // Cloud config button
+        val configBtn = Button(this).apply {
+            text = "⚙️ 配置云存储（WebDAV/阿里云盘）"
+            textSize = 12f
+            setTextColor(0xFF6200EE.toInt())
+            setBackgroundColor(Color.TRANSPARENT)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setOnClickListener { startActivity(Intent(this@ModuleActivity, com.nous.wxhook.ui.cloud.CloudConfigActivity::class.java)) }
+        }
+        remoteCard.addView(configBtn)
+
         // Sync button
         val syncBtn = Button(this).apply {
             text = "立即同步到云盘"; textSize = 12f
