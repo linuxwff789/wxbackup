@@ -1,30 +1,66 @@
 package com.nous.wxhook.sync
 
-import com.openlist.bridge.OpenListDriver
+import com.nous.wxhook.root.RootGateways
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 
 /**
- * CloudClient adapter backed by OpenListDriver.
+ * CloudClient adapter backed by openlist-cli (root shell).
  *
- * Supports multiple driver types through OpenList's JNI bridge:
- * - "aliyundrive": 阿里云盘 Open (refresh_token auth)
- * - "webdav":       Standard WebDAV (basic auth, alternative to WebDavClient)
+ * Uses the standalone CLI binary via RootGateways instead of JNI,
+ * avoiding Go runtime conflict when loaded as a shared library.
  */
 class OpenListCloudClient(
     private val driverType: String,
-    configJson: String,
+    private val configJson: String,
 ) : CloudClient {
 
-    private val driver: OpenListDriver = runBlockingSafely {
-        OpenListDriver.create(driverType, configJson)
+    private val cliPath get() = "/data/local/tmp/wxhook_bin/openlist-cli"
+
+    private suspend fun cli(op: String, vararg args: String): Result<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val quoted = args.joinToString(" ") { escape(it) }
+                val cmd = "$cliPath $driverType ${escape(configJson)} $op $quoted 2>&1"
+                val result = RootGateways.run(cmd, 120_000)
+                if (result.isSuccess && result.stdout.isNotBlank()) {
+                    Result.success(result.stdout)
+                } else {
+                    val err = result.stderr.ifBlank { result.stdout.ifBlank { "empty output" } }
+                    Result.failure(Exception(err.trim().lines().last()))
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+
+    private fun escape(s: String): String {
+        return "'${s.replace("'", "'\"'\"'")}'"
+    }
+
+    private fun parseListOutput(raw: String): List<RemoteObject> {
+        val lines = raw.lines().filter { it.isNotBlank() }
+        return lines.mapNotNull { line ->
+            // Format: "name\tsize\tmodTime\tisDir"
+            val parts = line.split("\t")
+            if (parts.size >= 1) {
+                RemoteObject(
+                    path = parts[0],
+                    size = parts.getOrNull(1)?.toLongOrNull() ?: 0,
+                    modTime = parts.getOrNull(2)?.toLongOrNull() ?: 0,
+                )
+            } else null
+        }
     }
 
     override suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            driver.list("/")
-            Result.success(Unit)
+            val r = cli("list", "/")
+            if (r.isSuccess) Result.success(Unit) else Result.failure(r.exceptionOrNull()!!)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -32,20 +68,15 @@ class OpenListCloudClient(
 
     override suspend fun ensureDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            // Try listing first (dir exists) — mkdir if fails
-            val listResult = try { driver.list(path) } catch (_: Exception) { null }
-            if (listResult != null) return@withContext Result.success(Unit)
-
-            // Walk path segments and create each missing part
             val parts = path.trim('/').split("/").filter { it.isNotBlank() }
             var current = "/"
             for (part in parts) {
-                try {
-                    driver.list(current + part)
-                } catch (_: Exception) {
-                    driver.mkdir(current, part)
+                val test = current.trimEnd('/') + "/" + part
+                val r = cli("list", test)
+                if (r.isFailure) {
+                    cli("mkdir", current, part).getOrThrow()
                 }
-                current = current.trimEnd('/') + "/" + part
+                current = test
             }
             Result.success(Unit)
         } catch (e: Exception) {
@@ -57,13 +88,14 @@ class OpenListCloudClient(
         return withContext(Dispatchers.IO) {
             try {
                 val parentPath = remotePath.substringBeforeLast("/", "").ifBlank { "/" }
-                val fileName = remotePath.substringAfterLast("/", remotePath)
-                val cf = driver.upload(parentPath, fileName, local.absolutePath)
-                Result.success(RemoteObject(
-                    path = remotePath,
-                    size = cf.size,
-                    modTime = cf.modifiedAt,
-                ))
+                val result = cli("upload", parentPath, local.absolutePath)
+                if (result.isSuccess) {
+                    val out = result.getOrThrow()
+                    val size = local.length()
+                    Result.success(RemoteObject(remotePath, size, System.currentTimeMillis()))
+                } else {
+                    Result.failure(result.exceptionOrNull()!!)
+                }
             } catch (e: Exception) {
                 Result.failure(e)
             }
@@ -73,8 +105,9 @@ class OpenListCloudClient(
     override suspend fun download(remotePath: String, local: File): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
-                val url = driver.getDownloadUrl(remotePath)
-                // Download via OkHttp (same pattern as WebDavClient)
+                // Get download URL then fetch with OkHttp
+                val urlResult = cli("url", remotePath)
+                val url = urlResult.getOrThrow().trim()
                 val request = okhttp3.Request.Builder()
                     .url(url)
                     .get()
@@ -100,14 +133,8 @@ class OpenListCloudClient(
     override suspend fun list(remotePath: String): Result<List<RemoteObject>> {
         return withContext(Dispatchers.IO) {
             try {
-                val files = driver.list(remotePath)
-                Result.success(files.map {
-                    RemoteObject(
-                        path = it.path,
-                        size = it.size,
-                        modTime = it.modifiedAt,
-                    )
-                })
+                val r = cli("list", remotePath)
+                r.map { parseListOutput(it) }
             } catch (e: Exception) {
                 Result.failure(e)
             }
@@ -117,26 +144,19 @@ class OpenListCloudClient(
     override suspend fun delete(remotePath: String): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
-                driver.delete(remotePath)
-                Result.success(Unit)
+                cli("delete", remotePath).map { Unit }
             } catch (e: Exception) {
                 Result.failure(e)
             }
         }
     }
 
-    /** Clean up native resources. */
-    fun destroy() {
-        driver.destroy()
-    }
-
     companion object {
-        /** Build AliyunDrive config JSON from individual fields. */
         fun aliyunConfig(
             refreshToken: String,
             apiUrl: String = "https://api.oplist.org/alicloud/renewapi",
             rootFolderId: String = "root",
-        ): String = org.json.JSONObject().apply {
+        ): String = JSONObject().apply {
             put("refresh_token", refreshToken)
             put("use_online_api", true)
             put("api_url_address", apiUrl)
@@ -144,22 +164,5 @@ class OpenListCloudClient(
             put("root_folder_id", rootFolderId)
             put("remove_way", "trash")
         }.toString()
-
-        /** Build WebDAV config JSON. */
-        fun webdavConfig(
-            address: String,
-            username: String,
-            password: String,
-        ): String = org.json.JSONObject().apply {
-            put("address", address)
-            put("username", username)
-            put("password", password)
-            put("vendor", "other")
-        }.toString()
     }
-}
-
-/** Utility: run coroutine block synchronously from a non-coroutine context. */
-internal fun <T> runBlockingSafely(block: suspend () -> T): T {
-    return kotlinx.coroutines.runBlocking { block() }
 }
