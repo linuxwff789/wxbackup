@@ -1,6 +1,5 @@
 package com.openlist.bridge
 
-import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -8,9 +7,9 @@ import kotlinx.coroutines.withContext
 /**
  * OpenList JNI bridge — wraps libopenlist.so exports.
  *
- * JNI names in libopenlist.so are hardcoded to
- * Java_com_openlist_bridge_OpenListDriver_n{Method},
- * so package/class must match exactly.
+ * All external funs are in companion object (static JNI methods)
+ * because bridge.go exports receive jclass, not jobject.
+ * Instance methods pass this.handle to the static JNI calls.
  */
 class OpenListDriver private constructor(
     private val handle: String
@@ -20,7 +19,24 @@ class OpenListDriver private constructor(
             System.loadLibrary("openlist")
         }
 
-        /** Create a new driver instance (suspend for thread safety). */
+        // ── JNI native methods (all static — bridge.go uses jclass) ──
+        private external fun nCreate(driverType: String, configJson: String): String
+        private external fun nList(handle: String, path: String): String
+        private external fun nGet(handle: String, path: String): String
+        private external fun nGetDownloadUrl(handle: String, path: String): String
+        private external fun nUploadFromFile(
+            handle: String, parentPath: String, fileName: String,
+            localFilePath: String, mimeType: String
+        ): String
+        private external fun nMkdir(handle: String, parentPath: String, dirName: String): String
+        private external fun nDelete(handle: String, path: String): String
+        private external fun nRename(handle: String, path: String, newName: String): String
+        private external fun nMove(handle: String, srcPath: String, dstDirPath: String): String
+        private external fun nCopy(handle: String, srcPath: String, dstDirPath: String): String
+        private external fun nGetStorageDetails(handle: String): String
+        private external fun nDestroy(handle: String)
+
+        /** Create a new driver instance. */
         suspend fun create(driverType: String, configJson: String): OpenListDriver {
             return withContext(Dispatchers.IO) {
                 val result = nCreate(driverType, configJson)
@@ -34,7 +50,7 @@ class OpenListDriver private constructor(
         }
     }
 
-    // ── Public API ──
+    // ── Public API (instance methods, delegate to static JNI) ──
 
     data class CloudFile(
         val id: String = "",
@@ -131,24 +147,6 @@ class OpenListDriver private constructor(
     fun destroy() {
         nDestroy(handle)
     }
-
-    // ── JNI native methods ──
-
-    private external fun nCreate(driverType: String, configJson: String): String
-    private external fun nList(handle: String, path: String): String
-    private external fun nGet(handle: String, path: String): String
-    private external fun nGetDownloadUrl(handle: String, path: String): String
-    private external fun nUploadFromFile(
-        handle: String, parentPath: String, fileName: String,
-        localFilePath: String, mimeType: String
-    ): String
-    private external fun nMkdir(handle: String, parentPath: String, dirName: String): String
-    private external fun nDelete(handle: String, path: String): String
-    private external fun nRename(handle: String, path: String, newName: String): String
-    private external fun nMove(handle: String, srcPath: String, dstDirPath: String): String
-    private external fun nCopy(handle: String, srcPath: String, dstDirPath: String): String
-    private external fun nGetStorageDetails(handle: String): String
-    private external fun nDestroy(handle: String)
 
     // ── Helpers ──
 
