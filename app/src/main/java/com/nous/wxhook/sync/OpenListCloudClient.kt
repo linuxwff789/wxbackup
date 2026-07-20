@@ -13,7 +13,7 @@ import java.io.File
  */
 class OpenListCloudClient(
     private val driverType: String,
-    configJson: String,
+    private val configJson: String,
 ) : CloudClient {
 
     private var initialized = false
