@@ -102,19 +102,24 @@ class ModuleActivity : AppCompatActivity() {
         }
         backupCard.addView(backupInfo)
 
-        val backupBtns = M3.hLayout(this)
-        backupBtns.addView(M3.filledButton(this, "全量备份 (DB+附件)") {
+        // 全量备份按钮（单独一行，确保长文本完整显示）
+        backupCard.addView(M3.filledButton(this, "全量备份 (DB + 附件)") {
             viewModel.startBackup(false)
         }.apply {
-            layoutParams = LinearLayout.LayoutParams(0, M3.dp(this@ModuleActivity, 48), 1f)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                M3.dp(this@ModuleActivity, 48)
+            )
         })
-        backupBtns.addView(M3.sp(this, 12))
-        backupBtns.addView(M3.outlinedButton(this, "增量备份") {
+        backupCard.addView(M3.sp(this, 8))
+        backupCard.addView(M3.outlinedButton(this, "增量备份 (仅新文件)") {
             viewModel.startBackup(true)
         }.apply {
-            layoutParams = LinearLayout.LayoutParams(0, M3.dp(this@ModuleActivity, 48), 1f)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                M3.dp(this@ModuleActivity, 48)
+            )
         })
-        backupCard.addView(backupBtns)
         root.addView(backupCard)
         root.addView(M3.sp(this, 8))
 
@@ -137,21 +142,21 @@ class ModuleActivity : AppCompatActivity() {
 
         val syncBtns = M3.hLayout(this)
         syncBtns.addView(M3.tonalButton(this, "☁️ 立即同步") { viewModel.doSync() }.apply {
-            layoutParams = LinearLayout.LayoutParams(0, M3.dp(this@ModuleActivity, 48), 1f)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, M3.dp(this@ModuleActivity, 48)
+            )
         })
         syncBtns.addView(M3.sp(this, 12))
         syncBtns.addView(
-            androidx.appcompat.widget.AppCompatButton(this).apply {
+            com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
                 text = "⚙️ 配置"
                 setTextColor(M3.colorPrimary(this@ModuleActivity))
-                setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 setOnClickListener {
                     startActivity(Intent(this@ModuleActivity, com.nous.wxhook.ui.cloud.CloudConfigActivity::class.java))
                 }
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    M3.dp(this@ModuleActivity, 48)
-                )
+                insetTop = 0
+                insetBottom = 0
+                minWidth = 0
             }
         )
         syncCard.addView(syncBtns)

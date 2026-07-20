@@ -74,13 +74,15 @@ class StatusActivity : AppCompatActivity() {
         // Action buttons
         val btnRow = M3.hLayout(this)
         val ctx0 = this@StatusActivity
-        btnRow.addView(M3.filledButton(this, "🔄 刷新") {
+        btnRow.addView(M3.filledButton(ctx0, "🔄 刷新") {
             recreate()
         }.apply {
-            layoutParams = android.widget.LinearLayout.LayoutParams(0, M3.dp(ctx0, 48), 1f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, M3.dp(ctx0, 48)
+            )
         })
-        btnRow.addView(M3.sp(this, 12))
-        btnRow.addView(M3.outlinedButton(this, "📁 打开备份目录") {
+        btnRow.addView(M3.sp(ctx0, 12))
+        btnRow.addView(M3.outlinedButton(ctx0, "📁 打开备份目录") {
             try {
                 val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
                 startActivity(intent)
@@ -88,7 +90,9 @@ class StatusActivity : AppCompatActivity() {
                 android.widget.Toast.makeText(ctx0, "无法打开设置", android.widget.Toast.LENGTH_SHORT).show()
             }
         }.apply {
-            layoutParams = android.widget.LinearLayout.LayoutParams(0, M3.dp(ctx0, 48), 1f)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, M3.dp(ctx0, 48)
+            )
         })
         root.addView(btnRow)
 

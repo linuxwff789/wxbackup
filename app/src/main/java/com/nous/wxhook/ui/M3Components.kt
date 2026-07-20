@@ -139,6 +139,8 @@ object M3 {
             setOnClickListener { onClick() }
             insetTop = 0
             insetBottom = 0
+            minWidth = 0
+            minHeight = 0
         }
     }
 
@@ -161,6 +163,8 @@ object M3 {
             setTextColor(onPrimaryContainer(context))
             insetTop = 0
             insetBottom = 0
+            minWidth = 0
+            minHeight = 0
         }
     }
 
@@ -181,6 +185,8 @@ object M3 {
             setOnClickListener { onClick() }
             insetTop = 0
             insetBottom = 0
+            minWidth = 0
+            minHeight = 0
         }
     }
 
@@ -197,6 +203,7 @@ object M3 {
             setOnClickListener { onClick() }
             insetTop = 0
             insetBottom = 0
+            minWidth = 0
         }
     }
 
