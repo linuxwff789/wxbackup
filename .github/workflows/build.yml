@@ -40,7 +40,7 @@ jobs:
       - name: Download OpenList JNI lib
         run: |
           mkdir -p app/src/main/jniLibs/arm64-v8a
-          curl -fsSL "https://github.com/linuxwff789/openlist-android/releases/download/v0.1.1/libopenlist.so" \
+          curl -fsSL "https://github.com/linuxwff789/openlist-android/releases/download/v0.2.0/libopenlist.so" \
             -o app/src/main/jniLibs/arm64-v8a/libopenlist.so
           chmod 644 app/src/main/jniLibs/arm64-v8a/libopenlist.so
           ls -lh app/src/main/jniLibs/arm64-v8a/
