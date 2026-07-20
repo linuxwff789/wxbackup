@@ -116,7 +116,7 @@ class CloudConfigActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
-        for ((label, provider) in listOf("+ WebDAV" to "webdav", "+ S3" to "s3", "+ 阿里云盘" to "aliyundrive")) {
+        for ((label, provider) in listOf("+ WebDAV" to "webdav", "+ S3" to "s3")) {
             addRow.addView(Button(this).apply {
                 text = label; textSize = 13f
                 setTextColor(0xFF6200EE.toInt())
@@ -125,6 +125,20 @@ class CloudConfigActivity : AppCompatActivity() {
             })
         }
         configCard.addView(addRow)
+        // AliyunDrive in a separate, more prominent row
+        val aliyunRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(12), dp(0), dp(12), dp(8))
+        }
+        aliyunRow.addView(Button(this).apply {
+            text = "☁️ + 阿里云盘 (OpenList)"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0xFF6200EE.toInt())
+            layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { setMargins(0, 0, 0, 0) }
+            setOnClickListener { addRemote("aliyundrive") }
+        })
+        configCard.addView(aliyunRow)
         root.addView(configCard)
 
         // ── Sync button + schedule ──
