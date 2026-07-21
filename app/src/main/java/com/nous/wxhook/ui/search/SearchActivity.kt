@@ -29,7 +29,7 @@ class SearchActivity : AppCompatActivity() {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) }
         setPadding(dp(16), dp(16), dp(16), dp(16))
-        background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(Color.WHITE); setStroke(1, 0xFFE0E0E0.toInt()) }
+        background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(M3.colorSurface(this@SearchActivity)); setStroke(1, M3.colorOutline(this@SearchActivity)) }
         elevation = dp(2).toFloat()
     }
 

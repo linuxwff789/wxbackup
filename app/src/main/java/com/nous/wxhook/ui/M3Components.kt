@@ -73,6 +73,10 @@ object M3 {
     fun colorSurfaceVariant(context: Context): Int =
         MaterialColors.getColor(context, com.google.android.material.R.attr.colorSurfaceVariant, "M3")
 
+    @ColorInt
+    fun colorOutline(context: Context): Int =
+        MaterialColors.getColor(context, com.google.android.material.R.attr.colorOutline, "M3")
+
     // ── Card ──
     /**
      * Create an MD3 Elevated Card.

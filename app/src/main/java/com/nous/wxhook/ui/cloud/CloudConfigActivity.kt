@@ -35,7 +35,7 @@ class CloudConfigActivity : AppCompatActivity() {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) }
         setPadding(dp(16), dp(16), dp(16), dp(16))
-        background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(Color.WHITE); setStroke(1, 0xFFE0E0E0.toInt()) }
+        background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(M3.colorSurface(this@CloudConfigActivity)); setStroke(1, M3.colorOutline(this@CloudConfigActivity)) }
         elevation = dp(2).toFloat()
     }
 
@@ -74,7 +74,7 @@ class CloudConfigActivity : AppCompatActivity() {
         configCard.addView(TextView(this).apply { text = "🔑 远端配置"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
         val remotes = viewModel.uiState.value.remotes
         if (remotes.isEmpty()) {
-            configCard.addView(TextView(this).apply { text = "暂无配置"; textSize = 14f; setTextColor(0xFF9E9E9E.toInt()); setPadding(0, dp(8), 0, 0) })
+            configCard.addView(TextView(this).apply { text = "暂无配置"; textSize = 14f; setTextColor(M3.onSurfaceVariant(this@CloudConfigActivity)); setPadding(0, dp(8), 0, 0) })
         } else {
             for (r in remotes) {
                 configCard.addView(TextView(this).apply { text = "📦 ${r.name} (${r.type})"; textSize = 14f; setPadding(0, dp(4), 0, 0) })

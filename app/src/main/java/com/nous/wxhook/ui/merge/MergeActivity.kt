@@ -22,7 +22,7 @@ class MergeActivity : AppCompatActivity() {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) }
         setPadding(dp(16), dp(16), dp(16), dp(16))
-        background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(Color.WHITE); setStroke(1, 0xFFE0E0E0.toInt()) }
+        background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(M3.colorSurface(this@MergeActivity)); setStroke(1, M3.colorOutline(this@MergeActivity)) }
         elevation = dp(2).toFloat()
     }
 
@@ -36,7 +36,7 @@ class MergeActivity : AppCompatActivity() {
 
         val infoCard = cardBg()
         infoCard.addView(TextView(this).apply { text = "🔗 合并备份数据"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
-        infoCard.addView(TextView(this).apply { text = "将两个备份数据库合并，方便统一查看和管理聊天记录。"; textSize = 14f; setPadding(0, dp(8), 0, dp(12)); setTextColor(0xFF616161.toInt()) })
+        infoCard.addView(TextView(this).apply { text = "将两个备份数据库合并，方便统一查看和管理聊天记录。"; textSize = 14f; setPadding(0, dp(8), 0, dp(12)); setTextColor(M3.onSurfaceVariant(this@MergeActivity)) })
         infoCard.addView(MaterialButton(this).apply { text = "🔄 合并最近两个备份"; insetTop = 0; insetBottom = 0; setOnClickListener { mergeRecent() } })
         root.addView(infoCard)
 

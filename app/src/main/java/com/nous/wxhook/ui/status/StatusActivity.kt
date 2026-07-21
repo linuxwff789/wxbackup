@@ -26,7 +26,7 @@ class StatusActivity : AppCompatActivity() {
         ).apply { bottomMargin = dp(12) }
         setPadding(dp(16), dp(16), dp(16), dp(16))
         background = android.graphics.drawable.GradientDrawable().apply {
-            cornerRadius = dp(12).toFloat(); setColor(Color.WHITE); setStroke(1, 0xFFE0E0E0.toInt())
+            cornerRadius = dp(12).toFloat(); setColor(M3.colorSurface(this@StatusActivity)); setStroke(1, M3.colorOutline(this@StatusActivity))
         }
         elevation = dp(2).toFloat()
     }

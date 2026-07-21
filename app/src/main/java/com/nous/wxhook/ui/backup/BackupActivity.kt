@@ -23,7 +23,7 @@ class BackupActivity : AppCompatActivity() {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(12) }
         setPadding(dp(16), dp(16), dp(16), dp(16))
-        background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(Color.WHITE); setStroke(1, 0xFFE0E0E0.toInt()) }
+        background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(M3.colorSurface(this@BackupActivity)); setStroke(1, M3.colorOutline(this@BackupActivity)) }
         elevation = dp(2).toFloat()
     }
 
@@ -46,13 +46,13 @@ class BackupActivity : AppCompatActivity() {
         val card = cardBg()
         card.addView(TextView(this).apply { text = "📦 备份文件 (${files.size})"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
         if (files.isEmpty()) {
-            card.addView(TextView(this).apply { text = "暂无备份文件"; textSize = 14f; setPadding(0, dp(8), 0, 0); setTextColor(0xFF9E9E9E.toInt()) })
+            card.addView(TextView(this).apply { text = "暂无备份文件"; textSize = 14f; setPadding(0, dp(8), 0, 0); setTextColor(M3.onSurfaceVariant(this@BackupActivity)) })
         } else {
             val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
             for (f in files) {
                 card.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4)) })
                 card.addView(TextView(this).apply { text = "📦 ${f.name}"; textSize = 14f })
-                card.addView(TextView(this).apply { text = "${formatSize(f.length())} · ${fmt.format(Date(f.lastModified()))}"; textSize = 12f; setTextColor(0xFF757575.toInt()) })
+                card.addView(TextView(this).apply { text = "${formatSize(f.length())} · ${fmt.format(Date(f.lastModified()))}"; textSize = 12f; setTextColor(M3.onSurfaceVariant(this@BackupActivity)) })
             }
         }
         root.addView(card)

@@ -80,8 +80,8 @@ class ModuleActivity : AppCompatActivity() {
             setPadding(dp(16), dp(16), dp(16), dp(16))
             background = android.graphics.drawable.GradientDrawable().apply {
                 cornerRadius = dp(12).toFloat()
-                setColor(Color.WHITE)
-                setStroke(1, 0xFFE0E0E0.toInt())
+                setColor(M3.colorSurface(this@ModuleActivity))
+                setStroke(1, M3.colorOutline(this@ModuleActivity))
             }
             elevation = dp(2).toFloat()
         }
@@ -89,7 +89,7 @@ class ModuleActivity : AppCompatActivity() {
 
     private fun sectionTitle(text: String) = TextView(this).apply {
         this.text = text; textSize = 17f; typeface = Typeface.DEFAULT_BOLD
-        setTextColor(0xFF212121.toInt())
+        setTextColor(M3.onSurface(this@ModuleActivity))
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
@@ -216,7 +216,7 @@ class ModuleActivity : AppCompatActivity() {
         // ═══ 📋 备份记录 ═══
         val recordsCard = cardLayout()
         recordsCard.addView(sectionTitle("📋 备份记录"))
-        recordsText = TextView(this).apply { textSize = 12f; typeface = Typeface.MONOSPACE; setTextColor(0xFF616161.toInt()) }
+        recordsText = TextView(this).apply { textSize = 12f; typeface = Typeface.MONOSPACE; setTextColor(M3.onSurfaceVariant(this@ModuleActivity)) }
         recordsCard.addView(recordsText)
         recordsCard.addView(spacer(4))
         recordsCard.addView(textBtn("🔄 刷新记录") { viewModel.refreshRecords() })
@@ -225,7 +225,7 @@ class ModuleActivity : AppCompatActivity() {
         // ═══ 📝 运行日志 ═══
         val logCard = cardLayout()
         logCard.addView(sectionTitle("📝 运行日志"))
-        logText = TextView(this).apply { textSize = 11f; typeface = Typeface.MONOSPACE; setTextColor(0xFF9E9E9E.toInt()); minLines = 3 }
+        logText = TextView(this).apply { textSize = 11f; typeface = Typeface.MONOSPACE; setTextColor(M3.onSurfaceVariant(this@ModuleActivity)); minLines = 3 }
         logCard.addView(logText)
         root.addView(logCard)
         root.addView(spacer(16))
