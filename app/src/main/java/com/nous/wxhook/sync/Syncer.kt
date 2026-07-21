@@ -121,25 +121,28 @@ object Syncer {
         return archives + others
     }
 
-    /** 已同步记录文件路径 */
-    private fun stateFile(config: Config): File =
-        File(BackupEnv.backupDir, ".sync_state_${config.provider}.json")
+    /** 已同步记录文件路径（通过 su 读写，因为路径在 /sdcard/ 下） */
+    private fun stateFileName(config: Config): String =
+        "${BackupEnv.backupDir}/.sync_state_${config.provider}.json"
 
     /** 读取本地已同步记录 */
     private fun loadSynced(config: Config): Set<String> {
-        val f = stateFile(config)
-        if (!f.exists()) return emptySet()
+        val raw = RootGateways.runQuiet("cat '${stateFileName(config)}' 2>/dev/null")
+        if (raw.isBlank()) return emptySet()
         return try {
-            val arr = JSONArray(f.readText())
+            val arr = JSONArray(raw)
             (0 until arr.length()).map { arr.getString(it) }.toSet()
         } catch (_: Exception) { emptySet() }
     }
 
-    /** 保存已同步记录 */
+    /** 保存已同步记录（通过 su 写入，确保权限正确） */
     private fun saveSynced(config: Config, names: Set<String>) {
         try {
             val arr = JSONArray(names.toList())
-            stateFile(config).writeText(arr.toString(2))
+            val json = arr.toString(2)
+            RootGateways.run("mkdir -p ${BackupEnv.backupDir}")
+            RootGateways.run("cat > '${stateFileName(config)}' << 'SYNC_EOF'\n$json\nSYNC_EOF")
+            RootGateways.run("chmod 644 '${stateFileName(config)}'")
         } catch (_: Exception) {}
     }
 
