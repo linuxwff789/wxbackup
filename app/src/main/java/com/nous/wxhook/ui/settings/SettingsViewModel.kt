@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
+import com.nous.wxhook.sync.OpenListCloudClient
+import com.nous.wxhook.sync.WebDavClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -80,7 +82,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch(Dispatchers.IO) {
             withContext(Dispatchers.Main) { _uiState.value = _uiState.value.copy(actionTitle = "设置 ⏳ WebDAV测试中...") }
             try {
-                val client = com.nous.wxhook.sync.WebDavClient(url, user, pass)
+                val client = WebDavClient(url, user, pass)
                 val result = client.testConnection()
                 if (result.isSuccess) {
                     val listResult = client.list("")
@@ -102,6 +104,26 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 withContext(Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(actionTitle = "❌ WebDAV: ${e.message}")
                     android.widget.Toast.makeText(getApplication(), "❌ WebDAV: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    fun testAliyundriveConnection(token: String, apiUrl: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val configJson = OpenListCloudClient.aliyunConfig(token, apiUrl)
+                val client = OpenListCloudClient("AliyundriveOpen", configJson)
+                val r = kotlinx.coroutines.runBlocking { client.testConnection() }
+                val msg = if (r.isSuccess) "✅ 阿里云盘连接成功" else "❌ ${r.exceptionOrNull()?.message}"
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(actionTitle = msg)
+                    android.widget.Toast.makeText(getApplication(), msg, android.widget.Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(actionTitle = "❌ 阿里云盘: ${e.message}")
+                    android.widget.Toast.makeText(getApplication(), "❌ 阿里云盘: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                 }
             }
         }
