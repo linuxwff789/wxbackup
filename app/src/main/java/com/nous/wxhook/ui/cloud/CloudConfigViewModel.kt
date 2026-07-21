@@ -188,6 +188,31 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
         configFile.writeText(config.toString(2))
     }
 
+    fun testWebdavConnection(url: String, user: String, pass: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.value = _uiState.value.copy(testResult = "⏳ 测试 WebDAV...")
+            val msg = try {
+                val client = WebDavClient(url, user, pass)
+                val r = kotlinx.coroutines.runBlocking { client.testConnection() }
+                if (r.isSuccess) "✅ WebDAV 连接成功" else "❌ ${r.exceptionOrNull()?.message}"
+            } catch (e: Exception) { "❌ ${e.message}" }
+            _uiState.value = _uiState.value.copy(testResult = msg, toastMessage = msg)
+        }
+    }
+
+    fun testAliyundriveConnection(token: String, apiUrl: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.value = _uiState.value.copy(testResult = "⏳ 测试阿里云盘...")
+            val msg = try {
+                val configJson = OpenListCloudClient.aliyunConfig(token, apiUrl)
+                val client = OpenListCloudClient("AliyundriveOpen", configJson)
+                val r = kotlinx.coroutines.runBlocking { client.testConnection() }
+                if (r.isSuccess) "✅ 阿里云盘连接成功" else "❌ ${r.exceptionOrNull()?.message}"
+            } catch (e: Exception) { "❌ ${e.message}" }
+            _uiState.value = _uiState.value.copy(testResult = msg, toastMessage = msg)
+        }
+    }
+
     fun setSyncInterval(minutes: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             val cfg = runCatching { JSONObject(configFile.readText()) }.getOrDefault(JSONObject())
