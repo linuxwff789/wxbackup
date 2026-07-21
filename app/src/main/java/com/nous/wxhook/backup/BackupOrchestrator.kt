@@ -430,7 +430,7 @@ object BackupOrchestrator {
             emptyList()
         }
 
-        val result = Syncer.sync(config, archives) { p ->
+        val result = Syncer.sync(config, specificArchives = archives) { p ->
             callback?.onProgress(p.message, p.current.toLong(), p.total.toLong())
         }
         if (result.uploaded > 0 || result.skipped > 0) {

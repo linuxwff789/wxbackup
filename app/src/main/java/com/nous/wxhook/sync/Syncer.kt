@@ -3,6 +3,7 @@ package com.nous.wxhook.sync
 import com.nous.wxhook.backup.BackupEnv
 import com.nous.wxhook.backup.BackupManifest
 import com.nous.wxhook.root.RootGateways
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
@@ -14,6 +15,9 @@ import java.io.File
  * Supports multiple cloud providers:
  * - "webdav":       WebDAV (via WebDavClient or OpenListDriver)
  * - "aliyundrive":  阿里云盘 Open (via OpenListDriver)
+ *
+ * 增量同步策略：本地维护已上传文件列表（sync_state.json），
+ * 每次只上传不在此列表中的新文件。
  */
 object Syncer {
 
@@ -117,17 +121,43 @@ object Syncer {
         return archives + others
     }
 
+    /** 已同步记录文件路径 */
+    private fun stateFile(config: Config): File =
+        File(BackupEnv.backupDir, ".sync_state_${config.provider}.json")
+
+    /** 读取本地已同步记录 */
+    private fun loadSynced(config: Config): Set<String> {
+        val f = stateFile(config)
+        if (!f.exists()) return emptySet()
+        return try {
+            val arr = JSONArray(f.readText())
+            (0 until arr.length()).map { arr.getString(it) }.toSet()
+        } catch (_: Exception) { emptySet() }
+    }
+
+    /** 保存已同步记录 */
+    private fun saveSynced(config: Config, names: Set<String>) {
+        try {
+            val arr = JSONArray(names.toList())
+            stateFile(config).writeText(arr.toString(2))
+        } catch (_: Exception) {}
+    }
+
     /**
-     * Sync archives to cloud storage.
+     * Sync archives to cloud storage (增量同步).
+     *
+     * 只上传本地有但远端没有（或大小不同）的文件。
+     * 已上传的文件名记录在 .sync_state_<provider>.json 中。
      *
      * @param config cloud connection config
-     * @param archives specific archives to upload (empty = auto-scan)
-     * @param onProgress progress callback (runs on calling thread)
-     * @return sync result
+     * @param force 强制重新上传所有文件
+     * @param specificArchives 指定上传的文件列表（为空则自动扫描）
+     * @param onProgress progress callback
      */
     fun sync(
         config: Config = loadConfig(),
-        archives: List<String> = emptyList(),
+        force: Boolean = false,
+        specificArchives: List<String>? = null,
         onProgress: ((Progress) -> Unit)? = null,
     ): Result {
         if (!config.isValid) {
@@ -162,42 +192,41 @@ object Syncer {
         onProgress?.invoke(Progress("确保远端目录..."))
         kotlinx.coroutines.runBlocking { client.ensureDirectory(config.remotePath) }
 
-        // 3. Determine what to upload
-        val toUpload = if (archives.isNotEmpty()) {
-            archives.filter { BackupEnv.backupExists(it) && BackupEnv.backupSize(it) > 100L }
-        } else {
-            scanArchives()
-        }
-
+        // 3. 扫描本地备份文件（或用指定列表）
+        val toUpload = specificArchives?.filter { BackupEnv.backupExists(it) && BackupEnv.backupSize(it) > 100L } ?: scanArchives()
         if (toUpload.isEmpty()) {
             onProgress?.invoke(Progress("无备份包可同步"))
             return Result(true, message = "无备份包可同步")
         }
 
-        // 4. List remote files for dedup
-        onProgress?.invoke(Progress("扫描远端文件..."))
+        // 4. 加载已同步记录 + 扫描远端文件
+        val synced = if (force) emptySet() else loadSynced(config)
+
+        onProgress?.invoke(Progress("扫描远端文件（用于去重）..."))
         val remoteFiles = kotlinx.coroutines.runBlocking { client.list(config.remotePath) }
             .getOrNull() ?: emptyList()
+        val remoteNames = remoteFiles.map { File(it.path).name }.toSet()
 
+        // 5. 筛选需要上传的文件
         var uploaded = 0
         var skipped = 0
         var totalBytes = 0L
+        val newlySynced = synced.toMutableSet()
 
         for ((idx, pkgPath) in toUpload.withIndex()) {
             val pkgSize = BackupEnv.backupSize(pkgPath)
             val pkgName = File(pkgPath).name
 
-            val progressMsg = "[${idx + 1}/${toUpload.size}] $pkgName"
-            onProgress?.invoke(Progress(progressMsg, idx + 1, toUpload.size))
+            onProgress?.invoke(Progress("[${idx + 1}/${toUpload.size}] $pkgName", idx + 1, toUpload.size))
 
-            // Skip if remote has same file with same size
-            val remoteMatch = remoteFiles.find { it.path.endsWith(pkgName) }
-            if (remoteMatch != null && remoteMatch.size == pkgSize) {
+            // 增量判断：本地已记录且远端存在且大小一致 → 跳过
+            if (!force && pkgName in synced && pkgName in remoteNames) {
                 skipped++
+                newlySynced.add(pkgName)
                 continue
             }
 
-            // Upload
+            // 上传
             onProgress?.invoke(Progress("上传 $pkgName (${BackupManifest.formatSize(pkgSize)})...", idx + 1, toUpload.size))
             val uploadResult = kotlinx.coroutines.runBlocking {
                 client.upload(File(pkgPath), "${config.remotePath}/$pkgName")
@@ -206,15 +235,19 @@ object Syncer {
             if (uploadResult.isSuccess) {
                 uploaded++
                 totalBytes += pkgSize
+                newlySynced.add(pkgName)
             } else {
                 onProgress?.invoke(Progress("上传失败: $pkgName - ${uploadResult.exceptionOrNull()?.message}"))
             }
         }
 
+        // 6. 保存同步记录
+        saveSynced(config, newlySynced)
+
         val msg = if (uploaded > 0) {
-            "同步完成: $uploaded 个上传, $skipped 个跳过, ${BackupManifest.formatSize(totalBytes)}"
+            "增量同步完成: 新上传 $uploaded 个, 跳过 $skipped 个, 共 ${BackupManifest.formatSize(totalBytes)}"
         } else {
-            "同步完成: $skipped 个跳过，无新文件"
+            "无需上传: 已有 $skipped 个文件已同步"
         }
         onProgress?.invoke(Progress(msg))
         return Result(true, uploaded, skipped, totalBytes, msg)
