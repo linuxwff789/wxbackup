@@ -92,32 +92,90 @@ object KeepAliveHook {
 
         try {
             // 检查定时备份
-            val backupIntervalMin = schedule.optInt("backup_interval_min", 0)
-            val backupFull = schedule.optBoolean("backup_full_enabled", false)
-            if (backupIntervalMin > 0) {
-                val lastBackup = schedule.optLong("last_backup_time", 0L)
-                if (lastBackup == 0L || System.currentTimeMillis() - lastBackup >= backupIntervalMin * 60_000L) {
-                    val type = if (backupFull) "full" else "incremental"
-                    XposedBridge.log("$TAG 触发定时备份（$type）")
-                    context.sendBroadcast(Intent(ACTION_SCHEDULED_BACKUP).apply {
-                        setPackage(WXHOOK_PKG); putExtra("type", type)
-                    })
-                }
-            }
+            checkSchedule(context, schedule, "backup_schedule_time", "backup_schedule_interval_days",
+                "last_backup_time", "backup_full_enabled", ACTION_SCHEDULED_BACKUP)
 
             // 检查定时同步
-            val syncIntervalMin = schedule.optInt("sync_interval_min", 0)
-            if (syncIntervalMin > 0) {
-                val lastSync = schedule.optLong("last_sync_time", 0L)
-                if (lastSync == 0L || System.currentTimeMillis() - lastSync >= syncIntervalMin * 60_000L) {
-                    XposedBridge.log("$TAG 触发定时同步")
-                    context.sendBroadcast(Intent(ACTION_SCHEDULED_SYNC).apply { setPackage(WXHOOK_PKG) })
-                }
-            }
+            checkSchedule(context, schedule, "sync_schedule_time", "sync_schedule_interval_days",
+                "last_sync_time", null, ACTION_SCHEDULED_SYNC)
 
         } catch (e: Exception) {
             XposedBridge.log("$TAG 配置解析失败: ${e.message}")
         }
+    }
+
+    /**
+     * 检查是否到了执行时间。
+     * 规则：
+     *   - scheduleTime 为空 → 跳过
+     *   - lastTime 为 0（从未执行）→ 到点就触发
+     *   - 否则判断：当前时间 >= 今天 scheduleTime，且距上次执行 >= intervalDays 天
+     */
+    private fun checkSchedule(
+        context: Context,
+        schedule: org.json.JSONObject,
+        timeKey: String,
+        intervalKey: String,
+        lastKey: String,
+        fullKey: String?,
+        action: String,
+    ) {
+        val timeStr = schedule.optString(timeKey, "").trim()
+        if (timeStr.isBlank()) return  // 未配置，跳过
+
+        val intervalDays = schedule.optInt(intervalKey, 1).coerceAtLeast(1)
+        val lastTime = schedule.optLong(lastKey, 0L)
+        val now = System.currentTimeMillis()
+
+        // 解析 HH:MM
+        val parts = timeStr.split(":")
+        if (parts.size < 2) return
+        val hour = parts[0].toIntOrNull() ?: return
+        val minute = parts[1].toIntOrNull() ?: return
+
+        // 计算今天计划时间点（毫秒）
+        val cal = java.util.Calendar.getInstance()
+        cal.set(java.util.Calendar.HOUR_OF_DAY, hour)
+        cal.set(java.util.Calendar.MINUTE, minute)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        val todaySchedule = cal.timeInMillis
+
+        // 还没到今天的时间点 → 不触发
+        if (now < todaySchedule) return
+
+        // 从未执行过 → 触发
+        if (lastTime == 0L) {
+            doTrigger(context, action, fullKey, schedule)
+            return
+        }
+
+        // 已经执行过了且距上次不足 intervalDays → 跳过
+        val intervalMs = intervalDays * 86400_000L
+        if (now - lastTime < intervalMs) return
+
+        // 确定触发
+        doTrigger(context, action, fullKey, schedule)
+    }
+
+    private fun doTrigger(
+        context: Context,
+        action: String,
+        fullKey: String?,
+        schedule: org.json.JSONObject,
+    ) {
+        if (action == ACTION_SCHEDULED_BACKUP) {
+            val backupFull = fullKey != null && schedule.optBoolean(fullKey, false)
+            val type = if (backupFull) "full" else "incremental"
+            XposedBridge.log("$TAG 触发定时备份（$type）")
+            context.sendBroadcast(Intent(action).apply {
+                setPackage(WXHOOK_PKG); putExtra("type", type)
+            })
+        } else {
+            XposedBridge.log("$TAG 触发定时同步")
+            context.sendBroadcast(Intent(action).apply { setPackage(WXHOOK_PKG) })
+        }
+    }
     }
 
     /** 读取 /data/local/tmp/wxhook_schedule.json（世界可读，免 root） */

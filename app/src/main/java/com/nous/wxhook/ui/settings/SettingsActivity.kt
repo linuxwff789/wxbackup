@@ -273,9 +273,12 @@ class SettingsActivity : AppCompatActivity() {
         items.add(SettingsItem.Header("🛠 工具"))
         items.add(SettingsItem.Action("🔄 重建备份状态", "rebuild_state"))
         items.add(SettingsItem.Header("⏱ 自动同步"))
-        items.add(SettingsItem.Input("同步间隔（分钟）", "sync_interval_min", "", "留空=手动"))
-        items.add(SettingsItem.Header("⏱ 自动备份"))
-        items.add(SettingsItem.Input("备份间隔（分钟）", "backup_interval_min", "", "0=关闭"))
+        items.add(SettingsItem.Header("⏱ 定时同步"))
+        items.add(SettingsItem.Input("同步时间", "sync_schedule_time", "", "如 06:00，留空=关闭"))
+        items.add(SettingsItem.Input("同步间隔（天）", "sync_schedule_interval_days", "1", "1=每天,7=每周"))
+        items.add(SettingsItem.Header("⏱ 定时备份"))
+        items.add(SettingsItem.Input("备份时间", "backup_schedule_time", "", "如 03:00，留空=关闭"))
+        items.add(SettingsItem.Input("备份间隔（天）", "backup_schedule_interval_days", "1", "1=每天,7=每周"))
         items.add(SettingsItem.Toggle("全量备份", "backup_full_enabled", false))
 
         val recyclerView = RecyclerView(this).apply {

@@ -72,9 +72,14 @@ class ScheduleReceiver : BroadcastReceiver() {
 
             // 只提取定时相关的字段
             val schedule = org.json.JSONObject().apply {
-                put("backup_interval_min", cfg.optInt("backup_interval_min", 0))
+                // 定时备份
+                put("backup_schedule_time", cfg.optString("backup_schedule_time", ""))
+                put("backup_schedule_interval_days", cfg.optInt("backup_schedule_interval_days", 1))
                 put("backup_full_enabled", cfg.optBoolean("backup_full_enabled", false))
-                put("sync_interval_min", cfg.optInt("sync_interval_min", 0))
+                // 定时同步
+                put("sync_schedule_time", cfg.optString("sync_schedule_time", ""))
+                put("sync_schedule_interval_days", cfg.optInt("sync_schedule_interval_days", 1))
+                // 上次执行时间
                 put("last_backup_time", cfg.optLong("last_backup_time", 0L))
                 put("last_sync_time", cfg.optLong("last_sync_time", 0L))
                 // 用 extraUpdates 覆盖最新执行时间
