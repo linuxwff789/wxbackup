@@ -1,17 +1,23 @@
 package com.nous.wxhook.ui.module
 
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
+import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.card.MaterialCardView
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
-import com.google.android.material.textview.MaterialTextView
 import com.nous.wxhook.db.BackupManager
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import com.nous.wxhook.ui.M3
@@ -20,9 +26,9 @@ import kotlinx.coroutines.launch
 class ModuleActivity : AppCompatActivity() {
 
     private val viewModel: ModuleViewModel by viewModels()
-    private lateinit var logView: MaterialTextView
-    private lateinit var statusView: MaterialTextView
-    private lateinit var recordsView: MaterialTextView
+    private lateinit var logText: android.widget.TextView
+    private lateinit var statusText: android.widget.TextView
+    private lateinit var recordsText: android.widget.TextView
     private lateinit var pathInput: TextInputEditText
 
     private val backupFinishReceiver = object : android.content.BroadcastReceiver() {
@@ -59,178 +65,233 @@ class ModuleActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 viewModel.uiState.collect { state ->
-                    statusView.text = state.statusText.ifEmpty { "暂无状态信息" }
-                    if (state.recordsText.isNotEmpty()) recordsView.text = state.recordsText
-                    if (state.logText.isNotEmpty()) logView.text = state.logText
+                    statusText.text = state.statusText.ifEmpty { "暂无状态信息" }
+                    if (state.recordsText.isNotEmpty()) recordsText.text = state.recordsText
+                    if (state.logText.isNotEmpty()) logText.text = state.logText
                 }
             }
         }
     }
 
-    private fun buildUI() {
-        val scrollView = android.widget.ScrollView(this)
-        val root = M3.vLayout(this)
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-        // ══════════════════════════════════════════
-        // 📊 状态
-        // ══════════════════════════════════════════
-        val statusCard = M3.card(this)
-        statusCard.addView(M3.titleMedium(this, "📊 状态"))
-        statusView = M3.monoBody(this).apply {
-            setPadding(0, M3.dp(this@ModuleActivity, 8), 0, M3.dp(this@ModuleActivity, 8))
-        }
-        statusCard.addView(statusView)
-
-        val btnRow = M3.hLayout(this).apply {
-            setPadding(0, M3.dp(this@ModuleActivity, 4), 0, 0)
-        }
-        btnRow.addView(M3.tonalButton(this, "🔍 检测环境") { viewModel.checkEnvironment() })
-        btnRow.addView(M3.sp(this, 12))
-        btnRow.addView(M3.outlinedButton(this, "🔄 刷新") { viewModel.refreshStatus() })
-        statusCard.addView(btnRow)
-        root.addView(statusCard)
-        root.addView(M3.sp(this, 8))
-
-        // ══════════════════════════════════════════
-        // 📁 备份路径
-        // ══════════════════════════════════════════
-        val pathCard = M3.outlinedCard(this)
-        pathCard.addView(M3.titleMedium(this, "📁 备份路径"))
-
-        val pathLayout = TextInputLayout(
-            this, null, com.google.android.material.R.attr.textInputStyle
-        ).apply {
-            hint = "备份存储路径"
-            helperText = "修改后点击保存"
+    private fun card(bg: Int = Color.WHITE): MaterialCardView {
+        return MaterialCardView(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            setPadding(0, M3.dp(this@ModuleActivity, 4), 0, 0)
+            radius = dp(12).toFloat()
+            cardElevation = dp(2).toFloat()
+            setContentPadding(dp(16), dp(16), dp(16), dp(16))
+            setCardBackgroundColor(bg)
+            isClickable = false
+            isFocusable = false
         }
+    }
+
+    private fun btn(text: String, onClick: () -> Unit): MaterialButton {
+        return MaterialButton(this, null, com.google.android.material.R.attr.materialButtonStyle).apply {
+            this.text = text
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(52)
+            )
+            insetTop = 0
+            insetBottom = 0
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun outlinedBtn(text: String, onClick: () -> Unit): MaterialButton {
+        return MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            this.text = text
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(52)
+            )
+            insetTop = 0
+            insetBottom = 0
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun sectionTitle(text: String): android.widget.TextView {
+        return android.widget.TextView(this).apply {
+            this.text = text
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(M3.onSurface(this@ModuleActivity))
+            setPadding(0, 0, 0, dp(8))
+        }
+    }
+
+    private fun buildUI() {
+        val scrollView = android.widget.ScrollView(this)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+        }
+
+        // ── 📊 状态 ──
+        val statusCard = card()
+        statusCard.addView(sectionTitle("📊 状态"))
+        statusText = android.widget.TextView(this).apply {
+            textSize = 13f
+            typeface = Typeface.MONOSPACE
+        }
+        statusCard.addView(statusText)
+        statusCard.addView(space(8))
+
+        val statusBtns = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        statusBtns.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonStyle).apply {
+            text = "🔍 检测环境"
+            insetTop = 0; insetBottom = 0
+            setOnClickListener { viewModel.checkEnvironment() }
+        })
+        statusBtns.addView(space(12))
+        statusBtns.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = "🔄 刷新"
+            insetTop = 0; insetBottom = 0
+            setOnClickListener { viewModel.refreshStatus() }
+        })
+        statusCard.addView(statusBtns)
+        root.addView(statusCard)
+        root.addView(space(12))
+
+        // ── 📁 备份路径 ──
+        val pathCard = card(0xFFF5F0FF.toInt())
+        pathCard.addView(sectionTitle("📁 备份路径"))
         pathInput = TextInputEditText(this).apply {
             setText(BackupManager.BACKUP_DIR)
+            textSize = 14f
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
         }
-        pathLayout.addView(pathInput)
-        pathCard.addView(pathLayout)
-
-        pathCard.addView(M3.sp(this, 8))
-        pathCard.addView(M3.tonalButton(this, "💾 保存路径") {
-            viewModel.saveBackupPath(pathInput.text?.toString()?.trim() ?: "")
+        pathCard.addView(pathInput)
+        pathCard.addView(space(8))
+        pathCard.addView(MaterialButton(this).apply {
+            text = "💾 保存路径"
+            insetTop = 0; insetBottom = 0
+            setOnClickListener {
+                viewModel.saveBackupPath(pathInput.text?.toString()?.trim() ?: "")
+                Toast.makeText(this@ModuleActivity, "路径已保存", Toast.LENGTH_SHORT).show()
+            }
         })
         root.addView(pathCard)
-        root.addView(M3.sp(this, 8))
+        root.addView(space(12))
 
-        // ══════════════════════════════════════════
-        // 💾 备份操作
-        // ══════════════════════════════════════════
-        val backupCard = M3.card(this)
-        backupCard.addView(M3.titleMedium(this, "💾 备份操作"))
-
-        backupCard.addView(M3.filledButton(this, "全量备份 (DB + 附件)") {
+        // ── 💾 备份操作 ──
+        val backupCard = card()
+        backupCard.addView(sectionTitle("💾 备份操作"))
+        backupCard.addView(btn("全量备份 (DB + 附件)") {
             viewModel.startBackup(false)
-        }.apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                M3.dp(this@ModuleActivity, 48)
-            )
         })
-        backupCard.addView(M3.sp(this, 8))
-        backupCard.addView(M3.outlinedButton(this, "增量备份 (仅新文件)") {
+        backupCard.addView(space(10))
+        backupCard.addView(outlinedBtn("增量备份 (仅新文件)") {
             viewModel.startBackup(true)
-        }.apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                M3.dp(this@ModuleActivity, 48)
-            )
         })
         root.addView(backupCard)
-        root.addView(M3.sp(this, 8))
+        root.addView(space(12))
 
-        // ══════════════════════════════════════════
-        // ☁️ 云同步
-        // ══════════════════════════════════════════
-        val syncCard = M3.card(this)
-        syncCard.addView(M3.titleMedium(this, "☁️ 云同步"))
+        // ── ☁️ 云同步 ──
+        val syncCard = card()
+        syncCard.addView(sectionTitle("☁️ 云同步"))
 
-        val syncRow = M3.hLayout(this)
-        syncRow.addView(M3.body(this, "启用同步").apply {
+        val syncRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        syncRow.addView(android.widget.TextView(this).apply {
+            text = "启用同步"
+            textSize = 15f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         })
-        val syncSwitch = com.google.android.material.switchmaterial.SwitchMaterial(this).apply {
+        val syncSwitch = SwitchMaterial(this).apply {
             isChecked = viewModel.uiState.value.remoteEnabled
             setOnCheckedChangeListener { _, checked -> viewModel.setRemoteEnabled(checked) }
         }
         syncRow.addView(syncSwitch)
         syncCard.addView(syncRow)
-        syncCard.addView(M3.sp(this, 8))
+        syncCard.addView(space(10))
 
-        val syncBtns = M3.hLayout(this)
-        syncBtns.addView(M3.tonalButton(this, "☁️ 同步到云盘") { viewModel.doSync() }.apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                M3.dp(this@ModuleActivity, 48)
-            )
+        val syncBtns = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        syncBtns.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonStyle).apply {
+            text = "☁️ 同步到云盘"
+            insetTop = 0; insetBottom = 0
+            setOnClickListener { viewModel.doSync() }
         })
-        syncBtns.addView(M3.sp(this, 12))
-        syncBtns.addView(
-            com.google.android.material.button.MaterialButton(
-                this, null, com.google.android.material.R.attr.borderlessButtonStyle
-            ).apply {
-                text = "⚙️ 配置云存储"
-                setTextColor(M3.colorPrimary(this@ModuleActivity))
-                setOnClickListener {
-                    startActivity(Intent(this@ModuleActivity, com.nous.wxhook.ui.cloud.CloudConfigActivity::class.java))
-                }
-                insetTop = 0; insetBottom = 0; minWidth = 0
+        syncBtns.addView(space(12))
+        syncBtns.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            text = "⚙️ 配置"
+            setTextColor(M3.colorPrimary(this@ModuleActivity))
+            insetTop = 0; insetBottom = 0; minWidth = 0
+            setOnClickListener {
+                startActivity(Intent(this@ModuleActivity, com.nous.wxhook.ui.cloud.CloudConfigActivity::class.java))
             }
-        )
+        })
         syncCard.addView(syncBtns)
         root.addView(syncCard)
-        root.addView(M3.sp(this, 8))
+        root.addView(space(12))
 
-        // ══════════════════════════════════════════
-        // 🛠 工具
-        // ══════════════════════════════════════════
-        val toolsCard = M3.outlinedCard(this)
-        toolsCard.addView(M3.titleMedium(this, "🛠 工具"))
-        toolsCard.addView(M3.textButton(this, "🔄 重建备份状态") {
+        // ── 🛠 工具 ──
+        val toolsCard = card(0xFFF5F0FF.toInt())
+        toolsCard.addView(sectionTitle("🛠 工具"))
+        toolsCard.addView(outlinedBtn("🔄 重建备份状态") {
             viewModel.rebuildState()
         })
         root.addView(toolsCard)
-        root.addView(M3.sp(this, 8))
+        root.addView(space(12))
 
-        // ══════════════════════════════════════════
-        // 📋 备份记录
-        // ══════════════════════════════════════════
-        val recordsCard = M3.card(this)
-        recordsCard.addView(M3.titleMedium(this, "📋 备份记录"))
-        recordsView = M3.monoBody(this).apply {
-            setPadding(0, M3.dp(this@ModuleActivity, 8), 0, 0)
+        // ── 📋 备份记录 ──
+        val recordsCard = card()
+        recordsCard.addView(sectionTitle("📋 备份记录"))
+        recordsText = android.widget.TextView(this).apply {
+            textSize = 12f
+            typeface = Typeface.MONOSPACE
+            setTextColor(0xFF616161.toInt())
         }
-        recordsCard.addView(recordsView)
-        recordsCard.addView(M3.sp(this, 8))
-        recordsCard.addView(M3.textButton(this, "🔄 刷新记录") { viewModel.refreshRecords() })
+        recordsCard.addView(recordsText)
+        recordsCard.addView(space(8))
+        recordsCard.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            text = "🔄 刷新记录"
+            setTextColor(M3.colorPrimary(this@ModuleActivity))
+            insetTop = 0; insetBottom = 0; minWidth = 0
+            setOnClickListener { viewModel.refreshRecords() }
+        })
         root.addView(recordsCard)
-        root.addView(M3.sp(this, 8))
+        root.addView(space(12))
 
-        // ══════════════════════════════════════════
-        // 📝 运行日志
-        // ══════════════════════════════════════════
-        val logCard = M3.card(this)
-        logCard.addView(M3.titleMedium(this, "📝 运行日志"))
-        logView = M3.monoBody(this).apply {
+        // ── 📝 运行日志 ──
+        val logCard = card()
+        logCard.addView(sectionTitle("📝 运行日志"))
+        logText = android.widget.TextView(this).apply {
             textSize = 11f
-            setPadding(0, M3.dp(this@ModuleActivity, 8), 0, 0)
-            setTextColor(M3.onSurfaceVariant(this@ModuleActivity))
-            minLines = 4
+            typeface = Typeface.MONOSPACE
+            setTextColor(0xFF9E9E9E.toInt())
+            minLines = 3
         }
-        logCard.addView(logView)
+        logCard.addView(logText)
         root.addView(logCard)
-        root.addView(M3.sp(this, 16))
+        root.addView(space(16))
 
         scrollView.addView(root)
         setContentView(scrollView)
+    }
+
+    private fun space(h: Int): android.view.View {
+        return object : android.view.View(this) {
+            override fun onMeasure(wSpec: Int, hSpec: Int) {
+                setMeasuredDimension(1, dp(h))
+            }
+        }
     }
 
     override fun onSupportNavigateUp(): Boolean {
