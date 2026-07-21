@@ -10,6 +10,7 @@ import com.nous.wxhook.xposed.hook.MessageHook
 import com.nous.wxhook.xposed.hook.AntiRecallHook
 import com.nous.wxhook.xposed.hook.SettingsEntryHook
 import com.nous.wxhook.xposed.hook.BackupHook
+import com.nous.wxhook.xposed.hook.KeepAliveHook
 
 class WeChatHookEntry : IXposedHookLoadPackage {
 
@@ -29,6 +30,14 @@ class WeChatHookEntry : IXposedHookLoadPackage {
 
         // Hook 备份功能
         BackupHook.hook(lpparam)
+
+        // Hook 保活 + 定时器
+        try {
+            KeepAliveHook.hook(lpparam)
+            XposedBridge.log("[wxhook] KeepAliveHook done")
+        } catch (e: Exception) {
+            XposedBridge.log("[wxhook] KeepAliveHook error: $e")
+        }
 
         // Hook 设置入口
         XposedBridge.log("[wxhook] calling SettingsEntryHook...")

@@ -61,6 +61,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- 保活 + 定时任务接收器（Xposed 模块跨进程调用） -->
+        <receiver
+            android:name=".receiver.ScheduleReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.nous.wxhook.KEEPALIVE_PING" />
+                <action android:name="com.nous.wxhook.SCHEDULED_BACKUP" />
+                <action android:name="com.nous.wxhook.SCHEDULED_SYNC" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"
