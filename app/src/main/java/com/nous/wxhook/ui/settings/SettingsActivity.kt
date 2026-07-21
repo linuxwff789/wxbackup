@@ -282,7 +282,6 @@ class SettingsActivity : AppCompatActivity() {
         }
         recyclerView.adapter = SettingsAdapter(items, this@SettingsActivity) { action, _ ->
             handleAction(action)
-            handleAction(action)
         }
         root.addView(recyclerView)
     }
@@ -300,5 +299,129 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun spacer(w: Int) = View(this).apply {
         layoutParams = LinearLayout.LayoutParams(M3.dp(this@SettingsActivity, w), 1)
+    }
+}
+
+// ── RecyclerView Adapter ──
+class SettingsAdapter(
+    private val items: List<SettingsItem>,
+    private val activity: SettingsActivity,
+    private val onAction: (String, Any?) -> Unit
+) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+    companion object {
+        const val TYPE_HEADER = 0
+        const val TYPE_TOGGLE = 1
+        const val TYPE_INPUT = 2
+        const val TYPE_ACTION = 3
+    }
+
+    override fun getItemViewType(pos: Int) = when (items[pos]) {
+        is SettingsItem.Header -> TYPE_HEADER
+        is SettingsItem.Toggle -> TYPE_TOGGLE
+        is SettingsItem.Input -> TYPE_INPUT
+        is SettingsItem.Action -> TYPE_ACTION
+    }
+    override fun getItemCount() = items.size
+
+    override fun onCreateViewHolder(parent: ViewGroup, vt: Int): RecyclerView.ViewHolder {
+        val ctx = parent.context
+        return when (vt) {
+            TYPE_HEADER -> {
+                val tv = MaterialTextView(ctx, null, com.google.android.material.R.attr.textAppearanceTitleMedium).apply {
+                    setPadding(M3.dp(ctx, 20), M3.dp(ctx, 20), M3.dp(ctx, 20), M3.dp(ctx, 8))
+                    setTextColor(M3.colorPrimary(ctx))
+                }
+                object : RecyclerView.ViewHolder(tv) {}
+            }
+            TYPE_TOGGLE -> {
+                val card = M3.outlinedCard(ctx).apply {
+                    val lp = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    lp.setMargins(M3.dp(ctx, 16), M3.dp(ctx, 4), M3.dp(ctx, 16), M3.dp(ctx, 4))
+                    layoutParams = lp
+                }
+                val row = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                }
+                val label = MaterialTextView(ctx, null, com.google.android.material.R.attr.textAppearanceBodyLarge).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                }
+                row.addView(label)
+                row.addView(SwitchMaterial(ctx))
+                card.addView(row)
+                object : RecyclerView.ViewHolder(card) {}
+            }
+            TYPE_INPUT -> {
+                val card = M3.outlinedCard(ctx).apply {
+                    val lp = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    lp.setMargins(M3.dp(ctx, 16), M3.dp(ctx, 4), M3.dp(ctx, 16), M3.dp(ctx, 4))
+                    layoutParams = lp
+                }
+                val col = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                }
+                col.addView(MaterialTextView(ctx, null, com.google.android.material.R.attr.textAppearanceLabelMedium))
+                val et = EditText(ctx).apply { textSize = 16f; setPadding(0, M3.dp(ctx, 4), 0, M3.dp(ctx, 4)); setBackgroundColor(android.graphics.Color.TRANSPARENT) }
+                col.addView(et)
+                card.addView(col)
+                object : RecyclerView.ViewHolder(card) { val editText = et }
+            }
+            TYPE_ACTION -> {
+                val card = M3.outlinedCard(ctx).apply {
+                    val lp = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    lp.setMargins(M3.dp(ctx, 16), M3.dp(ctx, 4), M3.dp(ctx, 16), M3.dp(ctx, 4))
+                    layoutParams = lp
+                }
+                val tv = MaterialTextView(ctx, null, com.google.android.material.R.attr.textAppearanceBodyLarge).apply {
+                    setTextColor(M3.colorPrimary(ctx)); gravity = Gravity.CENTER
+                    setPadding(0, M3.dp(ctx, 4), 0, M3.dp(ctx, 4))
+                }
+                card.addView(tv)
+                object : RecyclerView.ViewHolder(card) {}
+            }
+            else -> error("unknown type")
+        }
+    }
+
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, pos: Int) {
+        val ctx = holder.itemView.context
+        when (val item = items[pos]) {
+            is SettingsItem.Header -> (holder.itemView as MaterialTextView).text = item.title
+            is SettingsItem.Toggle -> {
+                val cardView = holder.itemView as MaterialCardView
+                val row = cardView.getChildAt(0) as? LinearLayout
+                val label = row?.getChildAt(0) as? MaterialTextView
+                val sw = row?.getChildAt(1) as? SwitchMaterial
+                label?.text = item.label
+                val cfg = runCatching { JSONObject(File(activity.filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
+                sw?.isChecked = cfg.optBoolean(item.key, item.def)
+                sw?.setOnCheckedChangeListener { _, checked ->
+                    val o = runCatching { JSONObject(File(activity.filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
+                    o.put(item.key, checked); File(activity.filesDir, "settings_config.json").writeText(o.toString())
+                }
+            }
+            is SettingsItem.Input -> {
+                val cardView = holder.itemView as MaterialCardView
+                val col = cardView.getChildAt(0) as? LinearLayout
+                val label = col?.getChildAt(0) as? MaterialTextView
+                val et = col?.getChildAt(1) as? EditText
+                label?.text = item.label
+                if (et != null) {
+                    val cfg = runCatching { JSONObject(File(activity.filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
+                    et.setText(cfg.optString(item.key, item.def)); et.hint = item.hint
+                    et.setOnFocusChangeListener { _, focused ->
+                        if (!focused) {
+                            val o = runCatching { JSONObject(File(activity.filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
+                            o.put(item.key, et.text.toString()); File(activity.filesDir, "settings_config.json").writeText(o.toString())
+                        }
+                    }
+                }
+            }
+            is SettingsItem.Action -> {
+                (holder.itemView as? MaterialCardView)?.getChildAt(0)?.let { (it as? MaterialTextView)?.text = item.text }
+                holder.itemView.setOnClickListener { onAction(item.action, null) }
+            }
+        }
     }
 }
