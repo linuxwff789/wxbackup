@@ -170,7 +170,8 @@ class SettingsActivity : AppCompatActivity() {
                 dynamicContainer?.addView(label("用户名"))
                 wdUser = field("").also { dynamicContainer?.addView(it) }
                 dynamicContainer?.addView(label("密码"))
-                wdPass = field("").also { android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD.let { tp -> it.inputType = tp }; dynamicContainer?.addView(it) }
+                wdPass = field("").also { dynamicContainer?.addView(it) }
+                wdPass?.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
                 dynamicContainer?.addView(label("远端目录（默认 wxhook-backup）"))
                 wdPath = field("wxhook-backup").also { dynamicContainer?.addView(it) }
             }
@@ -248,7 +249,7 @@ class SettingsActivity : AppCompatActivity() {
                 val pass = wdPass?.text?.toString()?.trim() ?: ""
                 if (url.isBlank() || user.isBlank()) { Toast.makeText(this, "请输入地址和用户名", Toast.LENGTH_SHORT).show(); return }
                 val finalUrl = if (!url.startsWith("http")) "https://$url" else url
-                viewModel.testWebdavConnection(finalUrl, user, pass)
+                viewModel.testWebDavConnection(finalUrl, user, pass)
             }
             "aliyundrive" -> {
                 val token = alToken?.text?.toString()?.trim() ?: ""
@@ -280,6 +281,7 @@ class SettingsActivity : AppCompatActivity() {
             isNestedScrollingEnabled = false
         }
         recyclerView.adapter = SettingsAdapter(items, this@SettingsActivity) { action, _ ->
+            handleAction(action)
             handleAction(action)
         }
         root.addView(recyclerView)
