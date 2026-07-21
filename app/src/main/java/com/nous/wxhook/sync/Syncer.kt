@@ -208,7 +208,8 @@ object Syncer {
         onProgress?.invoke(Progress("扫描远端文件（用于去重）..."))
         val remoteFiles = kotlinx.coroutines.runBlocking { client.list(config.remotePath) }
             .getOrNull() ?: emptyList()
-        val remoteNames = remoteFiles.map { File(it.path).name }.toSet()
+        // 远端文件以 文件名→RemoteObject 索引，用于大小比对
+        val remoteByName = remoteFiles.groupBy { File(it.path).name }.mapValues { it.value.first() }
 
         // 5. 筛选需要上传的文件
         var uploaded = 0
@@ -222,8 +223,9 @@ object Syncer {
 
             onProgress?.invoke(Progress("[${idx + 1}/${toUpload.size}] $pkgName", idx + 1, toUpload.size))
 
-            // 增量判断：本地已记录且远端存在且大小一致 → 跳过
-            if (!force && pkgName in synced && pkgName in remoteNames) {
+            // 增量判断：本地有记录 + 远端存在 + 大小一致 → 跳过
+            val remoteMatch = remoteByName[pkgName]
+            if (!force && pkgName in synced && remoteMatch != null && remoteMatch.size == pkgSize) {
                 skipped++
                 newlySynced.add(pkgName)
                 continue
