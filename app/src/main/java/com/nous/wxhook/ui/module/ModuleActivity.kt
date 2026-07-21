@@ -9,8 +9,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import com.google.android.material.textview.MaterialTextView
-import com.nous.wxhook.R
 import com.nous.wxhook.db.BackupManager
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import com.nous.wxhook.ui.M3
@@ -22,6 +23,7 @@ class ModuleActivity : AppCompatActivity() {
     private lateinit var logView: MaterialTextView
     private lateinit var statusView: MaterialTextView
     private lateinit var recordsView: MaterialTextView
+    private lateinit var pathInput: TextInputEditText
 
     private val backupFinishReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(ctx: android.content.Context?, intent: Intent?) {
@@ -43,7 +45,6 @@ class ModuleActivity : AppCompatActivity() {
             RECEIVER_NOT_EXPORTED
         )
 
-        // Notification permission on Android 13+
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             try {
                 requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
@@ -68,14 +69,11 @@ class ModuleActivity : AppCompatActivity() {
 
     private fun buildUI() {
         val scrollView = android.widget.ScrollView(this)
-        val root = M3.vLayout(this) {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
+        val root = M3.vLayout(this)
 
-        // ── Status section ──
+        // ══════════════════════════════════════════
+        // 📊 状态
+        // ══════════════════════════════════════════
         val statusCard = M3.card(this)
         statusCard.addView(M3.titleMedium(this, "📊 状态"))
         statusView = M3.monoBody(this).apply {
@@ -93,16 +91,42 @@ class ModuleActivity : AppCompatActivity() {
         root.addView(statusCard)
         root.addView(M3.sp(this, 8))
 
-        // ── Backup section ──
+        // ══════════════════════════════════════════
+        // 📁 备份路径
+        // ══════════════════════════════════════════
+        val pathCard = M3.outlinedCard(this)
+        pathCard.addView(M3.titleMedium(this, "📁 备份路径"))
+
+        val pathLayout = TextInputLayout(
+            this, null, com.google.android.material.R.attr.textInputStyle
+        ).apply {
+            hint = "备份存储路径"
+            helperText = "修改后点击保存"
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            setPadding(0, M3.dp(this@ModuleActivity, 4), 0, 0)
+        }
+        pathInput = TextInputEditText(this).apply {
+            setText(BackupManager.BACKUP_DIR)
+        }
+        pathLayout.addView(pathInput)
+        pathCard.addView(pathLayout)
+
+        pathCard.addView(M3.sp(this, 8))
+        pathCard.addView(M3.tonalButton(this, "💾 保存路径") {
+            viewModel.saveBackupPath(pathInput.text?.toString()?.trim() ?: "")
+        })
+        root.addView(pathCard)
+        root.addView(M3.sp(this, 8))
+
+        // ══════════════════════════════════════════
+        // 💾 备份操作
+        // ══════════════════════════════════════════
         val backupCard = M3.card(this)
         backupCard.addView(M3.titleMedium(this, "💾 备份操作"))
 
-        val backupInfo = M3.label(this, BackupManager.BACKUP_DIR).apply {
-            setPadding(0, M3.dp(this@ModuleActivity, 4), 0, M3.dp(this@ModuleActivity, 12))
-        }
-        backupCard.addView(backupInfo)
-
-        // 全量备份按钮（单独一行，确保长文本完整显示）
         backupCard.addView(M3.filledButton(this, "全量备份 (DB + 附件)") {
             viewModel.startBackup(false)
         }.apply {
@@ -123,7 +147,9 @@ class ModuleActivity : AppCompatActivity() {
         root.addView(backupCard)
         root.addView(M3.sp(this, 8))
 
-        // ── Cloud Sync section ──
+        // ══════════════════════════════════════════
+        // ☁️ 云同步
+        // ══════════════════════════════════════════
         val syncCard = M3.card(this)
         syncCard.addView(M3.titleMedium(this, "☁️ 云同步"))
 
@@ -137,33 +163,46 @@ class ModuleActivity : AppCompatActivity() {
         }
         syncRow.addView(syncSwitch)
         syncCard.addView(syncRow)
-
         syncCard.addView(M3.sp(this, 8))
 
         val syncBtns = M3.hLayout(this)
-        syncBtns.addView(M3.tonalButton(this, "☁️ 立即同步") { viewModel.doSync() }.apply {
+        syncBtns.addView(M3.tonalButton(this, "☁️ 同步到云盘") { viewModel.doSync() }.apply {
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, M3.dp(this@ModuleActivity, 48)
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                M3.dp(this@ModuleActivity, 48)
             )
         })
         syncBtns.addView(M3.sp(this, 12))
         syncBtns.addView(
-            com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-                text = "⚙️ 配置"
+            com.google.android.material.button.MaterialButton(
+                this, null, com.google.android.material.R.attr.borderlessButtonStyle
+            ).apply {
+                text = "⚙️ 配置云存储"
                 setTextColor(M3.colorPrimary(this@ModuleActivity))
                 setOnClickListener {
                     startActivity(Intent(this@ModuleActivity, com.nous.wxhook.ui.cloud.CloudConfigActivity::class.java))
                 }
-                insetTop = 0
-                insetBottom = 0
-                minWidth = 0
+                insetTop = 0; insetBottom = 0; minWidth = 0
             }
         )
         syncCard.addView(syncBtns)
         root.addView(syncCard)
         root.addView(M3.sp(this, 8))
 
-        // ── Records section ──
+        // ══════════════════════════════════════════
+        // 🛠 工具
+        // ══════════════════════════════════════════
+        val toolsCard = M3.outlinedCard(this)
+        toolsCard.addView(M3.titleMedium(this, "🛠 工具"))
+        toolsCard.addView(M3.textButton(this, "🔄 重建备份状态") {
+            viewModel.rebuildState()
+        })
+        root.addView(toolsCard)
+        root.addView(M3.sp(this, 8))
+
+        // ══════════════════════════════════════════
+        // 📋 备份记录
+        // ══════════════════════════════════════════
         val recordsCard = M3.card(this)
         recordsCard.addView(M3.titleMedium(this, "📋 备份记录"))
         recordsView = M3.monoBody(this).apply {
@@ -175,7 +214,9 @@ class ModuleActivity : AppCompatActivity() {
         root.addView(recordsCard)
         root.addView(M3.sp(this, 8))
 
-        // ── Live log ──
+        // ══════════════════════════════════════════
+        // 📝 运行日志
+        // ══════════════════════════════════════════
         val logCard = M3.card(this)
         logCard.addView(M3.titleMedium(this, "📝 运行日志"))
         logView = M3.monoBody(this).apply {

@@ -156,6 +156,18 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun rebuildState() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { BackupHookLocal.rebuildDbState() }
+                .getOrElse { e -> "重建失败: " + (e.message ?: "") }
+            withContext(Dispatchers.Main) {
+                appendLog(result)
+                val app = getApplication<Application>()
+                android.widget.Toast.makeText(app, result, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     fun refreshRecords() {
         viewModelScope.launch {
             val recordsText = withContext(Dispatchers.IO) { loadRecords() }
