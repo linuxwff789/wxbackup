@@ -176,7 +176,6 @@ object KeepAliveHook {
             context.sendBroadcast(Intent(action).apply { setPackage(WXHOOK_PKG) })
         }
     }
-    }
 
     /** 读取 /data/local/tmp/wxhook_schedule.json（世界可读，免 root） */
     private fun readScheduleFile(): org.json.JSONObject? {
