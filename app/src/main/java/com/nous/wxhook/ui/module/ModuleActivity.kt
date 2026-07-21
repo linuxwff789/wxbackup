@@ -126,7 +126,7 @@ class ModuleActivity : AppCompatActivity() {
 
     private fun textBtn(text: String, onClick: () -> Unit) = TextView(this).apply {
         this.text = text; textSize = 14f
-        setTextColor(0xFF6750A4.toInt())
+        setTextColor(M3.colorPrimary(this@ModuleActivity))
         setPadding(0, dp(8), 0, dp(8))
         isClickable = true; isFocusable = true
         setOnClickListener { onClick() }
@@ -222,11 +222,30 @@ class ModuleActivity : AppCompatActivity() {
         recordsCard.addView(textBtn("🔄 刷新记录") { viewModel.refreshRecords() })
         root.addView(recordsCard)
 
-        // ═══ 📝 运行日志 ═══
+        // ═══ 📝 运行日志（可折叠）═══
         val logCard = cardLayout()
-        logCard.addView(sectionTitle("📝 运行日志"))
+        val logTitle = TextView(this).apply {
+            text = "📝 运行日志  ▾"
+            textSize = 17f; typeface = Typeface.DEFAULT_BOLD
+            setTextColor(M3.onSurface(this@ModuleActivity))
+            isClickable = true; isFocusable = true
+        }
+        val logContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = android.view.View.GONE  // 默认折叠
+        }
+        logTitle.setOnClickListener {
+            val expanded = logContent.visibility != android.view.View.VISIBLE
+            logContent.visibility = if (expanded) android.view.View.VISIBLE else android.view.View.GONE
+            logTitle.text = if (expanded) "📝 运行日志  ▾" else "📝 运行日志  ▸"
+        }
+        logCard.addView(logTitle)
+
         logText = TextView(this).apply { textSize = 11f; typeface = Typeface.MONOSPACE; setTextColor(M3.onSurfaceVariant(this@ModuleActivity)); minLines = 3 }
-        logCard.addView(logText)
+        logContent.addView(logText)
+        logContent.addView(spacer(4))
+        logContent.addView(textBtn("🗑 清除日志") { viewModel.clearLog() })
+        logCard.addView(logContent)
         root.addView(logCard)
         root.addView(spacer(16))
 

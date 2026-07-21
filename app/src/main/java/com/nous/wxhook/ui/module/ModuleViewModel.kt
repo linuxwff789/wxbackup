@@ -168,6 +168,11 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun clearLog() {
+        _uiState.value = _uiState.value.copy(logText = "")
+        appendLog("📋 日志已清除")
+    }
+
     fun refreshRecords() {
         viewModelScope.launch {
             val recordsText = withContext(Dispatchers.IO) { loadRecords() }
@@ -336,11 +341,22 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
         } catch (_: Exception) {}
     }
 
+    companion object {
+        private const val MAX_LOG_LINES = 30
+    }
+
     fun appendLog(msg: String) {
         val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         val line = "[$time] $msg"
         val currentLog = _uiState.value.logText
-        _uiState.value = _uiState.value.copy(logText = "$line\n$currentLog")
+        // 只保留最多 MAX_LOG_LINES 行
+        val lines = currentLog.lines()
+        val newLog = if (lines.size >= MAX_LOG_LINES) {
+            lines.dropLast(1).joinToString("\n").let { "$line\n$it" }
+        } else {
+            "$line\n$currentLog"
+        }
+        _uiState.value = _uiState.value.copy(logText = newLog)
 
         try {
             val tmp = File(filesDir, "backup_live.log")
