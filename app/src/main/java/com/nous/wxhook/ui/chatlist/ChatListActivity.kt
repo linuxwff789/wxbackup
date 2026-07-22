@@ -169,14 +169,15 @@ class ChatListActivity : AppCompatActivity() {
                     }
                     post { Toast.makeText(this, "正在重建数据库...", Toast.LENGTH_SHORT).show() }
                     val tmpDb = File(cacheDir, "browse_full_${tag}.db")
-                    val dumpSql = File(cacheDir, "browse_dump_${tag}.sql")
-                    val dumpContent = NativeArchive.readFileFromTar(opt.path, "6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql")
-                    if (dumpContent.isNullOrBlank()) {
+                    val sqlDumpPath = "/data/local/tmp/browse_dump_${tag}.sql"
+                    // 用手管命令从 tar.zst 提取 .dump 到文件（不经过 Java 内存）
+                    RootGateways.run("rm -f $sqlDumpPath 2>/dev/null")
+                    RootGateways.run("tar -I zstd -x -f '${opt.path}' --to-stdout '6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql' > $sqlDumpPath 2>/dev/null")
+                    if (RootGateways.runQuiet("test -s '$sqlDumpPath' && echo 1").trim() != "1") {
                         post { emptyView.text = "备份不含数据库"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE }; return@Thread
                     }
-                    dumpSql.writeText(dumpContent)
-                    RootGateways.run("$sc '${tmpDb.absolutePath}' < '${dumpSql.absolutePath}' 2>/dev/null")
-                    dumpSql.delete()
+                    RootGateways.run("$sc '${tmpDb.absolutePath}' < '$sqlDumpPath' 2>/dev/null")
+                    RootGateways.run("rm -f $sqlDumpPath 2>/dev/null")
                     if (tmpDb.exists() && tmpDb.length() > 4096) {
                         currentDbPath = tmpDb.absolutePath; post { loadConversations() }
                     } else {
@@ -211,17 +212,17 @@ class ChatListActivity : AppCompatActivity() {
                     }}; return@Thread
                 }
 
-                // 从全量备份重建基线 DB
+                // 从全量备份重建基线 DB（用 tar 命令直接提取，避免 OOM）
                 post { Toast.makeText(this, "重建基线数据库...", Toast.LENGTH_SHORT).show() }
                 val baseDb = File(cacheDir, "browse_${baseTag}.db")
-                val dumpSql = File(cacheDir, "dump_${baseTag}.sql")
-                val dumpContent = NativeArchive.readFileFromTar(baseArchive, "6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql")
-                if (dumpContent.isNullOrBlank()) {
+                val sqlDumpPath = "/data/local/tmp/browse_dump_${baseTag}.sql"
+                RootGateways.run("rm -f $sqlDumpPath 2>/dev/null")
+                RootGateways.run("tar -I zstd -x -f '$baseArchive' --to-stdout '6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql' > $sqlDumpPath 2>/dev/null")
+                if (RootGateways.runQuiet("test -s '$sqlDumpPath' && echo 1").trim() != "1") {
                     post { emptyView.text = "基线备份不含数据库"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE }; return@Thread
                 }
-                dumpSql.writeText(dumpContent)
-                RootGateways.run("$sc '${baseDb.absolutePath}' < '${dumpSql.absolutePath}' 2>/dev/null")
-                dumpSql.delete()
+                RootGateways.run("$sc '${baseDb.absolutePath}' < '$sqlDumpPath' 2>/dev/null")
+                RootGateways.run("rm -f $sqlDumpPath 2>/dev/null")
 
                 if (!baseDb.exists() || baseDb.length() < 4096) {
                     post { emptyView.text = "基线数据库重建失败"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE }; return@Thread
