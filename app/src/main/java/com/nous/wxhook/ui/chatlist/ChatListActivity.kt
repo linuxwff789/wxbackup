@@ -139,8 +139,9 @@ class ChatListActivity : AppCompatActivity() {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 val opt = options[pos]
                 if (opt.path.isEmpty()) {
-                    currentDbPath = "/sdcard/Download/EnMicroMsg.db"
-                    loadConversations()
+                    // 实时数据库：先自动从微信进程复制最新版本
+                    progressBar.visibility = View.VISIBLE
+                    refreshLiveDb()
                 } else {
                     loadFromBackup(opt)
                 }
@@ -196,6 +197,49 @@ class ChatListActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 post { runOnUiThread { emptyView.text = "加载失败: ${e.message}"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE } }
+            }
+        }.start()
+    }
+
+    /** 自动从微信进程复制最新数据库到 /sdcard/Download/ */
+    private fun refreshLiveDb() {
+        Thread {
+            try {
+                val pid = RootGateways.runQuiet("pidof com.tencent.mm").trim()
+                if (pid.isBlank()) {
+                    // 微信没运行，用已有副本
+                    post {
+                        currentDbPath = "/sdcard/Download/EnMicroMsg.db"
+                        loadConversations()
+                    }
+                    return@Thread
+                }
+
+                val src = "/proc/${pid}/root/data/data/com.tencent.mm/MicroMsg/6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg.db"
+                val dst = "/sdcard/Download/EnMicroMsg.db"
+
+                // 先用 stat 检查源文件大小
+                val srcSize = RootGateways.runQuiet("stat -c%s '$src' 2>/dev/null").trim()
+                if (srcSize.toLongOrNull() ?: 0L < 1024) {
+                    post { currentDbPath = dst; loadConversations() }
+                    return@Thread
+                }
+
+                post { Toast.makeText(this, "正在复制最新数据库...", Toast.LENGTH_SHORT).show() }
+                RootGateways.run("dd if='$src' of='$dst' bs=1M 2>/dev/null")
+                RootGateways.run("chmod 644 '$dst'")
+
+                post {
+                    currentDbPath = dst
+                    android.util.Log.i("wxhook:ChatList", "DB copied: ${srcSize}B")
+                    loadConversations()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("wxhook:ChatList", "refresh DB failed", e)
+                post {
+                    currentDbPath = "/sdcard/Download/EnMicroMsg.db"
+                    loadConversations()
+                }
             }
         }.start()
     }
