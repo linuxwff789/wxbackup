@@ -163,11 +163,12 @@ object BackupOrchestrator {
             RootGateways.delete(pairsFile)
 
             // 保存解密后的 .db 文件到备份目录（供浏览历史备份用）
-            val decDbPath = "/data/local/tmp/wxhook_backup/wxbackup_decrypted.db"
-            if (RootGateways.runQuiet("test -s '$decDbPath' && echo 1").trim() == "1") {
+            for (wxBasePath in wxPaths) {
+                val dbSrc = "$wxBasePath/EnMicroMsg.db"
                 val dbFile = File(dir, pkgFile.nameWithoutExtension + ".db")
-                RootGateways.run("cp '$decDbPath' '${dbFile.absolutePath}' && chmod 644 '${dbFile.absolutePath}'")
-                RootGateways.run("rm -f '$decDbPath' $decDbPath-shm $decDbPath-wal 2>/dev/null")
+                if (ArchiveService.decryptToDb(dbSrc, dbFile.absolutePath)) {
+                    RootGateways.run("chmod 644 '${dbFile.absolutePath}' 2>/dev/null")
+                }
             }
 
             // 6. Cloud sync

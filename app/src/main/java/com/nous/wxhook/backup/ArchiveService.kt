@@ -51,33 +51,32 @@ object ArchiveService {
         return bos.toByteArray()
     }
 
-    // ── Full DB decrypt → 直接生成未加密的 .db 文件 ──
+    // ── Full DB decrypt + SQL dump（供打包进 tar，增量依赖此格式） ──
 
     fun decryptAndDump(dbPath: String): String {
         val tmpDir = "/data/local/tmp/wxhook_backup"
         val shPath = "$tmpDir/decrypt_full.sh"
-        val outputName = FullBackupLayout.databaseDumpName()
-        val outputFile = "$tmpDir/$outputName"
+        val outputFile = "$tmpDir/${FullBackupLayout.databaseDumpName()}"
         return try {
             val pwd = getDbPassword()
-            val b64 = Base64.encodeToString(
-                ("#!/system/bin/sh\n" +
+            val sqlScript = "/data/local/tmp/decrypt_full.sql"
+            val scriptContent = ".output /dev/null\n" +
+                "PRAGMA key = '$pwd';\n" +
+                "PRAGMA cipher_compatibility = 3;\n" +
+                "PRAGMA cipher_page_size = 1024;\n" +
+                "PRAGMA kdf_iter = 4000;\n" +
+                "PRAGMA cipher_use_hmac = OFF;\n" +
+                ".output stdout\n" +
+                ".mode insert\n" +
+                "SELECT * FROM message;\n"
+            val script = "#!/system/bin/sh\n" +
                 "mkdir -p $tmpDir\n" +
-                "rm -f $outputFile $tmpDir/wxhook_dec.db 2>/dev/null\n" +
                 "cp \"$dbPath\" $tmpDir/wxhook_dec.db 2>/dev/null\n" +
+                "printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript\n" +
                 "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6' " +
-                "${BackupEnv.binDir}/sqlcipher \"$tmpDir/wxhook_dec.db\" << 'SQL_EOF' > /dev/null 2>&1\n" +
-                "PRAGMA key='$pwd';\n" +
-                "PRAGMA cipher_compatibility=3;\n" +
-                "PRAGMA cipher_page_size=1024;\n" +
-                "PRAGMA kdf_iter=4000;\n" +
-                "PRAGMA cipher_use_hmac=OFF;\n" +
-                "ATTACH DATABASE '$outputFile' AS plain KEY '';\n" +
-                "SELECT sqlcipher_export('plain');\n" +
-                "DETACH plain;\n" +
-                "SQL_EOF\n" +
-                "rm -f $tmpDir/wxhook_dec.db $tmpDir/wxhook_dec.db-shm $tmpDir/wxhook_dec.db-wal 2>/dev/null"
-                ).toByteArray(Charsets.UTF_8), Base64.NO_WRAP
+                "${BackupEnv.binDir}/sqlcipher \"$tmpDir/wxhook_dec.db\" < $sqlScript > \"$outputFile\" 2>/dev/null\n"
+            val b64 = Base64.encodeToString(
+                script.toByteArray(Charsets.UTF_8), Base64.NO_WRAP
             )
             RootGateways.run(
                 "mkdir -p \"$tmpDir\" && printf '%s' $b64 | base64 -d > \"$shPath\" && chmod 700 \"$shPath\" && sh \"$shPath\" > /data/local/tmp/decrypt_exec.log 2>&1",
@@ -88,6 +87,32 @@ object ArchiveService {
         } catch (e: Exception) {
             Log.e("wxhook:Backup", "decryptAndDump: $e")
             ""
+        }
+    }
+
+    // ── 生成未加密的 .db 文件（供浏览历史备份使用） ──
+
+    fun decryptToDb(dbPath: String, outPath: String): Boolean {
+        return try {
+            val pwd = getDbPassword()
+            val tmpDb = "/data/local/tmp/wxhook_backup/wxhook_decrypt.db"
+            RootGateways.run("rm -f $tmpDb $tmpDb-shm $tmpDb-wal '$outPath' 2>/dev/null")
+            RootGateways.run("cp '$dbPath' $tmpDb 2>/dev/null")
+            val sql = "PRAGMA key='$pwd';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;" +
+                "PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;" +
+                "ATTACH DATABASE '$outPath' AS plain KEY '';" +
+                "SELECT sqlcipher_export('plain');" +
+                "DETACH plain;"
+            val sqlFile = "/data/local/tmp/wxhook_backup/decrypt_to_db.sql"
+            RootGateways.runQuiet("printf '%s' '${sql.replace("'", "'\\''")}' > $sqlFile")
+            RootGateways.run(
+                "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6' " +
+                "${BackupEnv.binDir}/sqlcipher $tmpDb < $sqlFile > /dev/null 2>&1")
+            RootGateways.run("rm -f $tmpDb $tmpDb-shm $tmpDb-wal $sqlFile 2>/dev/null")
+            BackupEnv.suOut("test -s '$outPath' && echo 1").trim() == "1"
+        } catch (e: Exception) {
+            Log.e("wxhook:Backup", "decryptToDb: $e")
+            false
         }
     }
 
