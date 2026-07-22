@@ -67,7 +67,7 @@ object ArchiveService {
                 "PRAGMA kdf_iter = 4000;\n" +
                 "PRAGMA cipher_use_hmac = OFF;\n" +
                 ".output stdout\n" +
-                ".dump\n" +  // .dump 包含 CREATE TABLE + INSERT，可直接重建 DB
+                ".dump\n"
             val script = "#!/system/bin/sh\n" +
                 "mkdir -p $tmpDir\n" +
                 "cp \"$dbPath\" $tmpDir/wxhook_dec.db 2>/dev/null\n" +
