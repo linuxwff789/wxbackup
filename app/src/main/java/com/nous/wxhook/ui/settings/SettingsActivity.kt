@@ -338,5 +338,7 @@ class SettingsActivity : AppCompatActivity() {
         setTextColor(M3.onSurfaceVariant(this@SettingsActivity))
     }
 
-
+    private fun spacer(w: Int) = View(this).apply {
+        layoutParams = LinearLayout.LayoutParams(M3.dp(this@SettingsActivity, w), 1)
+    }
 }
