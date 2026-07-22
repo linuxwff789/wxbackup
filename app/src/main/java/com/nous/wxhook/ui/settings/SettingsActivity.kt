@@ -265,10 +265,10 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         fun editRow(key: String, label: String, defaultVal: String, hint: String) {
-            root.addView(com.google.android.material.textfield.TextInputLayout(this, null, com.google.android.material.R.attr.textInputStyle).apply {
-                hint = label; helperText = hint
+            root.addView(com.google.android.material.textfield.TextInputLayout(this@SettingsActivity, null, com.google.android.material.R.attr.textInputStyle).apply {
+                setHint(label); helperText = hint
                 layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                addView(com.google.android.material.textfield.TextInputEditText(this).apply {
+                addView(com.google.android.material.textfield.TextInputEditText(this@SettingsActivity).apply {
                     setText(cfg.optString(key, defaultVal))
                     setOnFocusChangeListener { _, focused -> if (!focused) save(key, text?.toString()?.trim() ?: defaultVal) }
                 })
