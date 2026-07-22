@@ -72,7 +72,7 @@ object ArchiveService {
                 ".mode insert ImgInfo2\nSELECT * FROM ImgInfo2;\n" +
                 ".mode insert VoiceInfo\nSELECT * FROM VoiceInfo;\n" +
                 ".mode insert appattach\nSELECT * FROM appattach;\n" +
-                ".mode insert message\nSELECT * FROM message;\n" +
+                ".mode insert message\nSELECT * FROM message;\n"
             val script = "#!/system/bin/sh\n" +
                 "mkdir -p $tmpDir\n" +
                 "cp \"$dbPath\" $tmpDir/wxhook_dec.db 2>/dev/null\n" +
