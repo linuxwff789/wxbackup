@@ -387,10 +387,10 @@ object BackupOrchestrator {
                 }
             }
 
-            // 保存增量 SQL 到备份目录（供浏览时回放）
+            // 用备份 tag 命名保存增量 SQL（供回放时按 tag 匹配）
             val sqlFiles = RootGateways.runQuiet("find ${BackupEnv.backupDataDir}/tmp -name '*.sql' -path '*${tag}*' 2>/dev/null").lines().filter { it.isNotBlank() }
             for (f in sqlFiles) {
-                val n = File(f).name
+                val n = "incr_${tag}.sql"  // 用 tag 命名：incr_20260722_141543.sql
                 RootGateways.run("cp '$f' '${BackupEnv.backupDataDir}/$n' && chmod 644 '${BackupEnv.backupDataDir}/$n' 2>/dev/null")
             }
 

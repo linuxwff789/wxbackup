@@ -49,7 +49,7 @@ class ChatListActivity : AppCompatActivity() {
     // 当前使用的数据库路径
     private var currentDbPath = "/sdcard/Download/EnMicroMsg.db"
 
-    data class BackupOption(val label: String, val path: String)  // path="" 表示实时库
+    data class BackupOption(val label: String, val path: String, val tag: String = "", val isFull: Boolean = false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -110,7 +110,7 @@ class ChatListActivity : AppCompatActivity() {
 
     /** 扫描可用备份，填充下拉框 */
     private fun loadBackupOptions() {
-        val options = mutableListOf(BackupOption("📱 实时数据库", ""))
+        val options = mutableListOf(BackupOption("📱 实时数据库", ""))  // path=""=实时库
         val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
         try {
@@ -128,10 +128,9 @@ class ChatListActivity : AppCompatActivity() {
                     } else ""
                     val isFull = type == "full"
                     val typeIcon = if (isFull) "📦" else "📎"
-                    val browseTag = if (isFull) " 🖥️" else ""
                     val timeStr = if (time > 0) fmt.format(Date(time)) else "?"
-                    val label = "$typeIcon ${tag.substringAfter("_")} ($timeStr)$browseTag"
-                    options.add(BackupOption(label, archivePath))
+                    val label = "$typeIcon ${tag.substringAfter("_")} ($timeStr)"
+                    options.add(BackupOption(label, archivePath, tag, isFull))
                 }
             }
         } catch (_: Exception) {}
@@ -152,40 +151,122 @@ class ChatListActivity : AppCompatActivity() {
         }
     }
 
-    /** 从备份包中提取数据库 */
+    /** 从备份包构建可查询数据库（全量直接提取，增量回放 SQL） */
     private fun loadFromBackup(opt: BackupOption) {
         progressBar.visibility = View.VISIBLE
         emptyView.visibility = View.GONE
 
         Thread {
             try {
-                val archivePath = opt.path
-                if (!File(archivePath).exists()) {
-                    post { Toast.makeText(this, "备份文件不存在", Toast.LENGTH_SHORT).show(); progressBar.visibility = View.GONE }
-                    return@Thread
-                }
-
-                val dumpName = "EnMicroMsg_baseline.sql"
-                val tempDb = File(cacheDir, "backup_chat_${System.currentTimeMillis()}.db")
-                val sqlScript = File(cacheDir, "backup_sql_${System.currentTimeMillis()}.sql")
-                val schemaFile = File(cacheDir, "backup_schema_${System.currentTimeMillis()}.sql")
-
                 val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
+                val backupDir = "/sdcard/Download/wxhook_backup/backupdata"
+                val tag = opt.tag
 
-                // 优先找同名的 .db 文件（仅完整备份生成）
-                val companionDb = File(archivePath.replace(Regex("\\.tar\\.zst$"), ".db"))
-                if (companionDb.exists() && companionDb.length() > 4096) {
-                    currentDbPath = companionDb.absolutePath
-                    post { loadConversations() }
+                if (opt.isFull) {
+                    // ── 全量备份：直接从 tar 提取 .dump 重建 DB ──
+                    if (!File(opt.path).exists()) {
+                        post { Toast.makeText(this, "文件不存在", Toast.LENGTH_SHORT).show(); progressBar.visibility = View.GONE }; return@Thread
+                    }
+                    post { Toast.makeText(this, "正在重建数据库...", Toast.LENGTH_SHORT).show() }
+                    val tmpDb = File(cacheDir, "browse_full_${tag}.db")
+                    val dumpSql = File(cacheDir, "browse_dump_${tag}.sql")
+                    val dumpContent = NativeArchive.readFileFromTar(opt.path, "6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql")
+                    if (dumpContent.isNullOrBlank()) {
+                        post { emptyView.text = "备份不含数据库"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE }; return@Thread
+                    }
+                    dumpSql.writeText(dumpContent)
+                    RootGateways.run("$sc '${tmpDb.absolutePath}' < '${dumpSql.absolutePath}' 2>/dev/null")
+                    dumpSql.delete()
+                    if (tmpDb.exists() && tmpDb.length() > 4096) {
+                        currentDbPath = tmpDb.absolutePath; post { loadConversations() }
+                    } else {
+                        post { emptyView.text = "数据库重建失败"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE }
+                    }
                     return@Thread
                 }
 
-                // 没有 .db 文件（增量备份或旧格式），提示做全量备份
-                post { runOnUiThread {
-                    emptyView.text = "增量备份不含可浏览数据库\n请先执行一次全量备份\n或在设置中切换到实时数据库"
-                    emptyView.visibility = View.VISIBLE
-                    progressBar.visibility = View.GONE
-                }}
+                // ── 增量备份：找全量基线 + 回放增量 SQL ──
+                post { Toast.makeText(this, "扫描备份链...", Toast.LENGTH_SHORT).show() }
+
+                // 读取 backup_records.json 获取备份时间线
+                val recordsRaw = RootGateways.runQuiet("cat $backupDir/backup_records.json 2>/dev/null")
+                val records = if (recordsRaw.isNotBlank()) org.json.JSONArray(recordsRaw) else org.json.JSONArray()
+
+                // 找最近的全量备份（tag < opt.tag）
+                var baseTag = ""; var baseArchive = ""
+                for (i in 0 until records.length()) {
+                    val r = records.getJSONObject(i)
+                    val t = r.optString("tag", "")
+                    if (r.optString("type") == "full" && t < tag && t > baseTag) {
+                        baseTag = t
+                        val fs = r.optJSONArray("files")
+                        if (fs != null && fs.length() > 0) baseArchive = "$backupDir/${fs.getString(0)}"
+                    }
+                }
+
+                if (baseArchive.isEmpty() || !File(baseArchive).exists()) {
+                    post { runOnUiThread {
+                        emptyView.text = "找不到对应的全量备份\n请先执行一次全量备份"
+                        emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE
+                    }}; return@Thread
+                }
+
+                // 从全量备份重建基线 DB
+                post { Toast.makeText(this, "重建基线数据库...", Toast.LENGTH_SHORT).show() }
+                val baseDb = File(cacheDir, "browse_${baseTag}.db")
+                val dumpSql = File(cacheDir, "dump_${baseTag}.sql")
+                val dumpContent = NativeArchive.readFileFromTar(baseArchive, "6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql")
+                if (dumpContent.isNullOrBlank()) {
+                    post { emptyView.text = "基线备份不含数据库"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE }; return@Thread
+                }
+                dumpSql.writeText(dumpContent)
+                RootGateways.run("$sc '${baseDb.absolutePath}' < '${dumpSql.absolutePath}' 2>/dev/null")
+                dumpSql.delete()
+
+                if (!baseDb.exists() || baseDb.length() < 4096) {
+                    post { emptyView.text = "基线数据库重建失败"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE }; return@Thread
+                }
+
+                // 找全量备份之后、当前增量备份之前的所有增量 SQL
+                post { Toast.makeText(this, "回放增量 SQL...", Toast.LENGTH_SHORT).show() }
+                val applyDb = File(cacheDir, "browse_${tag}.db")
+                RootGateways.run("cp '${baseDb.absolutePath}' '${applyDb.absolutePath}' 2>/dev/null")
+                baseDb.delete()
+
+                var appliedCount = 0
+                for (i in 0 until records.length()) {
+                    val r = records.getJSONObject(i)
+                    val t = r.optString("tag", "")
+                    if (r.optString("type") != "incremental") continue
+                    if (t <= baseTag || t >= tag) continue  // 只回放中间增量的 SQL
+
+                    // 优先找独立 .sql 文件
+                    val sqlFile = File("$backupDir/incr_${t.substringAfter("_")}.sql")  // 文件名: incr_141543.sql
+                    // 也尝试精确匹配文件名
+                    val allSql = RootGateways.runQuiet("ls $backupDir/incr_*.sql 2>/dev/null").lines().filter { it.isNotBlank() }
+                    var applySql = if (sqlFile.exists()) sqlFile.absolutePath else ""
+                    if (applySql.isEmpty()) {
+                        // 从文件名匹配 tag
+                        applySql = allSql.firstOrNull { it.contains(t) } ?: ""
+                    }
+                    if (applySql.isEmpty()) continue
+
+                    val tmpSql = File(cacheDir, "apply_${t}.sql")
+                    RootGateways.run("cp '$applySql' '${tmpSql.absolutePath}' 2>/dev/null")
+                    if (tmpSql.exists() && tmpSql.length() > 10) {
+                        RootGateways.run("$sc '${applyDb.absolutePath}' < '${tmpSql.absolutePath}' 2>/dev/null")
+                        appliedCount++
+                        tmpSql.delete()
+                    }
+                }
+
+                if (applyDb.exists() && applyDb.length() > 4096) {
+                    android.util.Log.i("wxhook:ChatList", "增量回放完成: $appliedCount 个 SQL")
+                    currentDbPath = applyDb.absolutePath
+                    post { loadConversations() }
+                } else {
+                    post { emptyView.text = "数据库重建失败"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE }
+                }
             } catch (e: Exception) {
                 post { runOnUiThread { emptyView.text = "加载失败: ${e.message}"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE } }
             }
