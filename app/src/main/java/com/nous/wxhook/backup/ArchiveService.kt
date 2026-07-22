@@ -67,12 +67,7 @@ object ArchiveService {
                 "PRAGMA kdf_iter = 4000;\n" +
                 "PRAGMA cipher_use_hmac = OFF;\n" +
                 ".output stdout\n" +
-                ".mode insert rcontact\nSELECT * FROM rcontact;\n" +
-                ".mode insert rconversation\nSELECT * FROM rconversation;\n" +
-                ".mode insert ImgInfo2\nSELECT * FROM ImgInfo2;\n" +
-                ".mode insert VoiceInfo\nSELECT * FROM VoiceInfo;\n" +
-                ".mode insert appattach\nSELECT * FROM appattach;\n" +
-                ".mode insert message\nSELECT * FROM message;\n"
+                ".dump\n" +  // .dump 包含 CREATE TABLE + INSERT，可直接重建 DB
             val script = "#!/system/bin/sh\n" +
                 "mkdir -p $tmpDir\n" +
                 "cp \"$dbPath\" $tmpDir/wxhook_dec.db 2>/dev/null\n" +

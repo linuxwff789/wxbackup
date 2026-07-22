@@ -162,15 +162,6 @@ object BackupOrchestrator {
             }
             RootGateways.delete(pairsFile)
 
-            // 保存解密后的 .db 文件到备份目录（供浏览历史备份用）
-            for (wxBasePath in wxPaths) {
-                val dbSrc = "$wxBasePath/EnMicroMsg.db"
-                val dbFile = File(dir, pkgFile.nameWithoutExtension + ".db")
-                if (ArchiveService.decryptToDb(dbSrc, dbFile.absolutePath)) {
-                    RootGateways.run("chmod 644 '${dbFile.absolutePath}' 2>/dev/null")
-                }
-            }
-
             // 6. Cloud sync
             cloudSync(callback)
 
