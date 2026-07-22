@@ -300,7 +300,7 @@ class SettingsActivity : AppCompatActivity() {
                 layoutParams = lp
             }
             card.addView(MaterialTextView(this, null, com.google.android.material.R.attr.textAppearanceBodyLarge).apply {
-                text = text; setTextColor(M3.colorPrimary(this@SettingsActivity))
+                setText(text); setTextColor(M3.colorPrimary(this@SettingsActivity))
                 gravity = android.view.Gravity.CENTER
             })
             card.setOnClickListener { onClick() }
