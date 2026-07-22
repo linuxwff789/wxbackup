@@ -44,11 +44,13 @@ class ChatDetailActivity : AppCompatActivity() {
     private lateinit var recyclerView: RecyclerView
     private var talker = ""
     private var nickname = ""
+    private var dbPath = "/sdcard/Download/EnMicroMsg.db"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         talker = intent.getStringExtra("talker") ?: ""
         nickname = intent.getStringExtra("nickname") ?: talker
+        dbPath = intent.getStringExtra("dbPath") ?: "/sdcard/Download/EnMicroMsg.db"
 
         supportActionBar?.title = nickname
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
@@ -105,7 +107,6 @@ class ChatDetailActivity : AppCompatActivity() {
         Thread {
             try {
                 val key = "e9cd2ae"
-                val dbPath = "/sdcard/Download/EnMicroMsg.db"
                 if (!File(dbPath).exists()) {
                     handler.post { setContentView(M3.body(this@ChatDetailActivity, "数据库不存在").apply {
                         gravity = Gravity.CENTER
