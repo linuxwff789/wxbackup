@@ -168,22 +168,30 @@ class ChatListActivity : AppCompatActivity() {
                 val sqlScript = File(cacheDir, "backup_sql_${System.currentTimeMillis()}.sql")
                 val schemaFile = File(cacheDir, "backup_schema_${System.currentTimeMillis()}.sql")
 
-                // 1. 从 tar.zst 中读取 SQL dump
-                post { Toast.makeText(this, "正在提取备份...", Toast.LENGTH_SHORT).show() }
+                val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
+
+                // 1. 优先找同名的 .db 文件（新格式：完整未加密数据库）
+                val companionDb = File(archivePath.replace(Regex("\\.tar\\.zst$"), ".db"))
+                if (companionDb.exists() && companionDb.length() > 4096) {
+                    post { Toast.makeText(this, "使用备份数据库...", Toast.LENGTH_SHORT).show() }
+                    currentDbPath = companionDb.absolutePath
+                    post { loadConversations() }
+                    return@Thread
+                }
+
+                // 2. 旧格式：从 tar.zst 中提取 SQL dump + 重建
+                post { Toast.makeText(this, "正在提取备份（旧格式）...", Toast.LENGTH_SHORT).show() }
                 val sqlContent = NativeArchive.readFileFromTar(archivePath, dumpName)
                 if (sqlContent.isNullOrBlank()) {
                     post { runOnUiThread { emptyView.text = "该备份不含数据库，请选择完整备份"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE } }
                     return@Thread
                 }
 
-                // 2. 写入临时 SQL 文件
                 sqlScript.writeText(sqlContent)
 
-                // 3. 获取建表语句（从实时库提取 schema，因为没有密码也能查 schema）
-                val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
+                // 从实时库提取建表语句
                 val liveDb = "/sdcard/Download/EnMicroMsg.db"
                 val schemaCmd = if (File(liveDb).exists()) {
-                    // 先用 PRAGMA 解密，再导出 schema
                     "PRAGMA key='e9cd2ae';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;" +
                     ".output '${schemaFile.absolutePath}'\n.schema"
                 } else ""
@@ -195,7 +203,6 @@ class ChatListActivity : AppCompatActivity() {
                     tmpSql.delete()
                 }
 
-                // 4. 建表 + 导入数据
                 val buildSql = File(cacheDir, "build_db_${System.currentTimeMillis()}.sql")
                 buildSql.writeText(
                     (if (schemaFile.exists()) ".read '${schemaFile.absolutePath}'\n" else "") +
@@ -203,8 +210,6 @@ class ChatListActivity : AppCompatActivity() {
                     "SELECT count(*) FROM sqlite_master WHERE type='table';"
                 )
                 RootGateways.run("$sc '${tempDb.absolutePath}' < '${buildSql.absolutePath}' 2>/dev/null")
-
-                // 清理
                 buildSql.delete(); sqlScript.delete(); schemaFile.delete()
 
                 if (tempDb.exists() && tempDb.length() > 4096) {

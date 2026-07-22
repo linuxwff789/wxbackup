@@ -51,32 +51,33 @@ object ArchiveService {
         return bos.toByteArray()
     }
 
-    // ── Full DB decrypt + dump ──
+    // ── Full DB decrypt → 直接生成未加密的 .db 文件 ──
 
     fun decryptAndDump(dbPath: String): String {
         val tmpDir = "/data/local/tmp/wxhook_backup"
         val shPath = "$tmpDir/decrypt_full.sh"
-        val outputFile = "$tmpDir/${FullBackupLayout.databaseDumpName()}"
+        val outputName = FullBackupLayout.databaseDumpName()
+        val outputFile = "$tmpDir/$outputName"
         return try {
             val pwd = getDbPassword()
-            val sqlScript = "/data/local/tmp/decrypt_full.sql"
-            val scriptContent = ".output /dev/null\n" +
-                "PRAGMA key = '$pwd';\n" +
-                "PRAGMA cipher_compatibility = 3;\n" +
-                "PRAGMA cipher_page_size = 1024;\n" +
-                "PRAGMA kdf_iter = 4000;\n" +
-                "PRAGMA cipher_use_hmac = OFF;\n" +
-                ".output stdout\n" +
-                ".mode insert\n" +
-                "SELECT * FROM message;\n"
-            val script = "#!/system/bin/sh\n" +
-                "mkdir -p $tmpDir\n" +
-                "cp \"$dbPath\" $tmpDir/wxhook_dec.db 2>/dev/null\n" +
-                "printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript\n" +
-                "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6' " +
-                "${BackupEnv.binDir}/sqlcipher \"$tmpDir/wxhook_dec.db\" < $sqlScript > \"$outputFile\" 2>/dev/null\n"
             val b64 = Base64.encodeToString(
-                script.toByteArray(Charsets.UTF_8), Base64.NO_WRAP
+                ("#!/system/bin/sh\n" +
+                "mkdir -p $tmpDir\n" +
+                "rm -f $outputFile $tmpDir/wxhook_dec.db 2>/dev/null\n" +
+                "cp \"$dbPath\" $tmpDir/wxhook_dec.db 2>/dev/null\n" +
+                "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6' " +
+                "${BackupEnv.binDir}/sqlcipher \"$tmpDir/wxhook_dec.db\" << 'SQL_EOF' > /dev/null 2>&1\n" +
+                "PRAGMA key='$pwd';\n" +
+                "PRAGMA cipher_compatibility=3;\n" +
+                "PRAGMA cipher_page_size=1024;\n" +
+                "PRAGMA kdf_iter=4000;\n" +
+                "PRAGMA cipher_use_hmac=OFF;\n" +
+                "ATTACH DATABASE '$outputFile' AS plain KEY '';\n" +
+                "SELECT sqlcipher_export('plain');\n" +
+                "DETACH plain;\n" +
+                "SQL_EOF\n" +
+                "rm -f $tmpDir/wxhook_dec.db $tmpDir/wxhook_dec.db-shm $tmpDir/wxhook_dec.db-wal 2>/dev/null"
+                ).toByteArray(Charsets.UTF_8), Base64.NO_WRAP
             )
             RootGateways.run(
                 "mkdir -p \"$tmpDir\" && printf '%s' $b64 | base64 -d > \"$shPath\" && chmod 700 \"$shPath\" && sh \"$shPath\" > /data/local/tmp/decrypt_exec.log 2>&1",
