@@ -12,26 +12,11 @@ import android.widget.Spinner
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.card.MaterialCardView
-import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textview.MaterialTextView
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import com.nous.wxhook.ui.M3
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import org.json.JSONObject
 import java.io.File
-
-// ── Data model ──
-sealed class SettingsItem {
-    data class Header(val title: String) : SettingsItem()
-    data class Toggle(val label: String, val key: String, val def: Boolean = false) : SettingsItem()
-    data class Input(val label: String, val key: String, val def: String = "", val hint: String = "") : SettingsItem()
-    data class Action(val text: String, val action: String = "") : SettingsItem()
-}
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -264,32 +249,82 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    // ── 其他设置（RecyclerView） ──
+    // ── 其他设置（LinearLayout，避免 RecyclerView 在 ScrollView 内滚动冲突） ──
     private fun buildOtherSettings(root: LinearLayout) {
-        val items = mutableListOf<SettingsItem>()
-        items.add(SettingsItem.Header("📂 备份"))
-        items.add(SettingsItem.Input("备份路径", "backup_path", "/sdcard/Download/wxhook_backup"))
-        items.add(SettingsItem.Toggle("使用 zstd 压缩", "zstd", false))
-        items.add(SettingsItem.Header("🛠 工具"))
-        items.add(SettingsItem.Action("🔄 重建备份状态", "rebuild_state"))
-        items.add(SettingsItem.Header("⏱ 自动同步"))
-        items.add(SettingsItem.Header("⏱ 定时同步"))
-        items.add(SettingsItem.Input("同步时间", "sync_schedule_time", "", "如 06:00，留空=关闭"))
-        items.add(SettingsItem.Input("同步间隔（天）", "sync_schedule_interval_days", "1", "1=每天,7=每周"))
-        items.add(SettingsItem.Header("⏱ 定时备份"))
-        items.add(SettingsItem.Input("备份时间", "backup_schedule_time", "", "如 03:00，留空=关闭"))
-        items.add(SettingsItem.Input("备份间隔（天）", "backup_schedule_interval_days", "1", "1=每天,7=每周"))
-        items.add(SettingsItem.Toggle("全量备份", "backup_full_enabled", false))
+        val d = M3.dp(this@SettingsActivity, 1).toFloat()
+        val cfg = runCatching { org.json.JSONObject(File(filesDir, "settings_config.json").readText()) }.getOrDefault(org.json.JSONObject())
 
-        val recyclerView = RecyclerView(this).apply {
-            layoutManager = LinearLayoutManager(this@SettingsActivity)
-            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            isNestedScrollingEnabled = false
+        fun save(k: String, v: Any) {
+            cfg.put(k, v); File(filesDir, "settings_config.json").writeText(cfg.toString())
         }
-        recyclerView.adapter = SettingsAdapter(items, this@SettingsActivity) { action, _ ->
-            handleAction(action)
+
+        fun sectionTitle(text: String) = MaterialTextView(this, null, com.google.android.material.R.attr.textAppearanceTitleMedium).apply {
+            this.text = text; setTextColor(M3.colorPrimary(this@SettingsActivity))
+            setPadding(M3.dp(this@SettingsActivity, 8), M3.dp(this@SettingsActivity, 16), 0, M3.dp(this@SettingsActivity, 4))
         }
-        root.addView(recyclerView)
+
+        fun editRow(key: String, label: String, defaultVal: String, hint: String) {
+            root.addView(com.google.android.material.textfield.TextInputLayout(this, null, com.google.android.material.R.attr.textInputStyle).apply {
+                hint = label; helperText = hint
+                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                addView(com.google.android.material.textfield.TextInputEditText(this).apply {
+                    setText(cfg.optString(key, defaultVal))
+                    setOnFocusChangeListener { _, focused -> if (!focused) save(key, text?.toString()?.trim() ?: defaultVal) }
+                })
+            })
+        }
+
+        fun toggleRow(key: String, label: String, defaultVal: Boolean) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL
+                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                setPadding(0, M3.dp(this@SettingsActivity, 8), 0, 0)
+            }
+            row.addView(MaterialTextView(this, null, com.google.android.material.R.attr.textAppearanceBodyLarge).apply {
+                text = label; layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            row.addView(com.google.android.material.switchmaterial.SwitchMaterial(this).apply {
+                isChecked = cfg.optBoolean(key, defaultVal)
+                setOnCheckedChangeListener { _, checked -> save(key, checked) }
+            })
+            root.addView(row)
+        }
+
+        fun actionRow(text: String, onClick: () -> Unit) {
+            val card = com.google.android.material.card.MaterialCardView(this, null, com.google.android.material.R.attr.materialCardViewOutlinedStyle).apply {
+                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                radius = d * 12; setContentPadding((d * 16).toInt(), (d * 12).toInt(), (d * 16).toInt(), (d * 12).toInt())
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                lp.setMargins(0, M3.dp(this@SettingsActivity, 4), 0, 0)
+                layoutParams = lp
+            }
+            card.addView(MaterialTextView(this, null, com.google.android.material.R.attr.textAppearanceBodyLarge).apply {
+                text = text; setTextColor(M3.colorPrimary(this@SettingsActivity))
+                gravity = android.view.Gravity.CENTER
+            })
+            card.setOnClickListener { onClick() }
+            root.addView(card)
+        }
+
+        // ═══ 备份设置 ═══
+        root.addView(sectionTitle("📂 备份"))
+        editRow("backup_path", "备份路径", "/sdcard/Download/wxhook_backup", "")
+        toggleRow("zstd", "使用 zstd 压缩", false)
+
+        // ═══ 工具 ═══
+        root.addView(sectionTitle("🛠 工具"))
+        actionRow("🔄 重建备份状态") { viewModel.rebuildState() }
+
+        // ═══ 定时同步 ═══
+        root.addView(sectionTitle("⏱ 定时同步"))
+        editRow("sync_schedule_time", "同步时间", "", "如 06:00，留空=关闭")
+        editRow("sync_schedule_interval_days", "同步间隔（天）", "1", "1=每天,7=每周")
+
+        // ═══ 定时备份 ═══
+        root.addView(sectionTitle("⏱ 定时备份"))
+        editRow("backup_schedule_time", "备份时间", "", "如 03:00，留空=关闭")
+        editRow("backup_schedule_interval_days", "备份间隔（天）", "1", "1=每天,7=每周")
+        toggleRow("backup_full_enabled", "全量备份", false)
     }
 
     private fun handleAction(action: String) {
@@ -303,131 +338,5 @@ class SettingsActivity : AppCompatActivity() {
         setTextColor(M3.onSurfaceVariant(this@SettingsActivity))
     }
 
-    private fun spacer(w: Int) = View(this).apply {
-        layoutParams = LinearLayout.LayoutParams(M3.dp(this@SettingsActivity, w), 1)
-    }
-}
 
-// ── RecyclerView Adapter ──
-class SettingsAdapter(
-    private val items: List<SettingsItem>,
-    private val activity: SettingsActivity,
-    private val onAction: (String, Any?) -> Unit
-) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-    companion object {
-        const val TYPE_HEADER = 0
-        const val TYPE_TOGGLE = 1
-        const val TYPE_INPUT = 2
-        const val TYPE_ACTION = 3
-    }
-
-    override fun getItemViewType(pos: Int) = when (items[pos]) {
-        is SettingsItem.Header -> TYPE_HEADER
-        is SettingsItem.Toggle -> TYPE_TOGGLE
-        is SettingsItem.Input -> TYPE_INPUT
-        is SettingsItem.Action -> TYPE_ACTION
-    }
-    override fun getItemCount() = items.size
-
-    override fun onCreateViewHolder(parent: ViewGroup, vt: Int): RecyclerView.ViewHolder {
-        val ctx = parent.context
-        return when (vt) {
-            TYPE_HEADER -> {
-                val tv = MaterialTextView(ctx, null, com.google.android.material.R.attr.textAppearanceTitleMedium).apply {
-                    setPadding(M3.dp(ctx, 20), M3.dp(ctx, 20), M3.dp(ctx, 20), M3.dp(ctx, 8))
-                    setTextColor(M3.colorPrimary(ctx))
-                }
-                object : RecyclerView.ViewHolder(tv) {}
-            }
-            TYPE_TOGGLE -> {
-                val card = M3.outlinedCard(ctx).apply {
-                    val lp = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    lp.setMargins(M3.dp(ctx, 16), M3.dp(ctx, 4), M3.dp(ctx, 16), M3.dp(ctx, 4))
-                    layoutParams = lp
-                }
-                val row = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                }
-                val label = MaterialTextView(ctx, null, com.google.android.material.R.attr.textAppearanceBodyLarge).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                }
-                row.addView(label)
-                row.addView(SwitchMaterial(ctx))
-                card.addView(row)
-                object : RecyclerView.ViewHolder(card) {}
-            }
-            TYPE_INPUT -> {
-                val card = M3.outlinedCard(ctx).apply {
-                    val lp = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    lp.setMargins(M3.dp(ctx, 16), M3.dp(ctx, 4), M3.dp(ctx, 16), M3.dp(ctx, 4))
-                    layoutParams = lp
-                }
-                val col = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.VERTICAL
-                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                }
-                col.addView(MaterialTextView(ctx, null, com.google.android.material.R.attr.textAppearanceLabelMedium))
-                val et = EditText(ctx).apply { textSize = 16f; setPadding(0, M3.dp(ctx, 4), 0, M3.dp(ctx, 4)); setBackgroundColor(android.graphics.Color.TRANSPARENT) }
-                col.addView(et)
-                card.addView(col)
-                object : RecyclerView.ViewHolder(card) { val editText = et }
-            }
-            TYPE_ACTION -> {
-                val card = M3.outlinedCard(ctx).apply {
-                    val lp = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    lp.setMargins(M3.dp(ctx, 16), M3.dp(ctx, 4), M3.dp(ctx, 16), M3.dp(ctx, 4))
-                    layoutParams = lp
-                }
-                val tv = MaterialTextView(ctx, null, com.google.android.material.R.attr.textAppearanceBodyLarge).apply {
-                    setTextColor(M3.colorPrimary(ctx)); gravity = Gravity.CENTER
-                    setPadding(0, M3.dp(ctx, 4), 0, M3.dp(ctx, 4))
-                }
-                card.addView(tv)
-                object : RecyclerView.ViewHolder(card) {}
-            }
-            else -> error("unknown type")
-        }
-    }
-
-    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, pos: Int) {
-        val ctx = holder.itemView.context
-        when (val item = items[pos]) {
-            is SettingsItem.Header -> (holder.itemView as MaterialTextView).text = item.title
-            is SettingsItem.Toggle -> {
-                val cardView = holder.itemView as MaterialCardView
-                val row = cardView.getChildAt(0) as? LinearLayout
-                val label = row?.getChildAt(0) as? MaterialTextView
-                val sw = row?.getChildAt(1) as? SwitchMaterial
-                label?.text = item.label
-                val cfg = runCatching { JSONObject(File(activity.filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
-                sw?.isChecked = cfg.optBoolean(item.key, item.def)
-                sw?.setOnCheckedChangeListener { _, checked ->
-                    val o = runCatching { JSONObject(File(activity.filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
-                    o.put(item.key, checked); File(activity.filesDir, "settings_config.json").writeText(o.toString())
-                }
-            }
-            is SettingsItem.Input -> {
-                val cardView = holder.itemView as MaterialCardView
-                val col = cardView.getChildAt(0) as? LinearLayout
-                val label = col?.getChildAt(0) as? MaterialTextView
-                val et = col?.getChildAt(1) as? EditText
-                label?.text = item.label
-                if (et != null) {
-                    val cfg = runCatching { JSONObject(File(activity.filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
-                    et.setText(cfg.optString(item.key, item.def)); et.hint = item.hint
-                    et.setOnFocusChangeListener { _, focused ->
-                        if (!focused) {
-                            val o = runCatching { JSONObject(File(activity.filesDir, "settings_config.json").readText()) }.getOrDefault(JSONObject())
-                            o.put(item.key, et.text.toString()); File(activity.filesDir, "settings_config.json").writeText(o.toString())
-                        }
-                    }
-                }
-            }
-            is SettingsItem.Action -> {
-                (holder.itemView as? MaterialCardView)?.getChildAt(0)?.let { (it as? MaterialTextView)?.text = item.text }
-                holder.itemView.setOnClickListener { onAction(item.action, null) }
-            }
-        }
-    }
 }
