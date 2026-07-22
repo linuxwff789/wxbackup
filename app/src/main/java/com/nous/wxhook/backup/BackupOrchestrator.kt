@@ -396,6 +396,13 @@ object BackupOrchestrator {
                 }
             }
 
+            // 保存增量 SQL 到备份目录（供浏览时回放）
+            val sqlFiles = RootGateways.runQuiet("find ${BackupEnv.backupDataDir}/tmp -name '*.sql' -path '*${tag}*' 2>/dev/null").lines().filter { it.isNotBlank() }
+            for (f in sqlFiles) {
+                val n = File(f).name
+                RootGateways.run("cp '$f' '${BackupEnv.backupDataDir}/$n' && chmod 644 '${BackupEnv.backupDataDir}/$n' 2>/dev/null")
+            }
+
             // Clean up tmp dir after packaging
             RootGateways.runQuiet("rm -rf ${BackupEnv.backupDataDir}/tmp/${tag}_* 2>/dev/null")
 
