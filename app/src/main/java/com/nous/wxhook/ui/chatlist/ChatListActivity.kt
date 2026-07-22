@@ -166,6 +166,7 @@ class ChatListActivity : AppCompatActivity() {
                 val dumpName = "EnMicroMsg_baseline.sql"
                 val tempDb = File(cacheDir, "backup_chat_${System.currentTimeMillis()}.db")
                 val sqlScript = File(cacheDir, "backup_sql_${System.currentTimeMillis()}.sql")
+                val schemaFile = File(cacheDir, "backup_schema_${System.currentTimeMillis()}.sql")
 
                 // 1. 从 tar.zst 中读取 SQL dump
                 post { Toast.makeText(this, "正在提取备份...", Toast.LENGTH_SHORT).show() }
@@ -178,15 +179,33 @@ class ChatListActivity : AppCompatActivity() {
                 // 2. 写入临时 SQL 文件
                 sqlScript.writeText(sqlContent)
 
-                // 3. 用 sqlcipher 创建可查询的 DB
-                val sqlcipher = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
-                val createSql = ".read '${sqlScript.absolutePath}'\n" +
+                // 3. 获取建表语句（从实时库提取 schema，因为没有密码也能查 schema）
+                val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
+                val liveDb = "/sdcard/Download/EnMicroMsg.db"
+                val schemaCmd = if (File(liveDb).exists()) {
+                    // 先用 PRAGMA 解密，再导出 schema
+                    "PRAGMA key='e9cd2ae';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;" +
+                    ".output '${schemaFile.absolutePath}'\n.schema"
+                } else ""
+
+                if (schemaCmd.isNotEmpty()) {
+                    val tmpSql = File(cacheDir, "get_schema_${System.currentTimeMillis()}.sql")
+                    tmpSql.writeText(schemaCmd)
+                    RootGateways.run("$sc '$liveDb' < '${tmpSql.absolutePath}' 2>/dev/null")
+                    tmpSql.delete()
+                }
+
+                // 4. 建表 + 导入数据
+                val buildSql = File(cacheDir, "build_db_${System.currentTimeMillis()}.sql")
+                buildSql.writeText(
+                    (if (schemaFile.exists()) ".read '${schemaFile.absolutePath}'\n" else "") +
+                    ".read '${sqlScript.absolutePath}'\n" +
                     "SELECT count(*) FROM sqlite_master WHERE type='table';"
-                val sqlFile = File(cacheDir, "build_db_${System.currentTimeMillis()}.sql")
-                sqlFile.writeText(createSql)
-                RootGateways.run("$sqlcipher '${tempDb.absolutePath}' < '${sqlFile.absolutePath}' 2>/dev/null")
-                sqlFile.delete()
-                sqlScript.delete()
+                )
+                RootGateways.run("$sc '${tempDb.absolutePath}' < '${buildSql.absolutePath}' 2>/dev/null")
+
+                // 清理
+                buildSql.delete(); sqlScript.delete(); schemaFile.delete()
 
                 if (tempDb.exists() && tempDb.length() > 4096) {
                     currentDbPath = tempDb.absolutePath

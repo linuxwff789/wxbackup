@@ -131,7 +131,7 @@ class ChatDetailActivity : AppCompatActivity() {
                     "PRAGMA cipher_use_hmac=OFF;" +
                     "SELECT msgSvrId,type,replace(replace(content,char(10),' '),'|','/')," +
                     "createTime,isSend,imgPath " +
-                    "FROM message WHERE talker='$safeTalker' ORDER BY createTime DESC;"
+                    "FROM message WHERE talker='$safeTalker' ORDER BY createTime DESC LIMIT 500;"
                 )
                 cntFile.writeText(
                     "PRAGMA key='$key';PRAGMA cipher_compatibility=3;" +
