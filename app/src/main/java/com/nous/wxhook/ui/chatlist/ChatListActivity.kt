@@ -126,9 +126,11 @@ class ChatListActivity : AppCompatActivity() {
                     val archivePath = if (files != null && files.length() > 0) {
                         "/sdcard/Download/wxhook_backup/backupdata/${files.getString(0)}"
                     } else ""
-                    val typeIcon = if (type == "full") "📦" else "📎"
+                    val isFull = type == "full"
+                    val typeIcon = if (isFull) "📦" else "📎"
+                    val browseTag = if (isFull) " 🖥️" else ""
                     val timeStr = if (time > 0) fmt.format(Date(time)) else "?"
-                    val label = "$typeIcon ${tag.substringAfter("_")} ($timeStr)"
+                    val label = "$typeIcon ${tag.substringAfter("_")} ($timeStr)$browseTag"
                     options.add(BackupOption(label, archivePath))
                 }
             }
@@ -170,55 +172,20 @@ class ChatListActivity : AppCompatActivity() {
 
                 val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
 
-                // 1. 优先找同名的 .db 文件（新格式：完整未加密数据库）
+                // 优先找同名的 .db 文件（仅完整备份生成）
                 val companionDb = File(archivePath.replace(Regex("\\.tar\\.zst$"), ".db"))
                 if (companionDb.exists() && companionDb.length() > 4096) {
-                    post { Toast.makeText(this, "使用备份数据库...", Toast.LENGTH_SHORT).show() }
                     currentDbPath = companionDb.absolutePath
                     post { loadConversations() }
                     return@Thread
                 }
 
-                // 2. 旧格式：从 tar.zst 中提取 SQL dump + 重建
-                post { Toast.makeText(this, "正在提取备份（旧格式）...", Toast.LENGTH_SHORT).show() }
-                val sqlContent = NativeArchive.readFileFromTar(archivePath, dumpName)
-                if (sqlContent.isNullOrBlank()) {
-                    post { runOnUiThread { emptyView.text = "该备份不含数据库，请选择完整备份"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE } }
-                    return@Thread
-                }
-
-                sqlScript.writeText(sqlContent)
-
-                // 从实时库提取建表语句
-                val liveDb = "/sdcard/Download/EnMicroMsg.db"
-                val schemaCmd = if (File(liveDb).exists()) {
-                    "PRAGMA key='e9cd2ae';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;" +
-                    ".output '${schemaFile.absolutePath}'\n.schema"
-                } else ""
-
-                if (schemaCmd.isNotEmpty()) {
-                    val tmpSql = File(cacheDir, "get_schema_${System.currentTimeMillis()}.sql")
-                    tmpSql.writeText(schemaCmd)
-                    RootGateways.run("$sc '$liveDb' < '${tmpSql.absolutePath}' 2>/dev/null")
-                    tmpSql.delete()
-                }
-
-                val buildSql = File(cacheDir, "build_db_${System.currentTimeMillis()}.sql")
-                buildSql.writeText(
-                    (if (schemaFile.exists()) ".read '${schemaFile.absolutePath}'\n" else "") +
-                    ".read '${sqlScript.absolutePath}'\n" +
-                    "SELECT count(*) FROM sqlite_master WHERE type='table';"
-                )
-                RootGateways.run("$sc '${tempDb.absolutePath}' < '${buildSql.absolutePath}' 2>/dev/null")
-                buildSql.delete(); sqlScript.delete(); schemaFile.delete()
-
-                if (tempDb.exists() && tempDb.length() > 4096) {
-                    currentDbPath = tempDb.absolutePath
-                    post { loadConversations() }
-                } else {
-                    tempDb.delete()
-                    post { runOnUiThread { emptyView.text = "数据库重建失败"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE } }
-                }
+                // 没有 .db 文件（增量备份或旧格式），提示做全量备份
+                post { runOnUiThread {
+                    emptyView.text = "增量备份不含可浏览数据库\n请先执行一次全量备份\n或在设置中切换到实时数据库"
+                    emptyView.visibility = View.VISIBLE
+                    progressBar.visibility = View.GONE
+                }}
             } catch (e: Exception) {
                 post { runOnUiThread { emptyView.text = "加载失败: ${e.message}"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE } }
             }
