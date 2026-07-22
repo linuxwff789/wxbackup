@@ -67,8 +67,12 @@ object ArchiveService {
                 "PRAGMA kdf_iter = 4000;\n" +
                 "PRAGMA cipher_use_hmac = OFF;\n" +
                 ".output stdout\n" +
-                ".mode insert\n" +
-                "SELECT * FROM message;\n"
+                ".mode insert rcontact\nSELECT * FROM rcontact;\n" +
+                ".mode insert rconversation\nSELECT * FROM rconversation;\n" +
+                ".mode insert ImgInfo2\nSELECT * FROM ImgInfo2;\n" +
+                ".mode insert VoiceInfo\nSELECT * FROM VoiceInfo;\n" +
+                ".mode insert appattach\nSELECT * FROM appattach;\n" +
+                ".mode insert message\nSELECT * FROM message;\n
             val script = "#!/system/bin/sh\n" +
                 "mkdir -p $tmpDir\n" +
                 "cp \"$dbPath\" $tmpDir/wxhook_dec.db 2>/dev/null\n" +
@@ -145,9 +149,21 @@ object ArchiveService {
             ).trim().toLongOrNull() ?: 0L
             if (copiedSize < 1_000_000L) return ""
 
-            // Run SQLCipher to extract incremental SQL
-            // Write SQL commands to a script file first, then pipe to sqlcipher
+            // Run SQLCipher to extract incremental SQL for ALL tables
             val sqlScript = "$workDir/incr_query.sql"
+            // 小表：全量导出；大表（message）：按 rowid 增量
+            val tables = listOf(
+                "rcontact" to null,
+                "rconversation" to null,
+                "ImgInfo2" to null,
+                "VoiceInfo" to null,
+                "appattach" to null,
+                "message" to "> $lastRowId"   // 放最后，tail -1 取最后一条消息的 rowid
+            )
+            val tableQueries = tables.joinToString("\n") { (t, where) ->
+                ".mode insert $t\n" +
+                "SELECT * FROM $t${if (where != null) " WHERE rowid $where" else ""};\n"
+            }
             val scriptContent = ".output /dev/null\n" +
                 "PRAGMA key = '$pwd';\n" +
                 "PRAGMA cipher_compatibility = 3;\n" +
@@ -155,8 +171,7 @@ object ArchiveService {
                 "PRAGMA kdf_iter = 4000;\n" +
                 "PRAGMA cipher_use_hmac = OFF;\n" +
                 ".output stdout\n" +
-                ".mode insert\n" +
-                "SELECT * FROM message WHERE rowid > $lastRowId;\n"
+                tableQueries
             RootGateways.runQuiet("printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript")
             val sqlCmd = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6' " +
                 "${BackupEnv.binDir}/sqlcipher \"$workDb\" < $sqlScript > \"$workSql\" 2>/dev/null"
