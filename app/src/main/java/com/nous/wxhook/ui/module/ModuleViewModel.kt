@@ -95,6 +95,7 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
     fun setRemoteEnabled(enabled: Boolean) {
         _uiState.value = _uiState.value.copy(remoteEnabled = enabled)
         saveRemoteConfig(enabled = enabled)
+        appendLog(if (enabled) "☁️ 云同步已开启" else "☁️ 云同步已关闭")
     }
 
     fun saveRemotePath(path: String) {
@@ -401,23 +402,32 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun loadRemoteConfig() {
         try {
-            val cfg = JSONObject(
-                File("/sdcard/Download/wxhook_backup/remote_config.json").readText()
-            )
-            _uiState.value = _uiState.value.copy(
-                remoteEnabled = cfg.optBoolean("enabled", false),
-                remotePath = cfg.optString("remote", "wxhook-backup")
-            )
+            val cfg = JSONObject(configFile.readText())
+            if (cfg.has("remoteEnabled") || cfg.has("remote")) {
+                _uiState.value = _uiState.value.copy(
+                    remoteEnabled = cfg.optBoolean("remoteEnabled", false),
+                    remotePath = cfg.optString("remote", "wxhook-backup")
+                )
+            } else {
+                // 兼容旧版外部存储路径
+                val oldFile = File("/sdcard/Download/wxhook_backup/remote_config.json")
+                if (oldFile.exists()) {
+                    val oldCfg = JSONObject(oldFile.readText())
+                    _uiState.value = _uiState.value.copy(
+                        remoteEnabled = oldCfg.optBoolean("enabled", false),
+                        remotePath = oldCfg.optString("remote", "wxhook-backup")
+                    )
+                }
+            }
         } catch (_: Exception) {}
     }
 
     private fun saveRemoteConfig(enabled: Boolean = _uiState.value.remoteEnabled, remote: String = _uiState.value.remotePath) {
         try {
-            val f = File("/sdcard/Download/wxhook_backup/remote_config.json")
-            val o = if (f.exists()) JSONObject(f.readText()) else JSONObject()
-            o.put("enabled", enabled)
-            o.put("remote", remote)
-            f.writeText(o.toString())
+            val cfg = if (configFile.exists()) JSONObject(configFile.readText()) else JSONObject()
+            cfg.put("remoteEnabled", enabled)
+            cfg.put("remote", remote)
+            configFile.writeText(cfg.toString())
         } catch (_: Exception) {}
     }
 

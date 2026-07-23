@@ -168,7 +168,7 @@ class ModuleActivity : AppCompatActivity() {
             textSize = 14f
             setTextColor(M3.onSurface(this@ModuleActivity))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { if (switchChecked) onTimeClick() }
+            setOnClickListener { onTimeClick() }
             isClickable = switchChecked
             isFocusable = switchChecked
         }
