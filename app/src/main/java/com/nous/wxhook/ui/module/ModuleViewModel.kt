@@ -168,6 +168,25 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun startRestore() {
+        if (_uiState.value.backupRunning) {
+            appendLog("⏳ 正在备份/恢复中...")
+            return
+        }
+        _uiState.value = _uiState.value.copy(
+            backupRunning = true,
+            backupBtnEnabled = false,
+            incrBtnEnabled = false
+        )
+        viewModelScope.launch(Dispatchers.IO) {
+            val ctx = getApplication<Application>()
+            withContext(Dispatchers.Main) { appendLog("🔄 启动前台服务：从备份恢复...") }
+            try {
+                com.nous.wxhook.service.BackupService.startRestore(ctx)
+            } catch (_: Exception) {}
+        }
+    }
+
     fun clearLog() {
         _uiState.value = _uiState.value.copy(logText = "")
         appendLog("📋 日志已清除")

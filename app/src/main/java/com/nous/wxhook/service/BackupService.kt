@@ -24,6 +24,7 @@ class BackupService : Service() {
         private const val NOTIFICATION_ID = 1002
         private const val ACTION_START = "com.nous.wxhook.BACKUP_START"
         private const val ACTION_REBUILD = "com.nous.wxhook.BACKUP_REBUILD"
+        private const val ACTION_RESTORE = "com.nous.wxhook.BACKUP_RESTORE"
         private const val EXTRA_INCREMENTAL = "incremental"
         const val ACTION_FINISH = "com.nous.wxhook.BACKUP_FINISH"
         const val EXTRA_OK = "ok"
@@ -43,6 +44,13 @@ class BackupService : Service() {
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i) else ctx.startService(i)
         }
+
+        fun startRestore(ctx: Context) {
+            val i = Intent(ctx, BackupService::class.java).apply {
+                action = ACTION_RESTORE
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i) else ctx.startService(i)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -53,6 +61,8 @@ class BackupService : Service() {
             startBackup(incremental)
         } else if (intent?.action == ACTION_REBUILD) {
             startRebuild()
+        } else if (intent?.action == ACTION_RESTORE) {
+            startRestore()
         }
         return START_NOT_STICKY
     }
@@ -122,6 +132,42 @@ class BackupService : Service() {
                 android.util.Log.e("wxhook:rebuild", "Rebuild crashed", e)
                 appendLog("重建异常: ${e.message}")
                 updateNotification("重建异常: ${e.message}")
+            }
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ stopSelf() }, 3000)
+        }.start()
+    }
+
+    private fun startRestore() {
+        try { startForeground(NOTIFICATION_ID, createNotification("准备从备份恢复...")) } catch (_: Exception) {}
+        Thread {
+            try {
+                val gateway = RootGateways.gateway as? RootGatewayImpl
+                if (gateway == null || !runBlocking { gateway.ensureRootService() }) {
+                    appendLog("失败: RootService 未连接")
+                    updateNotification("RootService 未连接")
+                    return@Thread
+                }
+                BackupHookLocal.init(this)
+                appendLog("开始从备份恢复")
+                updateNotification("正在恢复...")
+                val cb = object : BackupHookLocal.ProgressCallback {
+                    override fun onProgress(current: String, fileCount: Long, totalSize: Long) {
+                        updateNotification(current)
+                        appendLog(current)
+                    }
+                }
+                val result = BackupHookLocal.doRestore(cb)
+                appendLog(if (result.success) "✅ 恢复成功" else "❌ 恢复失败: ${result.message}")
+                updateNotification(result.message)
+                sendBroadcast(Intent(ACTION_FINISH).apply {
+                    setPackage(packageName)
+                    putExtra(EXTRA_OK, result.success)
+                    putExtra(EXTRA_MSG, result.message)
+                })
+            } catch (e: Exception) {
+                android.util.Log.e("wxhook:restore", "Restore crashed", e)
+                appendLog("恢复异常: ${e.message}")
+                updateNotification("恢复异常: ${e.message}")
             }
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ stopSelf() }, 3000)
         }.start()

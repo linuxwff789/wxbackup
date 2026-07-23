@@ -48,6 +48,9 @@ object BackupHookLocal {
     fun rebuildDbState(): String =
         BackupOrchestrator.rebuildDbState()
 
+    fun doRestore(callback: ProgressCallback? = null): Result =
+        BackupOrchestrator.doRestore(callback)
+
     fun setCompressionUseZstd(enabled: Boolean) =
         BackupManifest.setCompressionUseZstd(enabled)
 

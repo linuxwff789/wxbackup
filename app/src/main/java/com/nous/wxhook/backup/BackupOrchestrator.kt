@@ -2,6 +2,7 @@ package com.nous.wxhook.backup
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import com.nous.wxhook.core.command.CommandResult
 
+import android.util.Base64
 import android.util.Log
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.root.RootGatewayImpl
@@ -724,6 +725,294 @@ object BackupOrchestrator {
         return RootGateways.writeFile(
             File(BackupEnv.backupDataDir, WxHookPaths.RECORDS_FILE).absolutePath,
             outArr.toString()
+        )
+    }
+
+    // ── Restore from Backup ──
+
+    /**
+     * Restore WeChat DB + attachments from the latest full + incremental backups.
+     *
+     * Phases:
+     *   1. Scan full + incremental archives
+     *   2. Resolve user hash, password, correct owner uid:gid
+     *   3. Force-stop WeChat, safety-backup current DB
+     *   4. Full SQL restore via sqlcipher pipe
+     *   5. Incremental SQLs applied on top (DELETE full-table + INSERT incr)
+     *   6. Attachment files extracted from full + incremental tar.zst
+     *   7. Copy DB into WeChat data dir, chown -R to correct uid:gid
+     */
+    fun doRestore(callback: BackupHookLocal.ProgressCallback? = null): BackupHookLocal.Result {
+        val startTime = System.currentTimeMillis()
+        return try {
+            callback?.onProgress("检查 Root 和存储权限...", 0, 0)
+            if (!hasStoragePermission()) {
+                requestStoragePermission()
+                return BackupHookLocal.Result(false, "需要「所有文件访问」权限")
+            }
+
+            // ═══════════════════════════════════════════
+            // Phase 1: 扫描所有备份（全量 + 增量）
+            // ═══════════════════════════════════════════
+            callback?.onProgress("扫描备份文件...", 0, 0)
+            val fullArchives = RootGateways.runQuiet(
+                "ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null"
+            ).lines().filter { it.isNotBlank() }.sorted()
+            val incrArchives = RootGateways.runQuiet(
+                "ls ${BackupEnv.backupDataDir}/incr_attachments_*.tar.zst 2>/dev/null"
+            ).lines().filter { it.isNotBlank() }.sorted()
+
+            if (fullArchives.isEmpty()) {
+                return BackupHookLocal.Result(false, "未找到全量备份包")
+            }
+            val fullArchivePath = fullArchives.last()
+            val fullArchiveName = File(fullArchivePath).name
+            val fullTime = File(fullArchivePath).lastModified()
+
+            // 筛选 full 之后的增量包（按时间排序）
+            val applicableIncr = incrArchives
+                .map { File(it) }
+                .filter { it.lastModified() >= fullTime }
+                .sortedBy { it.lastModified() }
+                .map { it.absolutePath }
+            callback?.onProgress("全量: $fullArchiveName | 增量: ${applicableIncr.size}个", 0, 0)
+
+            // ═══════════════════════════════════════════
+            // Phase 2: 解析元数据
+            // ═══════════════════════════════════════════
+            val listing = NativeArchive.listTar(fullArchivePath)
+            val hashPattern = Regex("^([a-f0-9]{32})/")
+            val userHashes = listing.lines().mapNotNull { hashPattern.find(it)?.groupValues?.get(1) }.toSet()
+            if (userHashes.isEmpty()) return BackupHookLocal.Result(false, "备份中未找到用户数据")
+            val userHash = userHashes.first()
+            Log.i("wxhook:restore", "userHash=$userHash full=$fullArchivePath incr=${applicableIncr.size}")
+
+            // 密码：优先从最新增量包读 db_config，再试全量包，最后试本地
+            var pwd = ""
+            for (arc in applicableIncr.reversed() + listOf(fullArchivePath)) {
+                try {
+                    val json = NativeArchive.readFileFromTar(arc, "$userHash/db_config.json")
+                    if (json.isNotBlank()) {
+                        pwd = JSONObject(json).optString("password", "")
+                        if (pwd.isNotBlank()) break
+                    }
+                } catch (_: Exception) {}
+            }
+            if (pwd.isBlank()) pwd = ArchiveService.getDbPassword()
+            if (pwd.isBlank()) return BackupHookLocal.Result(false, "无法获取数据库密码，请先捕获微信密钥")
+            callback?.onProgress("密码: $pwd", 0, 0)
+
+            // ═══════════════════════════════════════════
+            // Phase 3: 定位微信数据目录 + 获取正确所有者
+            // ═══════════════════════════════════════════
+            callback?.onProgress("定位微信数据目录...", 0, 0)
+            // 先停微信（后续操作需要释放锁、避免 /proc/pid 路径不稳定）
+            TargetAppController.forceStopWeChat()
+            Thread.sleep(2000)
+            TargetAppController.killSqlcipher()
+
+            val wechatPkgDir = "/data/data/com.tencent.mm"
+            val wechatDataDir = "$wechatPkgDir/MicroMsg/$userHash"
+
+            // 获取正确的所有者：用 pkg 目录本身的 uid:gid — 这是最可靠的方式
+            val ownerRaw = RootGateways.runQuiet(
+                "stat -c %u:%g \"$wechatPkgDir\" 2>/dev/null"
+            ).lines().filter { it.isNotBlank() }.firstOrNull() ?: "10073:10073"
+            val ownerStr = ownerRaw.trim()
+
+            val targetDirOk = RootGateways.runQuiet(
+                "ls \"$wechatDataDir/EnMicroMsg.db\" 2>/dev/null && echo 1"
+            ).trim() == "1"
+            if (!targetDirOk) {
+                return BackupHookLocal.Result(false,
+                    "微信数据目录不存在 ($wechatDataDir)，请先至少登录一次微信")
+            }
+
+            // 备份原 DB 到 sdcard（安全措施）
+            val safetyBackup = "${BackupEnv.backupDataDir}/EnMicroMsg.db.restore_before"
+            callback?.onProgress("备份原数据库...", 0, 0)
+            RootGateways.run(
+                "cp -f \"$wechatDataDir/EnMicroMsg.db\" \"$safetyBackup\" 2>/dev/null; " +
+                "cp -f \"$wechatDataDir/EnMicroMsg.db-wal\" \"${safetyBackup}-wal\" 2>/dev/null; " +
+                "cp -f \"$wechatDataDir/EnMicroMsg.db-shm\" \"${safetyBackup}-shm\" 2>/dev/null; " +
+                "chmod 644 \"$safetyBackup\" 2>/dev/null",
+                60_000
+            )
+
+            // ═══════════════════════════════════════════
+            // Phase 4: DB 恢复 — 全量 + 增量 SQL
+            // ═══════════════════════════════════════════
+            val workDir = "/data/local/tmp/wxhook_restore"
+            val outputDb = "$workDir/EnMicroMsg.db"
+            RootGateways.run("rm -rf $workDir && mkdir -p $workDir && chmod 755 $workDir", 10_000)
+
+            val preloadEnv = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
+            val sqlcipher = "${BackupEnv.binDir}/sqlcipher"
+
+            // ── 4a. 全量 SQL 灌入 ──
+            callback?.onProgress("恢复全量数据库（可能需要几分钟）...", 0, 0)
+            val sqlDumpPath = "$userHash/" + FullBackupLayout.databaseDumpName()
+            val fullScript = "#!/system/bin/sh\n" +
+                "rm -f \"$outputDb\" \"${outputDb}-wal\" \"${outputDb}-shm\" 2>/dev/null\n" +
+                "{\n" +
+                "  echo \"PRAGMA key = '$pwd';\"\n" +
+                "  echo \"PRAGMA cipher_compatibility = 3;\"\n" +
+                "  echo \"PRAGMA cipher_page_size = 1024;\"\n" +
+                "  echo \"PRAGMA kdf_iter = 4000;\"\n" +
+                "  echo \"PRAGMA cipher_use_hmac = OFF;\"\n" +
+                "  zstd -dc \"$fullArchivePath\" 2>/dev/null | tar -xO \"$sqlDumpPath\" 2>/dev/null\n" +
+                "} | $preloadEnv $sqlcipher \"$outputDb\" 2>/dev/null\n" +
+                "if [ -s \"$outputDb\" ]; then echo OK; else echo FAIL; fi\n"
+            val fullResult = execRootScript(fullScript, "$workDir/full_restore.sh", 600_000)
+            if (fullResult.stdout.trim() != "OK") {
+                return BackupHookLocal.Result(false, "全量数据库重建失败")
+            }
+            val fullDbSize = RootGateways.fileSize(outputDb)
+            callback?.onProgress("  全量完成: ${BackupManifest.formatSize(fullDbSize)}", 0, 0)
+
+            // ── 4b. 增量 SQL 逐层叠加 ──
+            if (applicableIncr.isNotEmpty()) {
+                callback?.onProgress("应用增量（${applicableIncr.size}个包）...", 0, 0)
+            }
+            for ((idx, incrArc) in applicableIncr.withIndex()) {
+                val incrName = File(incrArc).name
+                callback?.onProgress("  [$idx] 增量: $incrName", 0, 0)
+
+                val incrListing = NativeArchive.listTar(incrArc)
+                val sqlFiles = incrListing.lines().filter {
+                    it.contains("$userHash/incr_") && it.endsWith(".sql")
+                }
+                if (sqlFiles.isEmpty()) {
+                    callback?.onProgress("  未找到增量 SQL，跳过", 0, 0)
+                    continue
+                }
+
+                // 提取增量 SQL 到临时文件，然后灌入已存在的 DB
+                val sqlTmp = "$workDir/incr_${idx}.sql"
+                val extractResult = RootGateways.run(
+                    "zstd -dc \"$incrArc\" 2>/dev/null | tar -xO \"${sqlFiles.first()}\" 2>/dev/null > \"$sqlTmp\" 2>/dev/null; " +
+                    "if [ -s \"$sqlTmp\" ]; then echo 1; else echo 0; fi",
+                    120_000
+                )
+                if (extractResult.stdout.trim() != "1") {
+                    callback?.onProgress("  提取增量 SQL 失败", 0, 0)
+                    continue
+                }
+
+                // 灌入增量 SQL：先 DELETE 全量表旧数据（小表在增量中全量），再 .read
+                // message 表增量只含 rowid > lastRowId，不会冲突
+                val applyScript = "#!/system/bin/sh\n" +
+                    "$preloadEnv $sqlcipher \"$outputDb\" 2>/dev/null << 'SQLEOF'\n" +
+                    "PRAGMA key = '$pwd';\n" +
+                    "PRAGMA cipher_compatibility = 3;\n" +
+                    "PRAGMA cipher_page_size = 1024;\n" +
+                    "PRAGMA kdf_iter = 4000;\n" +
+                    "PRAGMA cipher_use_hmac = OFF;\n" +
+                    "\n" +
+                    "-- 小表在增量中全量导出，删除旧数据避免主键冲突\n" +
+                    "DELETE FROM rcontact;\n" +
+                    "DELETE FROM rconversation;\n" +
+                    "DELETE FROM ImgInfo2;\n" +
+                    "DELETE FROM VoiceInfo;\n" +
+                    "DELETE FROM appattach;\n" +
+                    "\n" +
+                    ".read \"$sqlTmp\"\n" +
+                    "SQLEOF\n" +
+                    "echo DONE\n"
+                val applyResult = execRootScript(applyScript, "$workDir/incr_${idx}_apply.sh", 300_000)
+                Log.i("wxhook:restore", "incr[$idx] apply: ${applyResult.stdout.take(100)}")
+                callback?.onProgress("  增量 ${idx+1}/${applicableIncr.size}", 0, 0)
+            }
+
+            val finalDbSize = RootGateways.fileSize(outputDb)
+            callback?.onProgress("数据库完成: ${BackupManifest.formatSize(finalDbSize)}", 0, 0)
+
+            // ═══════════════════════════════════════════
+            // Phase 5: 附件恢复 — 从全量 + 增量包提取文件
+            // ═══════════════════════════════════════════
+            callback?.onProgress("恢复附件...", 0, 0)
+            val allExtractArchives = listOf(fullArchivePath) + applicableIncr
+
+            for ((idx, arc) in allExtractArchives.withIndex()) {
+                val arcName = File(arc).name
+                val arcLabel = if (idx == 0) "全量" else "增量[${idx-1}]"
+
+                // 从归档中提取每个附件目录的文件
+                for (attDir in ATT_DIRS) {
+                    val arcPrefix = "$userHash/$attDir/"
+                    val tmpExtract = "$workDir/extract_${idx}_$attDir"
+                    val extractCmd = "mkdir -p \"$tmpExtract\" && " +
+                        "cd \"$tmpExtract\" && " +
+                        "(zstd -dc \"$arc\" 2>/dev/null | tar -x --wildcards \"$arcPrefix*\" 2>/dev/null) && " +
+                        "if [ -d \"$tmpExtract/$userHash/$attDir\" ]; then " +
+                        "  mkdir -p \"$wechatDataDir/$attDir\" && " +
+                        "  cp -rf \"$tmpExtract/$userHash/$attDir/.\" \"$wechatDataDir/$attDir/\" 2>/dev/null && " +
+                        "  echo OK_${idx}_$attDir; " +
+                        "else " +
+                        "  echo SKIP_${idx}_$attDir; " +
+                        "fi && " +
+                        "rm -rf \"$tmpExtract\""
+                    val attResult = RootGateways.run(extractCmd, 300_000)
+                    Log.i("wxhook:restore", "att $arcLabel/$attDir: ${attResult.stdout.take(80)}")
+                }
+                callback?.onProgress("  附件 $arcLabel: $arcName", 0, 0)
+            }
+
+            // ═══════════════════════════════════════════
+            // Phase 6: 写入 DB + 最终权限修正
+            // ═══════════════════════════════════════════
+            callback?.onProgress("写入数据库到微信目录...", 0, 0)
+            val dbCopyCmd = "rm -f \"$wechatDataDir/EnMicroMsg.db\" \"$wechatDataDir/EnMicroMsg.db-wal\" \"$wechatDataDir/EnMicroMsg.db-shm\" 2>/dev/null && " +
+                "cp \"$outputDb\" \"$wechatDataDir/EnMicroMsg.db\" && " +
+                "chown $ownerStr \"$wechatDataDir/EnMicroMsg.db\" 2>/dev/null && " +
+                "chmod 660 \"$wechatDataDir/EnMicroMsg.db\" 2>/dev/null && " +
+                "echo 1"
+            val dbCopyResult = RootGateways.run(dbCopyCmd, 30_000)
+            if (dbCopyResult.stdout.trim() != "1") {
+                return BackupHookLocal.Result(false, "写入微信数据目录失败")
+            }
+
+            // 最终权限修正：整个 MicroMsg/$userHash 目录树归微信所有
+            callback?.onProgress("修正文件权限...", 0, 0)
+            val chownCmd = "chown -R $ownerStr \"$wechatDataDir\" 2>/dev/null; " +
+                "chmod -R 660 \"$wechatDataDir\" 2>/dev/null; " +
+                "find \"$wechatDataDir\" -type d -exec chmod 771 {} + 2>/dev/null; " +
+                "chmod 771 \"$wechatDataDir\" 2>/dev/null; " +
+                "echo 1"
+            RootGateways.run(chownCmd, 60_000)
+
+            // ═══════════════════════════════════════════
+            // Phase 7: 清理 + 完成
+            // ═══════════════════════════════════════════
+            RootGateways.run("rm -rf $workDir", 10_000)
+
+            val duration = System.currentTimeMillis() - startTime
+            val summary = buildString {
+                appendLine("恢复完成!")
+                appendLine("来源: $fullArchiveName")
+                if (applicableIncr.isNotEmpty()) {
+                    appendLine("增量: ${applicableIncr.size}个")
+                }
+                appendLine("用户: $userHash")
+                appendLine("DB: ${BackupManifest.formatSize(finalDbSize)}")
+                appendLine("权限: $ownerStr")
+                appendLine("耗时: ${duration / 1000}秒")
+            }.trimEnd()
+
+            callback?.onProgress("全部恢复完成", 0, 0)
+            BackupHookLocal.Result(true, summary)
+        } catch (e: Exception) {
+            Log.e("wxhook:restore", "doRestore failed", e)
+            BackupHookLocal.Result(false, "恢复失败: ${e.message}")
+        }
+    }
+
+    /** 辅助：用 Base64 编码写入 shell 脚本并执行 */
+    private fun execRootScript(script: String, shPath: String, timeoutMs: Long): CommandResult {
+        val b64 = Base64.encodeToString(script.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        return RootGateways.run(
+            "printf '%s' $b64 | base64 -d > \"$shPath\" && chmod 700 \"$shPath\" && sh \"$shPath\" 2>&1",
+            timeoutMs
         )
     }
 }

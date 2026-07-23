@@ -211,6 +211,27 @@ class ModuleActivity : AppCompatActivity() {
         val toolsCard = cardLayout()
         toolsCard.addView(sectionTitle("🛠 工具"))
         toolsCard.addView(outlinedButton("🔄 重建备份状态") { viewModel.rebuildState() })
+        toolsCard.addView(spacer(10))
+        toolsCard.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = "⬇️ 从备份恢复微信"
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52))
+            insetTop = 0; insetBottom = 0
+            setTextColor(android.graphics.Color.parseColor("#FF5722"))
+            isClickable = true; isFocusable = true
+            setOnClickListener {
+                android.app.AlertDialog.Builder(this@ModuleActivity)
+                    .setTitle("⚠️ 从备份恢复微信")
+                    .setMessage("此操作将：\n" +
+                        "1. 停止微信\n" +
+                        "2. 用备份全量包重建数据库\n" +
+                        "3. 替换微信当前数据库\n\n" +
+                        "⚠️ 当前数据会被备份到备份目录后再覆盖，但建议您先手动全量备份一次。\n\n" +
+                        "确定继续吗？")
+                    .setPositiveButton("确定恢复") { _, _ -> viewModel.startRestore() }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+        })
         root.addView(toolsCard)
 
         // ═══ 📋 备份记录 ═══
