@@ -32,6 +32,14 @@ data class ModuleUiState(
     val remoteEnabled: Boolean = false,
     val remotePath: String = "wxhook-backup",
     val statusLoaded: Boolean = false,
+    // 定时备份
+    val scheduleBackupEnabled: Boolean = false,
+    val scheduleBackupHour: Int = 3,
+    val scheduleBackupMinute: Int = 0,
+    // 定时同步
+    val scheduleSyncEnabled: Boolean = false,
+    val scheduleSyncHour: Int = 4,
+    val scheduleSyncMinute: Int = 0,
 )
 
 class ModuleViewModel(application: Application) : AndroidViewModel(application) {
@@ -58,6 +66,7 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
             _uiState.value = _uiState.value.copy(recordsText = recordsText)
 
             loadRemoteConfig()
+            loadScheduleConfig()
         }
     }
 
@@ -128,6 +137,58 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
             incrBtnText = "增量备份 (仅新文件)"
         )
         appendLog("$prefix$message")
+    }
+
+    fun setScheduleBackupEnabled(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(scheduleBackupEnabled = enabled)
+        saveScheduleConfig()
+        appendLog(if (enabled) "⏰ 定时备份已开启" else "⏰ 定时备份已关闭")
+    }
+
+    fun setScheduleBackupTime(hour: Int, minute: Int) {
+        _uiState.value = _uiState.value.copy(scheduleBackupHour = hour, scheduleBackupMinute = minute)
+        saveScheduleConfig()
+        appendLog("⏰ 备份时间设为 ${"%02d:%02d".format(hour, minute)}")
+    }
+
+    fun setScheduleSyncEnabled(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(scheduleSyncEnabled = enabled)
+        saveScheduleConfig()
+        appendLog(if (enabled) "⏰ 定时同步已开启" else "⏰ 定时同步已关闭")
+    }
+
+    fun setScheduleSyncTime(hour: Int, minute: Int) {
+        _uiState.value = _uiState.value.copy(scheduleSyncHour = hour, scheduleSyncMinute = minute)
+        saveScheduleConfig()
+        appendLog("⏰ 同步时间设为 ${"%02d:%02d".format(hour, minute)}")
+    }
+
+    private fun loadScheduleConfig() {
+        try {
+            val cfg = JSONObject(configFile.readText())
+            _uiState.value = _uiState.value.copy(
+                scheduleBackupEnabled = cfg.optBoolean("scheduleBackupEnabled", false),
+                scheduleBackupHour = cfg.optInt("scheduleBackupHour", 3),
+                scheduleBackupMinute = cfg.optInt("scheduleBackupMinute", 0),
+                scheduleSyncEnabled = cfg.optBoolean("scheduleSyncEnabled", false),
+                scheduleSyncHour = cfg.optInt("scheduleSyncHour", 4),
+                scheduleSyncMinute = cfg.optInt("scheduleSyncMinute", 0),
+            )
+        } catch (_: Exception) {}
+    }
+
+    private fun saveScheduleConfig() {
+        try {
+            val s = _uiState.value
+            val cfg = if (configFile.exists()) JSONObject(configFile.readText()) else JSONObject()
+            cfg.put("scheduleBackupEnabled", s.scheduleBackupEnabled)
+            cfg.put("scheduleBackupHour", s.scheduleBackupHour)
+            cfg.put("scheduleBackupMinute", s.scheduleBackupMinute)
+            cfg.put("scheduleSyncEnabled", s.scheduleSyncEnabled)
+            cfg.put("scheduleSyncHour", s.scheduleSyncHour)
+            cfg.put("scheduleSyncMinute", s.scheduleSyncMinute)
+            configFile.writeText(cfg.toString())
+        } catch (_: Exception) {}
     }
 
     fun doSync() {

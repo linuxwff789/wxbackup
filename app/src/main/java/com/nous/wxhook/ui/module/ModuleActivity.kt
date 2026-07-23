@@ -31,6 +31,8 @@ class ModuleActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var recordsText: TextView
     private lateinit var pathInput: TextInputEditText
+    private lateinit var schedBackupTimeText: TextView
+    private lateinit var schedSyncTimeText: TextView
 
     private val backupFinishReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(ctx: android.content.Context?, intent: Intent?) {
@@ -61,6 +63,23 @@ class ModuleActivity : AppCompatActivity() {
                     statusText.text = state.statusText.ifEmpty { "暂无状态信息" }
                     if (state.recordsText.isNotEmpty()) recordsText.text = state.recordsText
                     if (state.logText.isNotEmpty()) logText.text = state.logText
+                    // 更新定时选择器文本
+                    if (::schedBackupTimeText.isInitialized) {
+                        schedBackupTimeText.text = if (state.scheduleBackupEnabled)
+                            "定时: ${"%02d:%02d".format(state.scheduleBackupHour, state.scheduleBackupMinute)}"
+                        else
+                            "定时关闭"
+                        schedBackupTimeText.isClickable = state.scheduleBackupEnabled
+                        schedBackupTimeText.isFocusable = state.scheduleBackupEnabled
+                    }
+                    if (::schedSyncTimeText.isInitialized) {
+                        schedSyncTimeText.text = if (state.scheduleSyncEnabled)
+                            "定时: ${"%02d:%02d".format(state.scheduleSyncHour, state.scheduleSyncMinute)}"
+                        else
+                            "定时关闭"
+                        schedSyncTimeText.isClickable = state.scheduleSyncEnabled
+                        schedSyncTimeText.isFocusable = state.scheduleSyncEnabled
+                    }
                 }
             }
         }
@@ -132,6 +151,48 @@ class ModuleActivity : AppCompatActivity() {
         setOnClickListener { onClick() }
     }
 
+    /** 显示时间选择器，回调传回选中的 时:分 */
+    private fun showTimePicker(currentHour: Int, currentMinute: Int, onPicked: (Int, Int) -> Unit) {
+        android.app.TimePickerDialog(this, { _, h, m -> onPicked(h, m) }, currentHour, currentMinute, true).show()
+    }
+
+    /** 带开关行+时间显示的行，用于定时设置，返回 TextView 供后续更新 */
+    private fun scheduleRow(
+        switchChecked: Boolean,
+        timeLabel: String,
+        onSwitch: (Boolean) -> Unit,
+        onTimeClick: () -> Unit
+    ): Pair<LinearLayout, TextView> {
+        val timeText = TextView(this@ModuleActivity).apply {
+            text = if (switchChecked) "定时: $timeLabel" else "定时关闭"
+            textSize = 14f
+            setTextColor(M3.onSurface(this@ModuleActivity))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener { if (switchChecked) onTimeClick() }
+            isClickable = switchChecked
+            isFocusable = switchChecked
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(6) }
+
+            addView(SwitchMaterial(this@ModuleActivity).apply {
+                isChecked = switchChecked
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(8) }
+                setOnCheckedChangeListener { _, c -> onSwitch(c) }
+            })
+            addView(timeText)
+        }
+        return Pair(row, timeText)
+    }
+
     // ── UI ──
     private fun buildUI() {
         val sv = ScrollView(this)
@@ -173,6 +234,21 @@ class ModuleActivity : AppCompatActivity() {
         backupCard.addView(primaryButton("全量备份 (DB + 附件)") { viewModel.startBackup(false) })
         backupCard.addView(spacer(10))
         backupCard.addView(outlinedButton("增量备份 (仅新文件)") { viewModel.startBackup(true) })
+        backupCard.addView(spacer(8))
+        // ⏰ 定时备份
+        val schedBackupPair = scheduleRow(
+            switchChecked = viewModel.uiState.value.scheduleBackupEnabled,
+            timeLabel = "%02d:%02d".format(viewModel.uiState.value.scheduleBackupHour, viewModel.uiState.value.scheduleBackupMinute),
+            onSwitch = { viewModel.setScheduleBackupEnabled(it) },
+            onTimeClick = {
+                showTimePicker(
+                    viewModel.uiState.value.scheduleBackupHour,
+                    viewModel.uiState.value.scheduleBackupMinute
+                ) { h, m -> viewModel.setScheduleBackupTime(h, m) }
+            }
+        )
+        schedBackupTimeText = schedBackupPair.second
+        backupCard.addView(schedBackupPair.first)
         root.addView(backupCard)
 
         // ═══ ☁️ 云同步 ═══
@@ -205,6 +281,21 @@ class ModuleActivity : AppCompatActivity() {
             startActivity(Intent(this, com.nous.wxhook.ui.cloud.CloudConfigActivity::class.java))
         })
         syncCard.addView(syncBtns)
+        syncCard.addView(spacer(6))
+        // ⏰ 定时同步
+        val schedSyncPair = scheduleRow(
+            switchChecked = viewModel.uiState.value.scheduleSyncEnabled,
+            timeLabel = "%02d:%02d".format(viewModel.uiState.value.scheduleSyncHour, viewModel.uiState.value.scheduleSyncMinute),
+            onSwitch = { viewModel.setScheduleSyncEnabled(it) },
+            onTimeClick = {
+                showTimePicker(
+                    viewModel.uiState.value.scheduleSyncHour,
+                    viewModel.uiState.value.scheduleSyncMinute
+                ) { h, m -> viewModel.setScheduleSyncTime(h, m) }
+            }
+        )
+        schedSyncTimeText = schedSyncPair.second
+        syncCard.addView(schedSyncPair.first)
         root.addView(syncCard)
 
         // ═══ 🛠 工具 ═══
