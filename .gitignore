@@ -29,3 +29,4 @@ tmp_fix*.py
 
 app/src/main/assets/bin/openlist-cli
 app/libs/openlistbridge.aar
+apk-download/
