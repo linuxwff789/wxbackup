@@ -553,22 +553,23 @@ object BackupOrchestrator {
                     })
                 }
                 results.add("$hash: rowId=$safeRowId (链=${bestChain.size})")
-                // 4. Save backup records (may need to reconnect Binder)
-                callback?.onProgress("保存备份记录...", 0, 0)
-                val sorted = (0 until rebuiltRecords.length())
-                    .map { rebuiltRecords.getJSONObject(it) }
-                    .sortedBy { it.optLong("time", 0L) }
-                var recordsOk = writeSortedRecords(sorted)
-                if (!recordsOk) {
-                    runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
-                    recordsOk = writeSortedRecords(sorted)
-                }
-                if (!recordsOk) android.util.Log.e("wxhook:rebuild", "Failed to write backup_records.json")
-                callback?.onProgress("✅ 重建完成: ${sorted.size}条记录", 0, 0)
-                results.joinToString("\n") + "\nrecords=" + sorted.size
-            } catch (e: Exception) {
-                Log.e("wxhook:rebuild", "重建失败: ${e.message}")
-                "重建失败: ${e.message}"
             }
+            // 4. Save backup records (may need to reconnect Binder)
+            callback?.onProgress("保存备份记录...", 0, 0)
+            val sorted = (0 until rebuiltRecords.length())
+                .map { rebuiltRecords.getJSONObject(it) }
+                .sortedBy { it.optLong("time", 0L) }
+            var recordsOk = writeSortedRecords(sorted)
+            if (!recordsOk) {
+                runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
+                recordsOk = writeSortedRecords(sorted)
+            }
+            if (!recordsOk) android.util.Log.e("wxhook:rebuild", "Failed to write backup_records.json")
+            callback?.onProgress("✅ 重建完成: ${sorted.size}条记录", 0, 0)
+            results.joinToString("\n") + "\nrecords=" + sorted.size
+        } catch (e: Exception) {
+            Log.e("wxhook:rebuild", "重建失败: ${e.message}")
+            "重建失败: ${e.message}"
         }
     }
+}
