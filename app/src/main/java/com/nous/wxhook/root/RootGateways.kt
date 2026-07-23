@@ -4,7 +4,7 @@ import com.nous.wxhook.core.command.CommandResult
 import kotlinx.coroutines.runBlocking
 
 object RootGateways {
-    var gateway: RootGateway = RootGatewayImpl()
+    @Volatile var gateway: RootGateway = RootGatewayImpl()
 
     fun set(g: RootGateway) { gateway = g }
 

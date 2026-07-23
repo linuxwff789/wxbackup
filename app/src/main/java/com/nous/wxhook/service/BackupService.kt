@@ -69,7 +69,11 @@ class BackupService : Service() {
 
     private fun startBackup(incremental: Boolean) {
         // startForeground MUST be on main thread, else system kills the app
-        try { startForeground(NOTIFICATION_ID, createNotification(if (incremental) "增量备份中..." else "全量备份中...")) } catch (_: Exception) {}
+        try {
+            startForeground(NOTIFICATION_ID, createNotification(if (incremental) "增量备份中..." else "全量备份中..."))
+        } catch (e: Exception) {
+            android.util.Log.e("wxhook:backup", "Failed to start foreground: ${e.message}")
+        }
         Thread {
             try {
                 val gateway = RootGateways.gateway as? RootGatewayImpl
@@ -112,7 +116,11 @@ class BackupService : Service() {
     }
 
     private fun startRebuild() {
-        try { startForeground(NOTIFICATION_ID, createNotification("重建备份状态中...")) } catch (_: Exception) {}
+        try {
+            startForeground(NOTIFICATION_ID, createNotification("重建备份状态中..."))
+        } catch (e: Exception) {
+            android.util.Log.e("wxhook:rebuild", "Failed to start foreground: ${e.message}")
+        }
         Thread {
             try {
                 BackupHookLocal.init(this)
@@ -138,7 +146,11 @@ class BackupService : Service() {
     }
 
     private fun startRestore() {
-        try { startForeground(NOTIFICATION_ID, createNotification("准备从备份恢复...")) } catch (_: Exception) {}
+        try {
+            startForeground(NOTIFICATION_ID, createNotification("准备从备份恢复..."))
+        } catch (e: Exception) {
+            android.util.Log.e("wxhook:restore", "Failed to start foreground: ${e.message}")
+        }
         Thread {
             try {
                 val gateway = RootGateways.gateway as? RootGatewayImpl
@@ -173,14 +185,17 @@ class BackupService : Service() {
         }.start()
     }
 
+    private val logLock = Any()
     private fun appendLog(msg: String) {
-        try {
-            val line = "[" + SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date()) + "] " + msg
-            val tmp = File(filesDir, "backup_live.log")
-            tmp.appendText(line + "\n")
-            RootGateways.run("mkdir -p /sdcard/Download/wxhook_backup && cat \"${tmp.absolutePath}\" >> /sdcard/Download/wxhook_backup/backup_live.log && chmod 644 /sdcard/Download/wxhook_backup/backup_live.log")
-            tmp.writeText("")
-        } catch (_: Exception) {}
+        synchronized(logLock) {
+            try {
+                val line = "[" + SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date()) + "] " + msg
+                val tmp = File(filesDir, "backup_live.log")
+                tmp.appendText(line + "\n")
+                RootGateways.run("mkdir -p /sdcard/Download/wxhook_backup && cat \"${tmp.absolutePath}\" >> /sdcard/Download/wxhook_backup/backup_live.log && chmod 644 /sdcard/Download/wxhook_backup/backup_live.log")
+                tmp.writeText("")
+            } catch (_: Exception) {}
+        }
     }
 
     private fun runSu(cmd: String): String {

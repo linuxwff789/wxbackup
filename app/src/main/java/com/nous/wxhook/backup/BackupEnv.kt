@@ -2,6 +2,7 @@ package com.nous.wxhook.backup
 
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.storage.WxHookPaths
+import android.util.Log
 import org.json.JSONObject
 import java.io.File
 
@@ -24,7 +25,10 @@ object BackupEnv {
             val json = JSONObject(backupRead(cfg.absolutePath))
             json.optString("compression", "zstd") == "zstd"
         } else true  // 默认 zstd
-    } catch (_: Exception) { true }
+    } catch (e: Exception) {
+        Log.w("wxhook:env", "useZstd check failed, defaulting to zstd", e)
+        true
+    }
 
     fun ext(): String = if (useZstd()) ".sql.zst" else ".sql.gz"
 

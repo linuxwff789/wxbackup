@@ -60,8 +60,9 @@ object ArchiveService {
         return try {
             val pwd = getDbPassword()
             val sqlScript = "/data/local/tmp/decrypt_full.sql"
+            val escapedPwd = pwd.replace("'", "''")
             val scriptContent = ".output /dev/null\n" +
-                "PRAGMA key = '$pwd';\n" +
+                "PRAGMA key = '$escapedPwd';\n" +
                 "PRAGMA cipher_compatibility = 3;\n" +
                 "PRAGMA cipher_page_size = 1024;\n" +
                 "PRAGMA kdf_iter = 4000;\n" +
@@ -97,7 +98,8 @@ object ArchiveService {
             val tmpDb = "/data/local/tmp/wxhook_backup/wxhook_decrypt.db"
             RootGateways.run("rm -f $tmpDb $tmpDb-shm $tmpDb-wal '$outPath' 2>/dev/null")
             RootGateways.run("cp '$dbPath' $tmpDb 2>/dev/null")
-            val sql = "PRAGMA key='$pwd';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;" +
+            val escapedPwd = pwd.replace("'", "''")
+            val sql = "PRAGMA key='$escapedPwd';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;" +
                 "PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;" +
                 "ATTACH DATABASE '$outPath' AS plain KEY '';" +
                 "SELECT sqlcipher_export('plain');" +
@@ -159,8 +161,9 @@ object ArchiveService {
                 ".mode insert $t\n" +
                 "SELECT * FROM $t${if (where != null) " WHERE rowid $where" else ""};\n"
             }
+            val escapedPwd = pwd.replace("'", "''")
             val scriptContent = ".output /dev/null\n" +
-                "PRAGMA key = '$pwd';\n" +
+                "PRAGMA key = '$escapedPwd';\n" +
                 "PRAGMA cipher_compatibility = 3;\n" +
                 "PRAGMA cipher_page_size = 1024;\n" +
                 "PRAGMA kdf_iter = 4000;\n" +

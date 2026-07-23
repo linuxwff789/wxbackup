@@ -1,16 +1,12 @@
 package com.nous.wxhook.backup
 
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
-import com.nous.wxhook.core.command.CommandResult
 
-import android.util.Base64
 import android.util.Log
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.root.RootGatewayImpl
 import com.nous.wxhook.storage.WxHookPaths
 import kotlinx.coroutines.runBlocking
-import com.nous.wxhook.sync.Syncer
-import com.nous.wxhook.sync.WebDavClient
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -750,13 +746,16 @@ object BackupOrchestrator {
             }
 
             // Copy attachment dirs to WeChat data dir
+            // 动态获取微信进程 UID
+            val ownerResult = RootGateways.run("stat -c '%U:%G' \"${meta.wxBasePath}/EnMicroMsg.db\" 2>/dev/null", 5_000)
+            val owner = if (ownerResult.isSuccess && ownerResult.stdout.isNotBlank()) ownerResult.stdout.trim() else "u0_a620:u0_a620"
             for (attDir in ATT_DIRS) {
                 val srcDir = "$workDir/${meta.userHash}/$attDir"
                 val exists = RootGateways.run("test -d \"$srcDir\" && echo 1 || echo 0", 5_000)
                 if (exists.stdout.trim() != "1") continue
                 val dstDir = "${meta.wxBasePath}/$attDir"
                 RootGateways.mkdirs(dstDir)
-                RootGateways.run("cp -r \"$srcDir/.\" \"$dstDir/\" 2>/dev/null && chown -R u0_a620:u0_a620 \"$dstDir\" 2>/dev/null", 60_000)
+                RootGateways.run("cp -r \"$srcDir/.\" \"$dstDir/\" 2>/dev/null && chown -R $owner \"$dstDir\" 2>/dev/null", 60_000)
                 Log.i("wxhook:restore", "附件: $attDir -> $dstDir")
             }
             callback?.onProgress("✅ 附件恢复完成", 0, 0)
