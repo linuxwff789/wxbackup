@@ -1,4 +1,5 @@
 package com.nous.wxhook.backup
+
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import com.nous.wxhook.core.command.CommandResult
 
@@ -34,27 +35,24 @@ object BackupOrchestrator {
         val startTime = System.currentTimeMillis()
         return try {
             val tag = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val dir = File(BackupEnv.backupDataDir); if (!dir.exists()) dir.mkdirs()
-            var totalFiles = 0L; var totalSize = 0L
+            val dir = File(BackupEnv.backupDataDir).apply { if (!exists()) mkdirs() }
+            var totalFiles = 0L
+            var totalSize = 0L
             val databaseSources = mutableListOf<NativeArchivePlan.Source>()
 
             // 1. Find WeChat users
             val wxPaths = WeChatSourceResolver.findWxPaths()
             if (wxPaths.isEmpty()) return BackupHookLocal.Result(false, "微信未运行或未找到数据")
 
-            // 2. Dump each database as raw SQL. The outer libarchive tar.zst is its only compression layer.
+            // 2. Dump each database as raw SQL.
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-
                 callback?.onProgress("[$userHash] 数据库基线...", totalFiles, totalSize)
                 val dbSrc = "$wxBasePath/EnMicroMsg.db"
                 val dumpResult = ArchiveService.decryptAndDump(dbSrc)
                 val dumpPath = dumpResult.removePrefix("OK:").takeIf { dumpResult.startsWith("OK:") }
                 if (dumpPath == null) return BackupHookLocal.Result(false, "数据库导出失败: $userHash")
-                databaseSources += NativeArchivePlan.Source(
-                    dumpPath,
-                    "$userHash/${FullBackupLayout.databaseDumpName()}",
-                )
+                databaseSources += NativeArchivePlan.Source(dumpPath, "$userHash/${FullBackupLayout.databaseDumpName()}")
 
                 // Save DB state
                 val maxRowId = runCatching {
@@ -72,7 +70,7 @@ object BackupOrchestrator {
                         "PRAGMA cipher_use_hmac = OFF;\n" +
                         ".output stdout\n" +
                         "SELECT coalesce(max(rowid), 0) FROM message;\n"
-                    RootGateways.runQuiet("printf '%s' '${scriptContent.replace("'", "'\\''")}' > $sqlScript")
+                    RootGateways.runQuiet("printf '%s' '${scriptContent.replace("'", "'\\'\'")}'> $sqlScript")
                     val ld = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
                     val result = RootGateways.run("$ld ${BackupEnv.binDir}/sqlcipher \"$decDb\" < $sqlScript 2>/dev/null", 30_000)
                     RootGateways.run("rm -f $sqlScript", 5_000)
@@ -101,51 +99,34 @@ object BackupOrchestrator {
             BackupManifest.saveDbConfig()
             BackupManifest.saveState(tag, totalFiles, totalSize)
             BackupManifest.addRecord(
-                BackupManifest.createRecord(tag, "full", totalFiles, totalSize, "全量备份完成",
-                    durationMs = System.currentTimeMillis() - startTime)
+                BackupManifest.createRecord(tag, "full", totalFiles, totalSize, "全量备份完成", durationMs = System.currentTimeMillis() - startTime)
             )
 
-            // 5. Package sources into one tar.zst in libsu RootService.
-            // 5. Package sources into one tar.zst — write directly to sdcard
+            // 5. Package sources into one tar.zst
             val pkgFile = File(dir, "wxbackup_full_$tag.tar.zst")
             val tmpPkg = pkgFile.absolutePath
             val sources = mutableListOf<NativeArchivePlan.Source>()
             sources += databaseSources
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                sources += NativeArchivePlan.Source(
-                    File(BackupEnv.backupDataDir, "$hash/db_state.json").absolutePath, "$hash/db_state.json")
-                sources += NativeArchivePlan.Source(
-                    File(BackupEnv.backupDataDir, "$hash/file_manifest.json").absolutePath, "$hash/file_manifest.json")
-                sources += NativeArchivePlan.Source(
-                    File(BackupEnv.backupDir, "db_config.json").absolutePath, "$hash/db_config.json")
+                sources += NativeArchivePlan.Source(File(BackupEnv.backupDataDir, "$hash/db_state.json").absolutePath, "$hash/db_state.json")
+                sources += NativeArchivePlan.Source(File(BackupEnv.backupDataDir, "$hash/file_manifest.json").absolutePath, "$hash/file_manifest.json")
+                sources += NativeArchivePlan.Source(File(BackupEnv.backupDir, "db_config.json").absolutePath, "$hash/db_config.json")
             }
-
-            // Add files from scan results directly (avoid Binder limit on loading manifest)
+            // Add files from scan results directly
             for (entry in sourceFiles) {
                 val arcPath = entry.path
                 val slashIdx = arcPath.indexOf('/')
                 if (slashIdx < 0) continue
                 val fileHash = arcPath.substring(0, slashIdx)
                 val relPath = arcPath.substring(slashIdx + 1)
-                val base = wxPaths.firstOrNull {
-                    WeChatSourceResolver.extractUserHash(it) == fileHash
-                } ?: continue
+                val base = wxPaths.firstOrNull { WeChatSourceResolver.extractUserHash(it) == fileHash } ?: continue
                 sources += NativeArchivePlan.Source("$base/$relPath", arcPath)
             }
-
             val plan = NativeArchivePlan(tmpPkg, sources)
-            android.util.Log.i("wxhook:PKG", "plan sources: ${sources.size}")
-            // Write pairs file locally, then root-copy (Binder content too large for direct writeFile)
             val pairsFile = File(dir, "archive_pairs.txt").absolutePath
             val localPairs = File(BackupEnv.filesDirPath, "archive_pairs.txt")
-            val pairsContent = plan.toPairsContent()
-            try {
-                localPairs.writeText(pairsContent)
-            } catch (_: Exception) {
-                RootGateways.delete(tmpPkg)
-                return BackupHookLocal.Result(false, "写入源文件清单失败")
-            }
+            localPairs.writeText(plan.toPairsContent())
             if (!RootGateways.copy(localPairs.absolutePath, pairsFile)) {
                 RootGateways.delete(tmpPkg)
                 localPairs.delete()
@@ -155,7 +136,6 @@ object BackupOrchestrator {
             val writeResult = RootGateways.writeTarZstd(tmpPkg, pairsFile, BackupEnv.useZstd())
             val verifyResult = if (writeResult == 0) RootGateways.verifyTarZstd(tmpPkg) else -1
             val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
-            Log.i("wxhook:PKG", "native write=$writeResult verify=$verifyResult size=$pkgSize sources=${sources.size}")
             if (writeResult != 0 || verifyResult <= 0 || pkgSize <= 0L) {
                 RootGateways.delete(tmpPkg)
                 RootGateways.delete(pairsFile)
@@ -166,8 +146,7 @@ object BackupOrchestrator {
             // 6. Cloud sync
             cloudSync(callback)
 
-            BackupHookLocal.Result(true,
-                "全量备份完成: ${totalFiles}个文件, ${BackupManifest.formatSize(totalSize)}, 包: ${pkgFile.name}")
+            BackupHookLocal.Result(true, "全量备份完成: ${totalFiles}个文件, ${BackupManifest.formatSize(totalSize)}, 包: ${pkgFile.name}")
         } catch (e: Exception) {
             BackupHookLocal.Result(false, "备份失败: ${e.message}")
         }
@@ -201,13 +180,11 @@ object BackupOrchestrator {
                 val dbState = BackupManifest.loadDbState(userHash)
                 val lastRowId = dbState.optLong("lastMessageRowId", 0)
                 if (lastRowId <= 0) {
-                    callback?.onProgress(
-                        "[$userHash] 无基线数据，请先全量备份", totalFiles, totalSize
-                    )
+                    callback?.onProgress("[${userHash}] 无基线数据，请先全量备份", totalFiles, totalSize)
                     continue
                 }
 
-                callback?.onProgress("[$userHash] DB增量...", totalFiles, totalSize)
+                callback?.onProgress("[${userHash}] DB增量...", totalFiles, totalSize)
                 val dbSrc = "$wxBasePath/EnMicroMsg.db"
                 val incResult = ArchiveService.decryptIncremental(dbSrc, lastRowId)
                 incrFrom = lastRowId
@@ -215,35 +192,25 @@ object BackupOrchestrator {
                 if (incResult.startsWith("OK:")) {
                     val gzPath = incResult.substring(3)
                     if (BackupEnv.backupExists(gzPath) && BackupEnv.backupSize(gzPath) > 0) {
-                            // Extract last rowid from raw SQL directly (no longer compressed)
-                            incrTo = runCatching {
-                                BackupEnv.suOut(
-                                    "tail -1 \"$gzPath\" 2>/dev/null | cut -d'(' -f2 | cut -d',' -f1"
-                                ).trim().toLong()
-                            }.getOrDefault(lastRowId)
+                        incrTo = runCatching {
+                            BackupEnv.suOut("tail -1 \"$gzPath\" 2>/dev/null | cut -d'(' -f2 | cut -d',' -f1").trim().toLong()
+                        }.getOrDefault(lastRowId)
 
                         val incrSqlName = "incr_${incrFrom}_to_${incrTo}.sql"
                         val tmpDir = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}"
                         val tmpSql = "$tmpDir/$incrSqlName"
-                        // Raw SQL from decryptIncremental, copy directly into tar
                         RootGateways.run("mkdir -p \"$tmpDir\"", 5_000)
                         val ok = RootGateways.run("cp \"$gzPath\" \"$tmpSql\" 2>/dev/null", 10_000).isSuccess
                         if (ok && BackupEnv.backupExists(tmpSql) && BackupEnv.backupSize(tmpSql) > 0) {
                             totalFiles++; newFiles++
                             incrSources += NativeArchivePlan.Source(tmpSql, "$userHash/$incrSqlName")
-                            callback?.onProgress(
-                                "[$userHash] DB增量: ${incrTo - incrFrom}条新消息",
-                                totalFiles, totalSize
-                            )
+                            callback?.onProgress("[${userHash}] DB增量: ${incrTo - incrFrom}条新消息", totalFiles, totalSize)
                         } else {
-                            callback?.onProgress(
-                                "[$userHash] DB增量文件无效", totalFiles, totalSize
-                            )
+                            callback?.onProgress("[${userHash}] DB增量文件无效", totalFiles, totalSize)
                         }
-                        // Always update db_state during incr (tag/time even if rowid unchanged)
                         BackupManifest.updateDbState(userHash, tag, incrFrom, incrTo)
                     } else {
-                        callback?.onProgress("[$userHash] DB增量输出为空", totalFiles, totalSize)
+                        callback?.onProgress("[${userHash}] DB增量输出为空", totalFiles, totalSize)
                     }
                 }
             }
@@ -256,32 +223,21 @@ object BackupOrchestrator {
                 for (attDir in ATT_DIRS) {
                     val src = "$wxBasePath/$attDir"
                     try {
-                        // Scan current source files for this attachment directory
-                        val currentFiles = FileManifest.scanWeChatAttachments(
-                            wxBasePath, userHash, listOf(attDir)
-                        )
-                        // Filter to only added or modified relative to per-user manifest
+                        val currentFiles = FileManifest.scanWeChatAttachments(wxBasePath, userHash, listOf(attDir))
                         val toCopy = currentFiles.filter { entry ->
                             val oldEntry = FileManifest.findEntry(userOldManifest, entry.path)
                             oldEntry == null || oldEntry.size != entry.size || oldEntry.mtime != entry.mtime
                         }
                         if (toCopy.isEmpty()) continue
 
-                        callback?.onProgress(
-                            "[$userHash] 增量 $attDir: ${toCopy.size}个",
-                            totalFiles, totalSize
-                        )
+                        callback?.onProgress("[${userHash}] 增量 $attDir: ${toCopy.size}个", totalFiles, totalSize)
                         for (entry in toCopy) {
-                            val rel = entry.path.removePrefix("$userHash/")
+                            val rel = entry.path.removePrefix("${userHash}/")
                             val srcFile = "$wxBasePath/$rel"
                             val dstFile = File(BackupEnv.backupDataDir, "tmp/${tag}_${userHash}/$rel")
                             dstFile.parentFile?.mkdirs()
-                            val cpResult = BackupEnv.su(
-                                "cp \"$srcFile\" \"${dstFile.absolutePath}\" && chmod 644 \"${dstFile.absolutePath}\""
-                            )
-                            if (cpResult.isSuccess &&
-                                BackupEnv.backupExists(dstFile.absolutePath) &&
-                                BackupEnv.backupSize(dstFile.absolutePath) > 0) {
+                            val cpResult = BackupEnv.su("cp \"$srcFile\" \"${dstFile.absolutePath}\" && chmod 644 \"${dstFile.absolutePath}\"")
+                            if (cpResult.isSuccess && BackupEnv.backupExists(dstFile.absolutePath) && BackupEnv.backupSize(dstFile.absolutePath) > 0) {
                                 totalFiles++; totalSize += BackupEnv.backupSize(dstFile.absolutePath); newFiles++
                             }
                         }
@@ -304,13 +260,11 @@ object BackupOrchestrator {
                 val userOldManifest = FileManifest.load(userDir)
                 val userDiff = FileManifest.diff(userOldManifest, userCurrentFiles)
                 if (userDiff.added.isNotEmpty() || userDiff.modified.isNotEmpty() || userDiff.deleted.isNotEmpty()) {
-                    // Save FULL per-user manifest to disk (for next incremental diff)
                     val userUpdatedManifest = FileManifest.toManifest(userCurrentFiles, tag)
                     userUpdatedManifest.put("incrFrom", incrFrom)
                     userUpdatedManifest.put("incrTo", incrTo)
                     FileManifest.save(userDir, userUpdatedManifest)
 
-                    // Save incremental-only manifest for archive (not full set)
                     val incrFiles = userDiff.added + userDiff.modified
                     if (incrFiles.isNotEmpty()) {
                         val incrOnlyManifest = FileManifest.toManifest(incrFiles, tag)
@@ -321,60 +275,43 @@ object BackupOrchestrator {
                         RootGateways.writeFile("$tmpManifestDir/file_manifest.json", incrOnlyManifest.toString())
                     }
 
-                    callback?.onProgress(
-                        "[$hash] 清单已更新: +${userDiff.added.size} ~${userDiff.modified.size} -${userDiff.deleted.size}",
-                        totalFiles, totalSize,
-                    )
+                    callback?.onProgress("[${hash}] 清单已更新: +${userDiff.added.size} ~${userDiff.modified.size} -${userDiff.deleted.size}", totalFiles, totalSize)
                 }
             }
 
-            // Update global manifest for backward compat (not used for diff anymore)
+            // Update global manifest
             val globalManifest = FileManifest.toManifest(allCurrentFiles, tag)
             FileManifest.save(dir, globalManifest)
 
-            // 3b. Package incremental changes into tar.zst via JNI
-
-            // Add db_state.json, db_config.json, file_manifest.json per user
+            // 3b. Package incremental changes via JNI
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                incrSources += NativeArchivePlan.Source(
-                    File(BackupEnv.backupDataDir, "$userHash/db_state.json").absolutePath, "$userHash/db_state.json")
-                incrSources += NativeArchivePlan.Source(
-                    File(BackupEnv.backupDir, "db_config.json").absolutePath, "$userHash/db_config.json")
-                // Use incremental-only manifest from tmp (not full disk version)
+                incrSources += NativeArchivePlan.Source(File(BackupEnv.backupDataDir, "${userHash}/db_state.json").absolutePath, "$userHash/db_state.json")
+                incrSources += NativeArchivePlan.Source(File(BackupEnv.backupDir, "db_config.json").absolutePath, "$userHash/db_config.json")
                 val incrManifestPath = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/file_manifest.json"
                 if (RootGateways.exists(incrManifestPath)) {
                     incrSources += NativeArchivePlan.Source(incrManifestPath, "$userHash/file_manifest.json")
                 } else {
-                    // Fallback to full manifest if no incremental (shouldn't normally happen)
-                    incrSources += NativeArchivePlan.Source(
-                        File(BackupEnv.backupDataDir, "$userHash/file_manifest.json").absolutePath, "$userHash/file_manifest.json")
+                    incrSources += NativeArchivePlan.Source(File(BackupEnv.backupDataDir, "${userHash}/file_manifest.json").absolutePath, "$userHash/file_manifest.json")
                 }
             }
-            // Add changed attachments from tmp/ (find individual files, not directory trees)
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val tmpDir = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}"
-                val files = RootGateways.runQuiet(
-                    "find \"$tmpDir\" -type f 2>/dev/null"
-                ).lines().filter { it.isNotBlank() }
+                val files = RootGateways.runQuiet("find \"$tmpDir\" -type f 2>/dev/null").lines().filter { it.isNotBlank() }
                 for (f in files) {
                     val arcPath = f.removePrefix("${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/")
                     incrSources += NativeArchivePlan.Source(f, "$userHash/$arcPath")
                 }
             }
-            
             if (incrSources.isNotEmpty()) {
-                val incrArchive = File(dir, "incr_attachments_$tag.tar.zst")
+                val incrArchive = File(dir, "incr_attachments_${tag}.tar.zst")
                 val tmpPkg = incrArchive.absolutePath
                 val plan = NativeArchivePlan(tmpPkg, incrSources)
                 val pairsFile = File(dir, "incr_pairs.txt").absolutePath
                 val localPairs = File(BackupEnv.filesDirPath, "incr_pairs.txt")
-                try { localPairs.writeText(plan.toPairsContent()) } catch (_: Exception) {
-                    return BackupHookLocal.Result(false, "写入增量清单失败")
-                }
-                if (!RootGateways.copy(localPairs.absolutePath, pairsFile) ||
-                    RootGateways.writeTarZstd(tmpPkg, pairsFile, BackupEnv.useZstd()) != 0) {
+                localPairs.writeText(plan.toPairsContent())
+                if (!RootGateways.copy(localPairs.absolutePath, pairsFile) || RootGateways.writeTarZstd(tmpPkg, pairsFile, BackupEnv.useZstd()) != 0) {
                     localPairs.delete()
                     return BackupHookLocal.Result(false, "增量打包失败")
                 }
@@ -384,36 +321,32 @@ object BackupOrchestrator {
                 if (pkgSize > 0L) {
                     totalFiles++; totalSize += pkgSize; newFiles++
                     callback?.onProgress("增量附件: ${incrArchive.name}", totalFiles, totalSize)
-                    Log.i("wxhook:PKG", "incr archive: $tmpPkg size=$pkgSize")
                 }
             }
 
-            // 用备份 tag 命名保存增量 SQL（供回放时按 tag 匹配）
+            // Save incremental SQL files
             val sqlFiles = RootGateways.runQuiet("find ${BackupEnv.backupDataDir}/tmp -name '*.sql' -path '*${tag}*' 2>/dev/null").lines().filter { it.isNotBlank() }
             for (f in sqlFiles) {
-                val n = "incr_${tag}.sql"  // 用 tag 命名：incr_20260722_141543.sql
+                val n = "incr_${tag}.sql"
                 RootGateways.run("cp '$f' '${BackupEnv.backupDataDir}/$n' && chmod 644 '${BackupEnv.backupDataDir}/$n' 2>/dev/null")
             }
 
-            // Clean up tmp dir after packaging
+            // Cleanup tmp
             RootGateways.runQuiet("rm -rf ${BackupEnv.backupDataDir}/tmp/${tag}_* 2>/dev/null")
 
-            // 5. Cloud sync (after all data committed)
+            // Cloud sync
             cloudSync(callback)
 
-            // 6. Save state LAST (after all data/manifest committed)
+            // Save state
             BackupManifest.saveState(tag, totalFiles, totalSize)
 
-            val rec = BackupManifest.createRecord(
-                tag, "incremental", totalFiles, totalSize,
+            val rec = BackupManifest.createRecord(tag, "incremental", totalFiles, totalSize,
                 if (newFiles > 0) "增量: ${newFiles}个文件, ${BackupManifest.formatSize(totalSize)}" else "无新文件",
-                durationMs = System.currentTimeMillis() - startTime
-            )
+                durationMs = System.currentTimeMillis() - startTime)
             rec.put("newFiles", newFiles)
             if (incrSources.isNotEmpty()) rec.put("hasIncrArchive", true)
             BackupManifest.addRecord(rec)
             val msg = if (newFiles > 0) "增量备份: ${newFiles}个文件(${BackupManifest.formatSize(totalSize)}), DB:${incrFrom}→${incrTo}" else "无新文件"
-            
             BackupHookLocal.Result(true, msg)
         } catch (e: Exception) {
             BackupHookLocal.Result(false, "增量备份失败: ${e.message}")
@@ -425,19 +358,12 @@ object BackupOrchestrator {
     fun cloudSync(callback: BackupHookLocal.ProgressCallback?, archivePath: String? = null, tarFiles: List<String> = emptyList()) {
         val config = Syncer.loadConfig()
         if (!config.isValid) return
-        // Also check legacy remote_config.json enabled flag
         val configFile = File(BackupEnv.backupDir, "remote_config.json")
         if (configFile.exists()) {
             val rc = try { JSONObject(BackupEnv.suOut("cat \"${configFile.absolutePath}\" 2>/dev/null").ifBlank { "{}" }) } catch (_: Exception) { JSONObject() }
             if (!rc.optBoolean("enabled", true)) return
         }
-
-        val archives = if (archivePath != null && BackupEnv.backupExists(archivePath)) {
-            listOf(archivePath)
-        } else {
-            emptyList()
-        }
-
+        val archives = if (archivePath != null && BackupEnv.backupExists(archivePath)) listOf(archivePath) else emptyList()
         val result = Syncer.sync(config, specificArchives = archives) { p ->
             callback?.onProgress(p.message, p.current.toLong(), p.total.toLong())
         }
@@ -449,24 +375,14 @@ object BackupOrchestrator {
     // ── Test remote connection ──
 
     fun testRemoteConnection(remote: String, configPath: String = ""): String {
-        val settingsCfg = try {
-            val settingsFile = File(BackupEnv.filesDirPath, "settings_config.json")
-            JSONObject(settingsFile.readText())
-        } catch (_: Exception) { JSONObject() }
-
-        // Detect provider
+        val settingsCfg = try { JSONObject(File(BackupEnv.filesDirPath, "settings_config.json").readText()) } catch (_: Exception) { JSONObject() }
         val aliyunToken = settingsCfg.optString("aliyundrive_refresh_token", "")
         val webdavUrl = settingsCfg.optString("webdav_url", "")
-
-        if (aliyunToken.isNotBlank()) {
-            return testAliyundriveConnection(aliyunToken, settingsCfg)
-        }
-
+        if (aliyunToken.isNotBlank()) return testAliyundriveConnection(aliyunToken, settingsCfg)
         if (webdavUrl.isBlank()) {
             val webdavUser = settingsCfg.optString("webdav_user", "")
             if (webdavUser.isBlank()) return "⚠️ 未配置云存储（请先添加 WebDAV 或阿里云盘）"
         }
-
         return testWebdavConnection(settingsCfg, remote)
     }
 
@@ -481,17 +397,10 @@ object BackupOrchestrator {
                 val listResult = kotlinx.coroutines.runBlocking { client.list(remote.ifBlank { "." }) }
                 if (listResult.isSuccess) {
                     val dirs = listResult.getOrNull()?.take(10) ?: emptyList()
-                    if (dirs.isEmpty()) "✅ 连接成功（远端无文件）"
-                    else "✅ 连接成功\n${dirs.joinToString("\n") { "📦 ${it.path}" }}"
-                } else {
-                    "✅ 连接成功"
-                }
-            } else {
-                "连接失败: ${result.exceptionOrNull()?.message ?: "未知错误"}"
-            }
-        } catch (e: Exception) {
-            "启动失败: ${e.message}"
-        }
+                    if (dirs.isEmpty()) "✅ 连接成功（远端无文件）" else "✅ 连接成功\n${dirs.joinToString("\n") { "📦 ${it.path}" }}"
+                } else "✅ 连接成功"
+            } else "连接失败: ${result.exceptionOrNull()?.message ?: "未知错误"}"
+        } catch (e: Exception) { "启动失败: ${e.message}" }
     }
 
     private fun testAliyundriveConnection(token: String, settingsCfg: JSONObject): String {
@@ -501,17 +410,12 @@ object BackupOrchestrator {
             val client = com.nous.wxhook.sync.OpenListCloudClient("AliyundriveOpen", configJson)
             val result = kotlinx.coroutines.runBlocking { client.testConnection() }
             if (result.isSuccess) "✅ 阿里云盘连接成功" else "连接失败: ${result.exceptionOrNull()?.message}"
-        } catch (e: Exception) {
-            "启动失败: ${e.message}"
-        }
+        } catch (e: Exception) { "启动失败: ${e.message}" }
     }
 
     // ── Rebuild DB State ──
 
-    private fun hasStoragePermission(): Boolean =
-        android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R ||
-        android.os.Environment.isExternalStorageManager()
-
+    private fun hasStoragePermission(): Boolean = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R || android.os.Environment.isExternalStorageManager()
     private fun requestStoragePermission() {
         val ctx = com.nous.wxhook.App.instance ?: return
         val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
@@ -531,67 +435,38 @@ object BackupOrchestrator {
         }
         return try {
             callback?.onProgress("检查微信登录状态...", 0, 0)
-            // 1. Check WeChat is running (needed for manifest scan)
             val wxPaths = WeChatSourceResolver.findWxPaths()
-            if (wxPaths.isEmpty())
-                return "微信未运行，请先打开微信再重建"
-
-            // 2. Scan archives (shared across users)
+            if (wxPaths.isEmpty()) return "微信未运行，请先打开微信再重建"
             callback?.onProgress("扫描备份文件...", 0, 0)
-            val fullArchives = RootGateways.runQuiet(
-                "ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null"
-            ).lines().filter { it.isNotBlank() }.sorted()
-            val incrArchives = RootGateways.runQuiet(
-                "ls ${BackupEnv.backupDataDir}/incr_attachments_*.tar.zst 2>/dev/null"
-            ).lines().filter { it.isNotBlank() }.sorted()
+            val fullArchives = RootGateways.runQuiet("ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null").lines().filter { it.isNotBlank() }.sorted()
+            val incrArchives = RootGateways.runQuiet("ls ${BackupEnv.backupDataDir}/incr_attachments_*.tar.zst 2>/dev/null").lines().filter { it.isNotBlank() }.sorted()
             callback?.onProgress("全量: ${fullArchives.size}个, 增量: ${incrArchives.size}个", 0, 0)
-
-            data class ChainPoint(
-                val from: Long, val to: Long, val time: Long,
-                val name: String, val isFull: Boolean, val hash: String)
-
-            // Pre-read centralized db_state (Binder may die during long operations)
+            data class ChainPoint(val from: Long, val to: Long, val time: Long, val name: String, val isFull: Boolean, val hash: String)
             val centralizedStates = mutableMapOf<String, JSONObject>()
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 centralizedStates[hash] = BackupManifest.loadDbState(hash)
             }
-
-            // 3. For each user, build chain from archives
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val centralized = centralizedStates[hash] ?: JSONObject()
                 callback?.onProgress("处理用户: $hash...", 0, 0)
                 val points = mutableListOf<ChainPoint>()
-
-                // Full archives: NativeArchive JNI — direct app-process read, no Binder
-                callback?.onProgress("[$hash] 分析全量包...", 0, 0)
+                callback?.onProgress("[${hash}] 分析全量包...", 0, 0)
                 for (arc in fullArchives) {
                     val f = File(arc)
-                    val rowId = try {
-                        NativeArchive.getFullArchiveRowId(arc, hash)
-                    } catch (e: Throwable) {
-                        Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name}", e)
-                        0L
-                    }
-                    if (rowId > 0) points += ChainPoint(
-                        centralized.optLong("lastMessageRowIdFrom", 0L), rowId,
-                        f.lastModified(), f.name, true, hash)
-                    Log.i("wxhook:rebuild", "full arc ${f.name}: rowId=$rowId")
+                    val rowId = try { NativeArchive.getFullArchiveRowId(arc, hash) } catch (e: Throwable) { Log.e("wxhook:rebuild", "getFullArchiveRowId failed for ${f.name}", e); 0L }
+                    if (rowId > 0) points += ChainPoint(centralized.optLong("lastMessageRowIdFrom", 0L), rowId, f.lastModified(), f.name, true, hash)
                 }
-
-                // Incremental archives: extract db_state.json for from/to
-                callback?.onProgress("[$hash] 分析增量包...", 0, 0)
+                callback?.onProgress("[${hash}] 分析增量包...", 0, 0)
                 for (arc in incrArchives) {
                     val f = File(arc)
                     var incrFrom = 0L; var incrTo = 0L
                     try {
                         val dbJson = NativeArchive.readFileFromTar(arc, "$hash/db_state.json")
-                        incrFrom = try { JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0) } catch (_: Exception) { 0L }
-                        incrTo = try { JSONObject(dbJson).optLong("lastMessageRowId", 0) } catch (_: Exception) { 0L }
-                    } catch (e: Throwable) {
-                        Log.e("wxhook:rebuild", "NativeArchive.readFileFromTar for incr db_state failed: $arc", e)
-                    }
+                        incrFrom = JSONObject(dbJson).optLong("lastMessageRowIdFrom", 0)
+                        incrTo = JSONObject(dbJson).optLong("lastMessageRowId", 0)
+                    } catch (_: Throwable) {}
                     if (incrFrom > 0 && incrTo > 0) {
                         points += ChainPoint(incrFrom, incrTo, f.lastModified(), f.name, false, hash)
                     } else if (incrTo > 0) {
@@ -600,26 +475,17 @@ object BackupOrchestrator {
                             val m = Regex("incr_(\\d+)_to_(\\d+)\\.sql").find(listing)
                             incrFrom = m?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
                             points += ChainPoint(incrFrom, incrTo, f.lastModified(), f.name, false, hash)
-                        } catch (e: Throwable) {
-                            Log.e("wxhook:rebuild", "NativeArchive.listTar for incr failed: $arc", e)
-                        }
+                        } catch (_: Throwable) {}
                     }
-                    Log.i("wxhook:rebuild", "incr arc ${f.name}: from=$incrFrom to=$incrTo")
                 }
-
-                // Longest continuous chain
-                callback?.onProgress("[$hash] 计算最长链...", 0, 0)
-                Log.i("wxhook:rebuild", "points for $hash: ${points.size}")
+                callback?.onProgress("[${hash}] 计算最长链...", 0, 0)
                 points.sortBy { it.time }
-                var chainEnd = 0L; var chainPoints = mutableListOf<ChainPoint>()
-                var bestChain = mutableListOf<ChainPoint>()
+                var chainEnd = 0L; var chainPoints = mutableListOf<ChainPoint>(); var bestChain = mutableListOf<ChainPoint>()
                 for (p in points) {
-                    Log.i("wxhook:rebuild", "  point: from=${p.from} to=${p.to} name=${p.name}")
                     if (p.from <= chainEnd || chainEnd == 0L) {
                         chainEnd = maxOf(chainEnd, p.to)
                         chainPoints.add(p)
-                        if (chainPoints.size > bestChain.size)
-                            bestChain = mutableListOf<ChainPoint>().also { it.addAll(chainPoints) }
+                        if (chainPoints.size > bestChain.size) bestChain = mutableListOf<ChainPoint>().apply { addAll(chainPoints) }
                     } else {
                         chainEnd = p.to
                         chainPoints = mutableListOf(p)
@@ -627,30 +493,25 @@ object BackupOrchestrator {
                 }
                 val safeFrom = if (bestChain.isNotEmpty()) bestChain.minOf { it.from } else 0L
                 val safeRowId = if (bestChain.isNotEmpty()) bestChain.maxOf { it.to } else 0L
-
                 // Per-user db_state (only if chain has data)
                 if (bestChain.isNotEmpty()) {
-                    callback?.onProgress("[$hash] 保存状态: $safeFrom→$safeRowId (链=${bestChain.size})", 0, 0)
+                    callback?.onProgress("[${hash}] 保存状态: $safeFrom→$safeRowId (链=${bestChain.size})", 0, 0)
                     if (!BackupManifest.saveDbState(hash, "rebuild", safeFrom, safeRowId)) {
                         runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
                         BackupManifest.saveDbState(hash, "rebuild", safeFrom, safeRowId)
                     }
                 } else {
-                    callback?.onProgress("[$hash] ⚠️ 链为空，跳过保存", 0, 0)
+                    callback?.onProgress("[${hash}] ⚠️ 链为空，跳过保存", 0, 0)
                 }
-
                 // Per-user manifest: merge from all archives in chain
-                callback?.onProgress("[$hash] 提取附件清单...", 0, 0)
+                callback?.onProgress("[${hash}] 提取附件清单...", 0, 0)
                 val userDir = File(BackupEnv.backupDataDir, hash)
                 RootGateways.mkdirs(userDir.absolutePath)
                 val mergedFiles = mutableListOf<JSONObject>()
                 for (cp in bestChain) {
                     val arcPath = File(BackupEnv.backupDataDir, cp.name).absolutePath
                     try {
-                        // Shell pipe: zstd→tar→extract manifest (bypass JNI typeflag issue)
-                        val json = try {
-                            NativeArchive.readFileFromTar(arcPath, "$hash/file_manifest.json")
-                        } catch (e: Throwable) { "" }
+                        val json = try { NativeArchive.readFileFromTar(arcPath, "${hash}/file_manifest.json") } catch (e: Throwable) { "" }
                         if (json.isNotBlank()) {
                             val manifest = JSONObject(json)
                             val files = manifest.optJSONArray("files") ?: manifest.optJSONArray("entries")
@@ -667,7 +528,7 @@ object BackupOrchestrator {
                         Log.e("wxhook:rebuild", "manifest extract failed for ${cp.name}", e)
                     }
                 }
-                // Save merged manifest to disk (was being read but not persisted)
+                // Save merged manifest to disk
                 if (mergedFiles.isNotEmpty()) {
                     val mergedManifest = JSONObject().apply {
                         put("version", 1)
@@ -678,8 +539,7 @@ object BackupOrchestrator {
                     FileManifest.save(userDir, mergedManifest)
                     Log.i("wxhook:rebuild", "merged manifest saved: ${mergedFiles.size} files to $userDir")
                 }
-
-// Records from bestChain
+                // Records
                 for (p in bestChain) {
                     rebuiltRecords.put(JSONObject().apply {
                         put("tag", SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date(p.time)))
@@ -692,327 +552,23 @@ object BackupOrchestrator {
                         put("message", if (p.isFull) "全量备份" else "增量备份: ${p.from}→${p.to}")
                     })
                 }
-                results.add("$hash: rowId=$safeRowId (chain=${bestChain.size})")
-            }
-
-            // 4. Save backup records (may need to reconnect Binder)
-            callback?.onProgress("保存备份记录...", 0, 0)
-            val sorted = (0 until rebuiltRecords.length())
-                .map { rebuiltRecords.getJSONObject(it) }
-                .sortedBy { it.optLong("time", 0L) }
-            var recordsOk = writeSortedRecords(sorted)
-            if (!recordsOk) {
-                // Binder may have died during archive reads; reconnect and retry
-                runBlocking {
-                    (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService()
+                results.add("$hash: rowId=$safeRowId (链=${bestChain.size})")
+                // 4. Save backup records (may need to reconnect Binder)
+                callback?.onProgress("保存备份记录...", 0, 0)
+                val sorted = (0 until rebuiltRecords.length())
+                    .map { rebuiltRecords.getJSONObject(it) }
+                    .sortedBy { it.optLong("time", 0L) }
+                var recordsOk = writeSortedRecords(sorted)
+                if (!recordsOk) {
+                    runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
+                    recordsOk = writeSortedRecords(sorted)
                 }
-                recordsOk = writeSortedRecords(sorted)
+                if (!recordsOk) android.util.Log.e("wxhook:rebuild", "Failed to write backup_records.json")
+                callback?.onProgress("✅ 重建完成: ${sorted.size}条记录", 0, 0)
+                results.joinToString("\n") + "\nrecords=" + sorted.size
+            } catch (e: Exception) {
+                Log.e("wxhook:rebuild", "重建失败: ${e.message}")
+                "重建失败: ${e.message}"
             }
-            if (!recordsOk) android.util.Log.e("wxhook:rebuild", "Failed to write backup_records.json")
-
-            callback?.onProgress("✅ 重建完成: ${sorted.size}条记录", 0, 0)
-            results.joinToString("\n") + "\nrecords=" + sorted.size
-        } catch (e: Exception) {
-            Log.e("wxhook:rebuild", "rebuildDbState failed", e)
-            callback?.onProgress("❌ ${e::class.simpleName}: ${e.message}", 0, 0)
-            "重建失败: ${e::class.simpleName}: ${e.message}"
         }
     }
-
-    private fun writeSortedRecords(sorted: List<JSONObject>): Boolean {
-        val outArr = JSONArray()
-        for (rec in sorted) outArr.put(rec)
-        return RootGateways.writeFile(
-            File(BackupEnv.backupDataDir, WxHookPaths.RECORDS_FILE).absolutePath,
-            outArr.toString()
-        )
-    }
-
-    // ── Restore from Backup ──
-
-    /**
-     * Restore WeChat DB + attachments from the latest full + incremental backups.
-     *
-     * Phases:
-     *   1. Scan full + incremental archives
-     *   2. Resolve user hash, password, correct owner uid:gid
-     *   3. Force-stop WeChat, safety-backup current DB
-     *   4. Full SQL restore via sqlcipher pipe
-     *   5. Incremental SQLs applied on top (DELETE full-table + INSERT incr)
-     *   6. Attachment files extracted from full + incremental tar.zst
-     *   7. Copy DB into WeChat data dir, chown -R to correct uid:gid
-     */
-    fun doRestore(callback: BackupHookLocal.ProgressCallback? = null): BackupHookLocal.Result {
-        val startTime = System.currentTimeMillis()
-        return try {
-            callback?.onProgress("检查 Root 和存储权限...", 0, 0)
-            if (!hasStoragePermission()) {
-                requestStoragePermission()
-                return BackupHookLocal.Result(false, "需要「所有文件访问」权限")
-            }
-
-            // ═══════════════════════════════════════════
-            // Phase 1: 扫描所有备份（全量 + 增量）
-            // ═══════════════════════════════════════════
-            callback?.onProgress("扫描备份文件...", 0, 0)
-            val fullArchives = RootGateways.runQuiet(
-                "ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null"
-            ).lines().filter { it.isNotBlank() }.sorted()
-            val incrArchives = RootGateways.runQuiet(
-                "ls ${BackupEnv.backupDataDir}/incr_attachments_*.tar.zst 2>/dev/null"
-            ).lines().filter { it.isNotBlank() }.sorted()
-
-            if (fullArchives.isEmpty()) {
-                return BackupHookLocal.Result(false, "未找到全量备份包")
-            }
-            val fullArchivePath = fullArchives.last()
-            val fullArchiveName = File(fullArchivePath).name
-            val fullTime = File(fullArchivePath).lastModified()
-
-            // 筛选 full 之后的增量包（按时间排序）
-            val applicableIncr = incrArchives
-                .map { File(it) }
-                .filter { it.lastModified() >= fullTime }
-                .sortedBy { it.lastModified() }
-                .map { it.absolutePath }
-            callback?.onProgress("全量: $fullArchiveName | 增量: ${applicableIncr.size}个", 0, 0)
-
-            // ═══════════════════════════════════════════
-            // Phase 2: 解析元数据
-            // ═══════════════════════════════════════════
-            val listing = NativeArchive.listTar(fullArchivePath)
-            val hashPattern = Regex("^([a-f0-9]{32})/")
-            val userHashes = listing.lines().mapNotNull { hashPattern.find(it)?.groupValues?.get(1) }.toSet()
-            if (userHashes.isEmpty()) return BackupHookLocal.Result(false, "备份中未找到用户数据")
-            val userHash = userHashes.first()
-            Log.i("wxhook:restore", "userHash=$userHash full=$fullArchivePath incr=${applicableIncr.size}")
-
-            // 密码：优先从最新增量包读 db_config，再试全量包，最后试本地
-            var pwd = ""
-            for (arc in applicableIncr.reversed() + listOf(fullArchivePath)) {
-                try {
-                    val json = NativeArchive.readFileFromTar(arc, "$userHash/db_config.json")
-                    if (json.isNotBlank()) {
-                        pwd = JSONObject(json).optString("password", "")
-                        if (pwd.isNotBlank()) break
-                    }
-                } catch (_: Exception) {}
-            }
-            if (pwd.isBlank()) pwd = ArchiveService.getDbPassword()
-            if (pwd.isBlank()) return BackupHookLocal.Result(false, "无法获取数据库密码，请先捕获微信密钥")
-            callback?.onProgress("密码: $pwd", 0, 0)
-
-            // ═══════════════════════════════════════════
-            // Phase 3: 定位微信数据目录 + 获取正确所有者
-            // ═══════════════════════════════════════════
-            callback?.onProgress("定位微信数据目录...", 0, 0)
-            // 先停微信（后续操作需要释放锁、避免 /proc/pid 路径不稳定）
-            TargetAppController.forceStopWeChat()
-            Thread.sleep(2000)
-            TargetAppController.killSqlcipher()
-
-            val wechatPkgDir = "/data/data/com.tencent.mm"
-            val wechatDataDir = "$wechatPkgDir/MicroMsg/$userHash"
-
-            // 获取正确的所有者：用 pkg 目录本身的 uid:gid — 这是最可靠的方式
-            val ownerRaw = RootGateways.runQuiet(
-                "stat -c %u:%g \"$wechatPkgDir\" 2>/dev/null"
-            ).lines().filter { it.isNotBlank() }.firstOrNull() ?: "10073:10073"
-            val ownerStr = ownerRaw.trim()
-
-            val targetDirOk = RootGateways.runQuiet(
-                "ls \"$wechatDataDir/EnMicroMsg.db\" 2>/dev/null && echo 1"
-            ).trim() == "1"
-            if (!targetDirOk) {
-                return BackupHookLocal.Result(false,
-                    "微信数据目录不存在 ($wechatDataDir)，请先至少登录一次微信")
-            }
-
-            // 备份原 DB 到 sdcard（安全措施）
-            val safetyBackup = "${BackupEnv.backupDataDir}/EnMicroMsg.db.restore_before"
-            callback?.onProgress("备份原数据库...", 0, 0)
-            RootGateways.run(
-                "cp -f \"$wechatDataDir/EnMicroMsg.db\" \"$safetyBackup\" 2>/dev/null; " +
-                "cp -f \"$wechatDataDir/EnMicroMsg.db-wal\" \"${safetyBackup}-wal\" 2>/dev/null; " +
-                "cp -f \"$wechatDataDir/EnMicroMsg.db-shm\" \"${safetyBackup}-shm\" 2>/dev/null; " +
-                "chmod 644 \"$safetyBackup\" 2>/dev/null",
-                60_000
-            )
-
-            // ═══════════════════════════════════════════
-            // Phase 4: DB 恢复 — 全量 + 增量 SQL
-            // ═══════════════════════════════════════════
-            val workDir = "/data/local/tmp/wxhook_restore"
-            val outputDb = "$workDir/EnMicroMsg.db"
-            RootGateways.run("rm -rf $workDir && mkdir -p $workDir && chmod 755 $workDir", 10_000)
-
-            val preloadEnv = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
-            val sqlcipher = "${BackupEnv.binDir}/sqlcipher"
-
-            // ── 4a. 全量 SQL 灌入 ──
-            callback?.onProgress("恢复全量数据库（可能需要几分钟）...", 0, 0)
-            val sqlDumpPath = "$userHash/" + FullBackupLayout.databaseDumpName()
-            val fullScript = "#!/system/bin/sh\n" +
-                "rm -f \"$outputDb\" \"${outputDb}-wal\" \"${outputDb}-shm\" 2>/dev/null\n" +
-                "{\n" +
-                "  echo \"PRAGMA key = '$pwd';\"\n" +
-                "  echo \"PRAGMA cipher_compatibility = 3;\"\n" +
-                "  echo \"PRAGMA cipher_page_size = 1024;\"\n" +
-                "  echo \"PRAGMA kdf_iter = 4000;\"\n" +
-                "  echo \"PRAGMA cipher_use_hmac = OFF;\"\n" +
-                "  zstd -dc \"$fullArchivePath\" 2>/dev/null | tar -xO \"$sqlDumpPath\" 2>/dev/null\n" +
-                "} | $preloadEnv $sqlcipher \"$outputDb\" 2>/dev/null\n" +
-                "if [ -s \"$outputDb\" ]; then echo OK; else echo FAIL; fi\n"
-            val fullResult = execRootScript(fullScript, "$workDir/full_restore.sh", 600_000)
-            if (fullResult.stdout.trim() != "OK") {
-                return BackupHookLocal.Result(false, "全量数据库重建失败")
-            }
-            val fullDbSize = RootGateways.fileSize(outputDb)
-            callback?.onProgress("  全量完成: ${BackupManifest.formatSize(fullDbSize)}", 0, 0)
-
-            // ── 4b. 增量 SQL 逐层叠加 ──
-            if (applicableIncr.isNotEmpty()) {
-                callback?.onProgress("应用增量（${applicableIncr.size}个包）...", 0, 0)
-            }
-            for ((idx, incrArc) in applicableIncr.withIndex()) {
-                val incrName = File(incrArc).name
-                callback?.onProgress("  [$idx] 增量: $incrName", 0, 0)
-
-                val incrListing = NativeArchive.listTar(incrArc)
-                val sqlFiles = incrListing.lines().filter {
-                    it.contains("$userHash/incr_") && it.endsWith(".sql")
-                }
-                if (sqlFiles.isEmpty()) {
-                    callback?.onProgress("  未找到增量 SQL，跳过", 0, 0)
-                    continue
-                }
-
-                // 提取增量 SQL 到临时文件，然后灌入已存在的 DB
-                val sqlTmp = "$workDir/incr_${idx}.sql"
-                val extractResult = RootGateways.run(
-                    "zstd -dc \"$incrArc\" 2>/dev/null | tar -xO \"${sqlFiles.first()}\" 2>/dev/null > \"$sqlTmp\" 2>/dev/null; " +
-                    "if [ -s \"$sqlTmp\" ]; then echo 1; else echo 0; fi",
-                    120_000
-                )
-                if (extractResult.stdout.trim() != "1") {
-                    callback?.onProgress("  提取增量 SQL 失败", 0, 0)
-                    continue
-                }
-
-                // 灌入增量 SQL：先 DELETE 全量表旧数据（小表在增量中全量），再 .read
-                // message 表增量只含 rowid > lastRowId，不会冲突
-                val applyScript = "#!/system/bin/sh\n" +
-                    "$preloadEnv $sqlcipher \"$outputDb\" 2>/dev/null << 'SQLEOF'\n" +
-                    "PRAGMA key = '$pwd';\n" +
-                    "PRAGMA cipher_compatibility = 3;\n" +
-                    "PRAGMA cipher_page_size = 1024;\n" +
-                    "PRAGMA kdf_iter = 4000;\n" +
-                    "PRAGMA cipher_use_hmac = OFF;\n" +
-                    "\n" +
-                    "-- 小表在增量中全量导出，删除旧数据避免主键冲突\n" +
-                    "DELETE FROM rcontact;\n" +
-                    "DELETE FROM rconversation;\n" +
-                    "DELETE FROM ImgInfo2;\n" +
-                    "DELETE FROM VoiceInfo;\n" +
-                    "DELETE FROM appattach;\n" +
-                    "\n" +
-                    ".read \"$sqlTmp\"\n" +
-                    "SQLEOF\n" +
-                    "echo DONE\n"
-                val applyResult = execRootScript(applyScript, "$workDir/incr_${idx}_apply.sh", 300_000)
-                Log.i("wxhook:restore", "incr[$idx] apply: ${applyResult.stdout.take(100)}")
-                callback?.onProgress("  增量 ${idx+1}/${applicableIncr.size}", 0, 0)
-            }
-
-            val finalDbSize = RootGateways.fileSize(outputDb)
-            callback?.onProgress("数据库完成: ${BackupManifest.formatSize(finalDbSize)}", 0, 0)
-
-            // ═══════════════════════════════════════════
-            // Phase 5: 附件恢复 — 从全量 + 增量包提取文件
-            // ═══════════════════════════════════════════
-            callback?.onProgress("恢复附件...", 0, 0)
-            val allExtractArchives = listOf(fullArchivePath) + applicableIncr
-
-            for ((idx, arc) in allExtractArchives.withIndex()) {
-                val arcName = File(arc).name
-                val arcLabel = if (idx == 0) "全量" else "增量[${idx-1}]"
-
-                // 从归档中提取每个附件目录的文件
-                for (attDir in ATT_DIRS) {
-                    val arcPrefix = "$userHash/$attDir/"
-                    val tmpExtract = "$workDir/extract_${idx}_$attDir"
-                    val extractCmd = "mkdir -p \"$tmpExtract\" && " +
-                        "cd \"$tmpExtract\" && " +
-                        "(zstd -dc \"$arc\" 2>/dev/null | tar -x --wildcards \"$arcPrefix*\" 2>/dev/null) && " +
-                        "if [ -d \"$tmpExtract/$userHash/$attDir\" ]; then " +
-                        "  mkdir -p \"$wechatDataDir/$attDir\" && " +
-                        "  cp -rf \"$tmpExtract/$userHash/$attDir/.\" \"$wechatDataDir/$attDir/\" 2>/dev/null && " +
-                        "  echo OK_${idx}_$attDir; " +
-                        "else " +
-                        "  echo SKIP_${idx}_$attDir; " +
-                        "fi && " +
-                        "rm -rf \"$tmpExtract\""
-                    val attResult = RootGateways.run(extractCmd, 300_000)
-                    Log.i("wxhook:restore", "att $arcLabel/$attDir: ${attResult.stdout.take(80)}")
-                }
-                callback?.onProgress("  附件 $arcLabel: $arcName", 0, 0)
-            }
-
-            // ═══════════════════════════════════════════
-            // Phase 6: 写入 DB + 最终权限修正
-            // ═══════════════════════════════════════════
-            callback?.onProgress("写入数据库到微信目录...", 0, 0)
-            val dbCopyCmd = "rm -f \"$wechatDataDir/EnMicroMsg.db\" \"$wechatDataDir/EnMicroMsg.db-wal\" \"$wechatDataDir/EnMicroMsg.db-shm\" 2>/dev/null && " +
-                "cp \"$outputDb\" \"$wechatDataDir/EnMicroMsg.db\" && " +
-                "chown $ownerStr \"$wechatDataDir/EnMicroMsg.db\" 2>/dev/null && " +
-                "chmod 660 \"$wechatDataDir/EnMicroMsg.db\" 2>/dev/null && " +
-                "echo 1"
-            val dbCopyResult = RootGateways.run(dbCopyCmd, 30_000)
-            if (dbCopyResult.stdout.trim() != "1") {
-                return BackupHookLocal.Result(false, "写入微信数据目录失败")
-            }
-
-            // 最终权限修正：整个 MicroMsg/$userHash 目录树归微信所有
-            callback?.onProgress("修正文件权限...", 0, 0)
-            val chownCmd = "chown -R $ownerStr \"$wechatDataDir\" 2>/dev/null; " +
-                "chmod -R 660 \"$wechatDataDir\" 2>/dev/null; " +
-                "find \"$wechatDataDir\" -type d -exec chmod 771 {} + 2>/dev/null; " +
-                "chmod 771 \"$wechatDataDir\" 2>/dev/null; " +
-                "echo 1"
-            RootGateways.run(chownCmd, 60_000)
-
-            // ═══════════════════════════════════════════
-            // Phase 7: 清理 + 完成
-            // ═══════════════════════════════════════════
-            RootGateways.run("rm -rf $workDir", 10_000)
-
-            val duration = System.currentTimeMillis() - startTime
-            val summary = buildString {
-                appendLine("恢复完成!")
-                appendLine("来源: $fullArchiveName")
-                if (applicableIncr.isNotEmpty()) {
-                    appendLine("增量: ${applicableIncr.size}个")
-                }
-                appendLine("用户: $userHash")
-                appendLine("DB: ${BackupManifest.formatSize(finalDbSize)}")
-                appendLine("权限: $ownerStr")
-                appendLine("耗时: ${duration / 1000}秒")
-            }.trimEnd()
-
-            callback?.onProgress("全部恢复完成", 0, 0)
-            BackupHookLocal.Result(true, summary)
-        } catch (e: Exception) {
-            Log.e("wxhook:restore", "doRestore failed", e)
-            BackupHookLocal.Result(false, "恢复失败: ${e.message}")
-        }
-    }
-
-    /** 辅助：用 Base64 编码写入 shell 脚本并执行 */
-    private fun execRootScript(script: String, shPath: String, timeoutMs: Long): CommandResult {
-        val b64 = Base64.encodeToString(script.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-        return RootGateways.run(
-            "printf '%s' $b64 | base64 -d > \"$shPath\" && chmod 700 \"$shPath\" && sh \"$shPath\" 2>&1",
-            timeoutMs
-        )
-    }
-}
