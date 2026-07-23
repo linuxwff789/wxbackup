@@ -559,10 +559,10 @@ object BackupOrchestrator {
             val sorted = (0 until rebuiltRecords.length())
                 .map { rebuiltRecords.getJSONObject(it) }
                 .sortedBy { it.optLong("time", 0L) }
-            var recordsOk = writeSortedRecords(sorted)
+            var recordsOk = BackupManifest.writeSortedRecords(sorted)
             if (!recordsOk) {
                 runBlocking { (RootGateways.gateway as? RootGatewayImpl)?.ensureRootService() }
-                recordsOk = writeSortedRecords(sorted)
+                recordsOk = BackupManifest.writeSortedRecords(sorted)
             }
             if (!recordsOk) android.util.Log.e("wxhook:rebuild", "Failed to write backup_records.json")
             callback?.onProgress("✅ 重建完成: ${sorted.size}条记录", 0, 0)
@@ -582,19 +582,6 @@ object BackupOrchestrator {
         val incrArchives: List<File>,
         val wxBasePath: String
     )
-
-    /** Execute a shell script written via Base64 encoding (avoids special chars). */
-    private fun execRootScript(script: String): Boolean {
-        return try {
-            val b64 = Base64.encodeToString(script.toByteArray(Charsets.UTF_8), Base64.DEFAULT)
-            val cmd = "echo '$b64' | base64 -d | su -c 'sh -s'"
-            val result = RootGateways.run(cmd, 120_000)
-            result.isSuccess
-        } catch (e: Exception) {
-            Log.e("wxhook:restore", "execRootScript failed", e)
-            false
-        }
-    }
 
     /** Scan backup directory for full archives and return candidates sorted by time. */
     private fun scanBackupArchives(): List<File> {
@@ -686,86 +673,54 @@ object BackupOrchestrator {
 
             callback?.onProgress("🔐 重建加密数据库...", 0, 0)
             val pwd = meta.password
-            val ld = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
-            val sqlcipher = "${BackupEnv.binDir}/sqlcipher"
+            val binDir = BackupEnv.binDir
+            val decDb = "$workDir/EnMicroMsg_dec.db"
+            val outDb = "$workDir/EnMicroMsg.db"
 
-            val script = """
-                #!/system/bin/sh
-                set -e
-                WORKDIR="$workDir"
-                PWD='$pwd'
-                SQLCIPHER="$sqlcipher"
-                LD="$ld"
-                DEC_DB="\$WORKDIR/EnMicroMsg_dec.db"
-                OUT_DB="\$WORKDIR/EnMicroMsg.db"
+            // Write restore script to a file using writeFile (no shell escaping issues)
+            val restoreScript = buildString {
+                appendLine("#!/system/bin/sh")
+                appendLine("set -e")
+                appendLine("LD_PRELOAD='${binDir}/libz.so.1:${binDir}/libcrypto.so.3:${binDir}/libedit.so:${binDir}/libncursesw.so.6'")
+                appendLine("SQLCIPHER=\"${binDir}/sqlcipher\"")
+                appendLine("DEC_DB=\"$decDb\"")
+                appendLine("OUT_DB=\"$outDb\"")
+                appendLine("PWD='$pwd'")
+                appendLine("DUMP=\"$workDir/$dumpName\"")
+                appendLine("INCR=\"$workDir/incr.sql\"")
+                appendLine("")
+                // Use heredoc inside the shell script to pipe SQL
+                appendLine("\$SQLCIPHER \"\$DEC_DB\" <<'ENDSQL'")
+                appendLine("PRAGMA key = '\$PWD';")
+                appendLine("PRAGMA cipher_compatibility = 3;")
+                appendLine("PRAGMA cipher_page_size = 1024;")
+                appendLine("PRAGMA kdf_iter = 4000;")
+                appendLine("PRAGMA cipher_use_hmac = OFF;")
+                appendLine(".read \"\$DUMP\"")
+                appendLine("")
+                appendLine("-- Apply incremental if exists")
+                appendLine(".import \"\$INCR\" IF EXISTS")
+                appendLine("")
+                appendLine(".clone \"\$OUT_DB\"")
+                appendLine(".quit")
+                appendLine("ENDSQL")
+                appendLine("echo \"OK\"")
+            }
 
-                # 1. Create empty encrypted DB
-                \$LD \$SQLCIPHER "\$DEC_DB" <<-EOS
-                PRAGMA key = '\$PWD';
-                PRAGMA cipher_compatibility = 3;
-                PRAGMA cipher_page_size = 1024;
-                PRAGMA kdf_iter = 4000;
-                PRAGMA cipher_use_hmac = OFF;
-                CREATE TABLE IF NOT EXISTS _restore_marker (id INTEGER PRIMARY KEY);
-                .quit
-EOS
+            val scriptPath = "$workDir/restore.sh"
+            RootGateways.writeFile(scriptPath, restoreScript)
+            RootGateways.run("chmod 755 \"$scriptPath\"", 5_000)
 
-                # 2. Attach and import baseline SQL
-                \$LD \$SQLCIPHER "\$DEC_DB" <<-EOS
-                PRAGMA key = '\$PWD';
-                PRAGMA cipher_compatibility = 3;
-                PRAGMA cipher_page_size = 1024;
-                PRAGMA kdf_iter = 4000;
-                PRAGMA cipher_use_hmac = OFF;
-                .import "\$WORKDIR/$dumpName" _restore_marker
-                .quit
-EOS
+            // Execute the script via su
+            val cmd = "$scriptPath 2>&1"
+            val result = RootGateways.run(cmd, 120_000)
 
-                # 3. Apply incremental SQL if exists
-                if [ -f "\$WORKDIR/incr.sql" ]; then
-                    \$LD \$SQLCIPHER "\$DEC_DB" <<-EOS
-                    PRAGMA key = '\$PWD';
-                    .read "\$WORKDIR/incr.sql"
-                    .quit
-EOS
-                fi
-
-                # 4. Export as encrypted DB
-                \$LD \$SQLCIPHER "\$DEC_DB" <<-EOS
-                PRAGMA key = '\$PWD';
-                PRAGMA cipher_compatibility = 3;
-                PRAGMA cipher_page_size = 1024;
-                PRAGMA kdf_iter = 4000;
-                PRAGMA cipher_use_hmac = OFF;
-                .clone "\$OUT_DB"
-                .quit
-EOS
-
-                echo "OK"
-            """.trimIndent()
-
-            val result = execRootScript(script)
-            if (!result) {
-                // Fallback: use simpler approach
-                val cmd = "$ld $sqlcipher \"$workDir/EnMicroMsg_dec.db\" <<'ENDSCRIPT'\n" +
-                    "PRAGMA key = '$pwd';\n" +
-                    "PRAGMA cipher_compatibility = 3;\n" +
-                    "PRAGMA cipher_page_size = 1024;\n" +
-                    "PRAGMA kdf_iter = 4000;\n" +
-                    "PRAGMA cipher_use_hmac = OFF;\n" +
-                    ".read \"$workDir/$dumpName\"\n" +
-                    ".clone \"$workDir/EnMicroMsg.db\"\n" +
-                    ".quit\n" +
-                    "ENDSCRIPT"
-                val cmdResult = RootGateways.run(cmd, 120_000)
-                if (!cmdResult.isSuccess) {
-                    Log.e("wxhook:restore", "DB restore failed: ${cmdResult.stderr}")
-                    return false
-                }
+            if (!result.isSuccess) {
+                Log.e("wxhook:restore", "DB restore script failed: ${result.stderr}")
+                return false
             }
 
             // Verify output DB exists
-            val outDb = "$workDir/EnMicroMsg.db"
             if (!RootGateways.exists(outDb) || BackupEnv.backupSize(outDb) <= 0) {
                 Log.e("wxhook:restore", "Output DB not found or empty")
                 return false
@@ -784,7 +739,6 @@ EOS
         return try {
             callback?.onProgress("📎 恢复附件...", 0, 0)
             val workDir = "/data/local/tmp/wxhook_restore/attachments"
-            val zstd = if (BackupEnv.useZstd()) "--zstd" else ""
             RootGateways.run("rm -rf \"$workDir\" && mkdir -p \"$workDir\"", 10_000)
 
             // Extract full archive via tar
