@@ -152,6 +152,12 @@ object BackupManifest {
         else -> "$bytes B"
     }
 
-    /**
-     */
+    fun writeSortedRecords(sorted: List<JSONObject>): Boolean {
+        val dir = BackupEnv.backupDir
+        BackupEnv.su("mkdir -p \"$dir\"")
+        val arr = JSONArray(sorted)
+        val tmp = File(BackupEnv.filesDirForWrite(), RECORDS_FILE)
+        tmp.writeText(arr.toString())
+        return BackupEnv.suCopy(tmp, File(dir, RECORDS_FILE))
+    }
 }

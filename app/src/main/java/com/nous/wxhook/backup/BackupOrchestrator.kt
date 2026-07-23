@@ -572,4 +572,350 @@ object BackupOrchestrator {
             "重建失败: ${e.message}"
         }
     }
+
+    // ── Restore from backup ──
+
+    data class RestoreMeta(
+        val userHash: String,
+        val password: String,
+        val fullArchive: File,
+        val incrArchives: List<File>,
+        val wxBasePath: String
+    )
+
+    /** Execute a shell script written via Base64 encoding (avoids special chars). */
+    private fun execRootScript(script: String): Boolean {
+        return try {
+            val b64 = Base64.encodeToString(script.toByteArray(Charsets.UTF_8), Base64.DEFAULT)
+            val cmd = "echo '$b64' | base64 -d | su -c 'sh -s'"
+            val result = RootGateways.run(cmd, 120_000)
+            result.isSuccess
+        } catch (e: Exception) {
+            Log.e("wxhook:restore", "execRootScript failed", e)
+            false
+        }
+    }
+
+    /** Scan backup directory for full archives and return candidates sorted by time. */
+    private fun scanBackupArchives(): List<File> {
+        val dir = File(BackupEnv.backupDataDir)
+        val files = dir.listFiles { f -> f.name.startsWith("wxbackup_full_") && f.name.endsWith(".tar.zst") }
+        return files?.sortedBy { it.lastModified() } ?: emptyList()
+    }
+
+    /** Parse metadata from a full archive: return userHash and password. */
+    private fun parseMetadata(archive: File): Pair<String, String>? {
+        return try {
+            val listing = NativeArchive.listTar(archive.absolutePath)
+            // Find the first user hash directory
+            val hashDirs = listing.lines().filter { it.contains('/') && it.endsWith("/") }
+            val hash = hashDirs.firstOrNull()?.trimEnd('/') ?: return null
+
+            // Try to get db_config.json from archive
+            val dbConfigJson = try {
+                NativeArchive.readFileFromTar(archive.absolutePath, "$hash/db_config.json")
+            } catch (_: Exception) { "" }
+
+            val password = if (dbConfigJson.isNotBlank()) {
+                try { JSONObject(dbConfigJson).optString("password", "") } catch (_: Exception) { "" }
+            } else ""
+
+            if (password.isEmpty()) Pair(hash, ArchiveService.getDbPassword()) else Pair(hash, password)
+        } catch (e: Exception) {
+            Log.e("wxhook:restore", "parseMetadata failed", e)
+            null
+        }
+    }
+
+    /** Prepare environment: stop WeChat, back up current DB. */
+    private fun prepareEnvironment(meta: RestoreMeta, callback: BackupHookLocal.ProgressCallback?): Boolean {
+        return try {
+            callback?.onProgress("⏹️ 停止微信...", 0, 0)
+            // Stop WeChat
+            RootGateways.run("am force-stop com.tencent.mm 2>/dev/null", 10_000)
+            Thread.sleep(2000)
+
+            // Back up current DB
+            callback?.onProgress("💾 备份当前数据库...", 0, 0)
+            val dbDir = File(meta.wxBasePath)
+            val backupDir = File(BackupEnv.backupDataDir, "restore_before")
+            RootGateways.mkdirs(backupDir.absolutePath)
+            for (ext in listOf("db", "db-wal", "db-shm")) {
+                val src = File(dbDir, "EnMicroMsg.$ext")
+                if (!RootGateways.exists(src.absolutePath)) continue
+                val dst = File(backupDir, "EnMicroMsg.$ext.restore_before")
+                RootGateways.copy(src.absolutePath, dst.absolutePath)
+            }
+            callback?.onProgress("✅ 环境准备完成", 0, 0)
+            true
+        } catch (e: Exception) {
+            Log.e("wxhook:restore", "prepareEnvironment failed", e)
+            false
+        }
+    }
+
+    /** Restore database from archive: extract SQL, rebuild encrypted DB via sqlcipher. */
+    private fun restoreDatabase(meta: RestoreMeta, callback: BackupHookLocal.ProgressCallback?): Boolean {
+        return try {
+            callback?.onProgress("🗄️ 解压数据库...", 0, 0)
+            val workDir = "/data/local/tmp/wxhook_restore"
+            RootGateways.run("rm -rf \"$workDir\" && mkdir -p \"$workDir\"", 10_000)
+
+            // Extract SQL dump from full archive
+            val dumpName = "EnMicroMsg_baseline.sql"
+            val sqlContent = NativeArchive.readFileFromTar(meta.fullArchive.absolutePath, "${meta.userHash}/$dumpName")
+            if (sqlContent.isBlank()) {
+                Log.e("wxhook:restore", "SQL dump is empty in archive")
+                return false
+            }
+            val sqlFile = "$workDir/$dumpName"
+            RootGateways.writeFile(sqlFile, sqlContent)
+
+            // Apply incremental SQLs
+            for (incrArc in meta.incrArchives) {
+                val listing = NativeArchive.listTar(incrArc.absolutePath)
+                for (line in listing.lines()) {
+                    if (line.contains(meta.userHash) && line.contains(".sql")) {
+                        val incrSql = NativeArchive.readFileFromTar(incrArc.absolutePath, line.trim())
+                        if (incrSql.isNotBlank()) {
+                            RootGateways.run("echo '${incrSql.replace("'", "'\\''")}' >> \"$workDir/incr.sql\"", 30_000)
+                        }
+                    }
+                }
+            }
+
+            callback?.onProgress("🔐 重建加密数据库...", 0, 0)
+            val pwd = meta.password
+            val ld = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
+            val sqlcipher = "${BackupEnv.binDir}/sqlcipher"
+
+            val script = """
+                #!/system/bin/sh
+                set -e
+                WORKDIR="$workDir"
+                PWD='$pwd'
+                SQLCIPHER="$sqlcipher"
+                LD="$ld"
+                DEC_DB="\$WORKDIR/EnMicroMsg_dec.db"
+                OUT_DB="\$WORKDIR/EnMicroMsg.db"
+
+                # 1. Create empty encrypted DB
+                \$LD \$SQLCIPHER "\$DEC_DB" <<-EOS
+                PRAGMA key = '\$PWD';
+                PRAGMA cipher_compatibility = 3;
+                PRAGMA cipher_page_size = 1024;
+                PRAGMA kdf_iter = 4000;
+                PRAGMA cipher_use_hmac = OFF;
+                CREATE TABLE IF NOT EXISTS _restore_marker (id INTEGER PRIMARY KEY);
+                .quit
+EOS
+
+                # 2. Attach and import baseline SQL
+                \$LD \$SQLCIPHER "\$DEC_DB" <<-EOS
+                PRAGMA key = '\$PWD';
+                PRAGMA cipher_compatibility = 3;
+                PRAGMA cipher_page_size = 1024;
+                PRAGMA kdf_iter = 4000;
+                PRAGMA cipher_use_hmac = OFF;
+                .import "\$WORKDIR/$dumpName" _restore_marker
+                .quit
+EOS
+
+                # 3. Apply incremental SQL if exists
+                if [ -f "\$WORKDIR/incr.sql" ]; then
+                    \$LD \$SQLCIPHER "\$DEC_DB" <<-EOS
+                    PRAGMA key = '\$PWD';
+                    .read "\$WORKDIR/incr.sql"
+                    .quit
+EOS
+                fi
+
+                # 4. Export as encrypted DB
+                \$LD \$SQLCIPHER "\$DEC_DB" <<-EOS
+                PRAGMA key = '\$PWD';
+                PRAGMA cipher_compatibility = 3;
+                PRAGMA cipher_page_size = 1024;
+                PRAGMA kdf_iter = 4000;
+                PRAGMA cipher_use_hmac = OFF;
+                .clone "\$OUT_DB"
+                .quit
+EOS
+
+                echo "OK"
+            """.trimIndent()
+
+            val result = execRootScript(script)
+            if (!result) {
+                // Fallback: use simpler approach
+                val cmd = "$ld $sqlcipher \"$workDir/EnMicroMsg_dec.db\" <<'ENDSCRIPT'\n" +
+                    "PRAGMA key = '$pwd';\n" +
+                    "PRAGMA cipher_compatibility = 3;\n" +
+                    "PRAGMA cipher_page_size = 1024;\n" +
+                    "PRAGMA kdf_iter = 4000;\n" +
+                    "PRAGMA cipher_use_hmac = OFF;\n" +
+                    ".read \"$workDir/$dumpName\"\n" +
+                    ".clone \"$workDir/EnMicroMsg.db\"\n" +
+                    ".quit\n" +
+                    "ENDSCRIPT"
+                val cmdResult = RootGateways.run(cmd, 120_000)
+                if (!cmdResult.isSuccess) {
+                    Log.e("wxhook:restore", "DB restore failed: ${cmdResult.stderr}")
+                    return false
+                }
+            }
+
+            // Verify output DB exists
+            val outDb = "$workDir/EnMicroMsg.db"
+            if (!RootGateways.exists(outDb) || BackupEnv.backupSize(outDb) <= 0) {
+                Log.e("wxhook:restore", "Output DB not found or empty")
+                return false
+            }
+
+            callback?.onProgress("✅ 数据库恢复完成", 0, 0)
+            true
+        } catch (e: Exception) {
+            Log.e("wxhook:restore", "restoreDatabase failed", e)
+            false
+        }
+    }
+
+    /** Restore attachments from full and incremental archives using shell tar. */
+    private fun restoreAttachments(meta: RestoreMeta, callback: BackupHookLocal.ProgressCallback?): Boolean {
+        return try {
+            callback?.onProgress("📎 恢复附件...", 0, 0)
+            val workDir = "/data/local/tmp/wxhook_restore/attachments"
+            val zstd = if (BackupEnv.useZstd()) "--zstd" else ""
+            RootGateways.run("rm -rf \"$workDir\" && mkdir -p \"$workDir\"", 10_000)
+
+            // Extract full archive via tar
+            RootGateways.run("tar -I zstd -xf \"${meta.fullArchive.absolutePath}\" -C \"$workDir\" 2>/dev/null", 120_000)
+
+            // Extract incremental archives
+            for (incrArc in meta.incrArchives) {
+                RootGateways.run("tar -I zstd -xf \"${incrArc.absolutePath}\" -C \"$workDir\" 2>/dev/null", 120_000)
+            }
+
+            // Copy attachment dirs to WeChat data dir
+            for (attDir in ATT_DIRS) {
+                val srcDir = "$workDir/${meta.userHash}/$attDir"
+                val exists = RootGateways.run("test -d \"$srcDir\" && echo 1 || echo 0", 5_000)
+                if (exists.stdout.trim() != "1") continue
+                val dstDir = "${meta.wxBasePath}/$attDir"
+                RootGateways.mkdirs(dstDir)
+                RootGateways.run("cp -r \"$srcDir/.\" \"$dstDir/\" 2>/dev/null && chown -R u0_a620:u0_a620 \"$dstDir\" 2>/dev/null", 60_000)
+                Log.i("wxhook:restore", "附件: $attDir -> $dstDir")
+            }
+            callback?.onProgress("✅ 附件恢复完成", 0, 0)
+            true
+        } catch (e: Exception) {
+            Log.e("wxhook:restore", "restoreAttachments failed", e)
+            false
+        }
+    }
+
+    /** Finalize: copy DB back to WeChat dir, fix owner and permissions. */
+    private fun finalizeDatabase(meta: RestoreMeta, callback: BackupHookLocal.ProgressCallback?): Boolean {
+        return try {
+            callback?.onProgress("📋 写入数据库...", 0, 0)
+            val workDir = "/data/local/tmp/wxhook_restore"
+            val srcDb = "$workDir/EnMicroMsg.db"
+            val dstDb = "${meta.wxBasePath}/EnMicroMsg.db"
+
+            // Check owner of existing files in WeChat dir
+            val ownerResult = RootGateways.run("stat -c '%U:%G' \"$dstDb\" 2>/dev/null", 10_000)
+            val owner = if (ownerResult.isSuccess) ownerResult.stdout.trim() else "u0_a620:u0_a620"
+
+            // Copy the restored DB
+            RootGateways.run("cp \"$srcDb\" \"$dstDb\" && chmod 660 \"$dstDb\" && chown $owner \"$dstDb\"", 30_000)
+
+            // Copy WAL/SHM if they came from restore
+            for (ext in listOf("db-wal", "db-shm")) {
+                val src = "$workDir/EnMicroMsg.$ext"
+                val dst = "${meta.wxBasePath}/EnMicroMsg.$ext"
+                if (RootGateways.exists(src)) {
+                    RootGateways.run("cp \"$src\" \"$dst\" && chmod 660 \"$dst\" && chown $owner \"$dst\"", 30_000)
+                }
+            }
+
+            callback?.onProgress("✅ 数据库写入完成", 0, 0)
+            true
+        } catch (e: Exception) {
+            Log.e("wxhook:restore", "finalizeDatabase failed", e)
+            false
+        }
+    }
+
+    /** Clean up temporary working directory. */
+    private fun cleanupWorkDir(callback: BackupHookLocal.ProgressCallback?) {
+        RootGateways.run("rm -rf /data/local/tmp/wxhook_restore 2>/dev/null", 10_000)
+        callback?.onProgress("🧹 清理临时目录", 0, 0)
+    }
+
+    /** Main doRestore entry point. */
+    fun doRestore(callback: BackupHookLocal.ProgressCallback? = null): BackupHookLocal.Result {
+        return try {
+            callback?.onProgress("🔍 扫描备份文件...", 0, 0)
+
+            // Phase 1: Scan archives
+            val fullArchives = scanBackupArchives()
+            if (fullArchives.isEmpty()) return BackupHookLocal.Result(false, "未找到全量备份文件")
+
+            val fullArc = fullArchives.last()
+            callback?.onProgress("找到全量包: ${fullArc.name}", 0, 0)
+
+            // Phase 2: Parse metadata
+            val metaPair = parseMetadata(fullArc) ?: return BackupHookLocal.Result(false, "无法解析备份元数据")
+            val userHash = metaPair.first
+            val password = metaPair.second
+            if (password.isEmpty()) return BackupHookLocal.Result(false, "无法获取数据库密码")
+
+            // Find WeChat data path
+            val wxPaths = WeChatSourceResolver.findWxPaths()
+            val wxBasePath = wxPaths.firstOrNull { WeChatSourceResolver.extractUserHash(it) == userHash }
+                ?: wxPaths.firstOrNull()
+                ?: return BackupHookLocal.Result(false, "微信数据目录未找到")
+
+            // Find incremental archives for this user
+            val incrArchives = File(BackupEnv.backupDataDir).listFiles { f ->
+                f.name.startsWith("incr_attachments_") && f.name.endsWith(".tar.zst")
+            }?.sortedBy { it.lastModified() }?.filter { arc ->
+                try {
+                    NativeArchive.listTar(arc.absolutePath).contains(userHash)
+                } catch (_: Exception) { false }
+            } ?: emptyList()
+
+            val meta = RestoreMeta(userHash, password, fullArc, incrArchives, wxBasePath)
+
+            // Phase 3: Prepare environment
+            if (!prepareEnvironment(meta, callback)) {
+                cleanupWorkDir(callback)
+                return BackupHookLocal.Result(false, "环境准备失败")
+            }
+
+            // Phase 4: Restore database
+            if (!restoreDatabase(meta, callback)) {
+                cleanupWorkDir(callback)
+                return BackupHookLocal.Result(false, "数据库恢复失败")
+            }
+
+            // Phase 5: Restore attachments
+            restoreAttachments(meta, callback)
+
+            // Phase 6: Finalize (copy back, set permissions)
+            if (!finalizeDatabase(meta, callback)) {
+                cleanupWorkDir(callback)
+                return BackupHookLocal.Result(false, "数据库写入失败")
+            }
+
+            // Phase 7: Cleanup
+            cleanupWorkDir(callback)
+
+            callback?.onProgress("✅ 恢复完成", 0, 0)
+            BackupHookLocal.Result(true, "恢复成功: $userHash")
+        } catch (e: Exception) {
+            Log.e("wxhook:restore", "doRestore failed", e)
+            cleanupWorkDir(callback)
+            BackupHookLocal.Result(false, "恢复失败: ${e.message}")
+        }
+    }
 }
