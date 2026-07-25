@@ -43,6 +43,8 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
     private val configFile: File get() = File(filesDir, "settings_config.json")
 
     init {
+        // 同步加载远程配置，确保 UI 能读到正确的初始值
+        loadRemoteConfig()
         loadInitialData()
     }
 
@@ -56,8 +58,6 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
 
             val recordsText = withContext(Dispatchers.IO) { loadRecords() }
             _uiState.value = _uiState.value.copy(recordsText = recordsText)
-
-            loadRemoteConfig()
         }
     }
 

@@ -291,6 +291,34 @@ class SettingsActivity : AppCompatActivity() {
             root.addView(row)
         }
 
+        fun timePickerRow(key: String, label: String) {
+            val initial = cfg.optString(key, "")
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                setPadding(0, M3.dp(this@SettingsActivity, 8), 0, 0)
+            }
+            row.addView(MaterialTextView(this, null, com.google.android.material.R.attr.textAppearanceBodyLarge).apply {
+                text = label
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            val timeBtn = com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                text = if (initial.isNotEmpty()) initial else "选择时间"
+                insetTop = 0; insetBottom = 0
+                setOnClickListener {
+                    val parts = if (initial.contains(":")) initial.split(":").map { it.toIntOrNull() ?: 0 } else listOf(12, 0)
+                    android.app.TimePickerDialog(this@SettingsActivity, { _, h, m ->
+                        val time = "%02d:%02d".format(h, m)
+                        text = time
+                        save(key, time)
+                    }, parts[0], parts[1], true).show()
+                }
+            }
+            row.addView(timeBtn)
+            root.addView(row)
+        }
+
         fun actionRow(text: String, onClick: () -> Unit) {
             val card = com.google.android.material.card.MaterialCardView(this, null, com.google.android.material.R.attr.materialCardViewOutlinedStyle).apply {
                 layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -318,12 +346,12 @@ class SettingsActivity : AppCompatActivity() {
 
         // ═══ 定时同步 ═══
         root.addView(sectionTitle("⏱ 定时同步"))
-        editRow("sync_schedule_time", "同步时间", "", "如 06:00，留空=关闭")
+        timePickerRow("sync_schedule_time", "同步时间")
         editRow("sync_schedule_interval_days", "同步间隔（天）", "1", "1=每天,7=每周")
 
         // ═══ 定时备份 ═══
         root.addView(sectionTitle("⏱ 定时备份"))
-        editRow("backup_schedule_time", "备份时间", "", "如 03:00，留空=关闭")
+        timePickerRow("backup_schedule_time", "备份时间")
         editRow("backup_schedule_interval_days", "备份间隔（天）", "1", "1=每天,7=每周")
         toggleRow("backup_full_enabled", "全量备份", false)
     }

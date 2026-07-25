@@ -31,6 +31,7 @@ class ModuleActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var recordsText: TextView
     private lateinit var pathInput: TextInputEditText
+    private lateinit var syncSwitch: SwitchMaterial
     private val backupFinishReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(ctx: android.content.Context?, intent: Intent?) {
             if (intent?.action == com.nous.wxhook.service.BackupService.ACTION_FINISH) {
@@ -60,6 +61,7 @@ class ModuleActivity : AppCompatActivity() {
                     statusText.text = state.statusText.ifEmpty { "暂无状态信息" }
                     if (state.recordsText.isNotEmpty()) recordsText.text = state.recordsText
                     if (state.logText.isNotEmpty()) logText.text = state.logText
+                    if (::syncSwitch.isInitialized) syncSwitch.isChecked = state.remoteEnabled
                 }
             }
         }
@@ -192,10 +194,11 @@ class ModuleActivity : AppCompatActivity() {
             text = "启用同步"; textSize = 15f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         })
-        syncRow.addView(SwitchMaterial(this).apply {
+        syncSwitch = SwitchMaterial(this).apply {
             isChecked = viewModel.uiState.value.remoteEnabled
             setOnCheckedChangeListener { _, c -> viewModel.setRemoteEnabled(c) }
-        })
+        }
+        syncRow.addView(syncSwitch)
         syncCard.addView(syncRow)
 
         val syncBtns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
