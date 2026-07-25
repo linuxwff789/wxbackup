@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.nous.wxhook.backup.BackupEnv
+import com.nous.wxhook.backup.BackupManifest
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.sync.Syncer
 import java.io.File
@@ -43,6 +44,8 @@ class SyncService : Service() {
     private fun startSync() {
         try { startForeground(NOTIFICATION_ID, createNotification("同步中...")) } catch (_: Exception) {}
         Thread {
+            val startTime = System.currentTimeMillis()
+            val tag = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
             var result = "同步失败"
             try {
                 appendLog("同步服务启动")
@@ -50,12 +53,16 @@ class SyncService : Service() {
                 // Load config and check enabled
                 val config = Syncer.loadConfig()
                 if (!config.isValid) {
-                    result = "WebDAV未配置"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
+                    result = "WebDAV未配置"; appendLog(result); updateNotification(result); sendResult(false, result)
+                    BackupManifest.addRecord(BackupManifest.createRecord(tag, "sync", 0L, 0L, result, durationMs = System.currentTimeMillis() - startTime))
+                    return@Thread
                 }
                 val remoteCfgRaw = RootGateways.runQuiet("cat \"${BackupEnv.backupDir}/remote_config.json\" 2>/dev/null").ifBlank { "{}" }
                 val remoteCfg = org.json.JSONObject(remoteCfgRaw)
                 if (!remoteCfg.optBoolean("enabled", false)) {
-                    result = "同步未启用"; appendLog(result); updateNotification(result); sendResult(false, result); return@Thread
+                    result = "同步未启用"; appendLog(result); updateNotification(result); sendResult(false, result)
+                    BackupManifest.addRecord(BackupManifest.createRecord(tag, "sync", 0L, 0L, result, durationMs = System.currentTimeMillis() - startTime))
+                    return@Thread
                 }
 
                 // Sync via shared Syncer
@@ -67,6 +74,11 @@ class SyncService : Service() {
                 appendLog(result)
                 updateNotification(result)
                 sendResult(syncResult.success, result)
+
+                // Save sync record
+                BackupManifest.addRecord(BackupManifest.createRecord(tag, "sync",
+                    syncResult.uploaded.toLong(), syncResult.totalBytes, result,
+                    durationMs = System.currentTimeMillis() - startTime))
 
                 // Schedule next sync if interval configured
                 val settingsCfgRaw = try { File(filesDir, "settings_config.json").readText() } catch (_: Exception) { "{}" }
@@ -85,6 +97,7 @@ class SyncService : Service() {
                 appendLog(result)
                 updateNotification(result)
                 sendResult(false, result)
+                BackupManifest.addRecord(BackupManifest.createRecord(tag, "sync", 0L, 0L, result, durationMs = System.currentTimeMillis() - startTime))
                 // On error, retry after 30 min if interval is set
                 val intervalMin = try {
                     org.json.JSONObject(try { File(filesDir, "settings_config.json").readText() } catch (_: Exception) { "{}" }).optInt(INTERVAL_KEY, 0)
