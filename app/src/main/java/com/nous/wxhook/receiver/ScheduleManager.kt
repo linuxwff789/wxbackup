@@ -118,15 +118,19 @@ object ScheduleManager {
         // 设置重复闹钟（每天）
         val intervalMs = intervalDays * 24L * 60 * 60 * 1000L
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            // Android 6+ 用 setExactAndAllowWhileIdle 保证到点触发（省电模式下也可用）
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
-            // 注意：setRepeating 在 M+ 上不精确，所以我们只设第一个闹钟，
-            // 触发后在 ScheduleReceiver 中重新设置下一个
-            Log.i(TAG, "$tag 定时已设: ${"%02d:%02d".format(hour, minute)}, 首次 ${java.text.SimpleDateFormat(
-                "MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(triggerAt))}")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            // 用 setAlarmClock 设置闹钟，这是系统最高优先级的闹钟 API。
+            // 优势：
+            //   1. MIUI/EMUI/ColorOS 等国产 ROM 不会拦截（因为它会显示在状态栏闹钟图标）
+            //   2. 设备在 Doze 省电模式下也能准时唤醒
+            //   3. 不需要 SCHEDULE_EXACT_ALARM 权限
+            //   4. 重启手机后系统保留闹钟（不需要重新打开 App）
+            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerAt, null)
+            alarmManager.setAlarmClock(alarmClockInfo, pi)
+            Log.i(TAG, "$tag 定时已设 (setAlarmClock): ${"%02d:%02d".format(hour, minute)}, 首次 ${
+                java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(triggerAt))}")
         } else {
-            // 旧版本可以用 setRepeating
+            // 旧版本用 setRepeating
             alarmManager.setRepeating(AlarmManager.RTC_WAKEUP, triggerAt, intervalMs, pi)
             Log.i(TAG, "$tag 定时已设(重复): ${"%02d:%02d".format(hour, minute)}, 间隔${intervalDays}天")
         }
