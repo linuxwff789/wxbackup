@@ -596,7 +596,7 @@ class MessageAdapter(
                     "PRAGMA key='$key';PRAGMA cipher_compatibility=3;" +
                     "PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;" +
                     "PRAGMA cipher_use_hmac=OFF;" +
-                    "SELECT fileName,filePath,fileSize,status " +
+                    "SELECT fileFullPath, totalLen, status " +
                     "FROM appattach WHERE msgInfoId=${msg.msgSvrId} LIMIT 1;"
                 )
                 val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:" +
@@ -607,10 +607,11 @@ class MessageAdapter(
                 handler.post {
                     if (infoLine != null) {
                         val parts = infoLine.split("|")
-                        val fName = parts.getOrNull(0)?.take(50) ?: fileName?.take(50) ?: "文件"
-                        val filePath = parts.getOrNull(1) ?: ""
-                        val fileSize = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-                        val status = parts.getOrNull(3)?.toIntOrNull() ?: 0
+                        val fullPath = parts.getOrNull(0) ?: ""
+                        val filePath = fullPath  // 实际文件路径
+                        val fName = fileName?.take(50) ?: fullPath.substringAfterLast("/").take(50).ifEmpty { "文件" }
+                        val fileSize = parts.getOrNull(1)?.toLongOrNull() ?: 0L
+                        val status = parts.getOrNull(2)?.toIntOrNull() ?: 0
                         val sizeStr = if (fileSize > 0) {
                             when {
                                 fileSize > 1024 * 1024 -> "%.1f MB".format(fileSize.toFloat() / (1024 * 1024))
