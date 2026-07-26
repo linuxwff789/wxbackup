@@ -192,7 +192,7 @@ class ChatDetailActivity : AppCompatActivity() {
         Thread {
             try {
                 val key = "e9cd2ae"
-                val dbPath = activity.dbPath
+                val dbPath = this.dbPath
                 val tag = System.currentTimeMillis().toString()
                 val sqlFile = File(cacheDir, "sr_${tag}.sql")
                 val safeKw = keyword.replace("'", "''")
