@@ -44,7 +44,7 @@ class ChatDetailActivity : AppCompatActivity() {
     private lateinit var recyclerView: RecyclerView
     private var talker = ""
     private var nickname = ""
-    private var dbPath = "/sdcard/Download/EnMicroMsg.db"
+    var dbPath = "/sdcard/Download/EnMicroMsg.db"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
