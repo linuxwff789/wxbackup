@@ -15,6 +15,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.textview.MaterialTextView
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
+import com.nous.wxhook.receiver.ScheduleManager
 import com.nous.wxhook.ui.M3
 import org.json.JSONObject
 import java.io.File
@@ -257,6 +258,8 @@ class SettingsActivity : AppCompatActivity() {
 
         fun save(k: String, v: Any) {
             cfg.put(k, v); File(filesDir, "settings_config.json").writeText(cfg.toString())
+            // 更新定时调度
+            ScheduleManager.updateAll(this@SettingsActivity)
         }
 
         fun sectionTitle(text: String) = MaterialTextView(this, null, com.google.android.material.R.attr.textAppearanceTitleMedium).apply {

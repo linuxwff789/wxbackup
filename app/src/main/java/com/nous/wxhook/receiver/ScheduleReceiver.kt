@@ -33,6 +33,17 @@ class ScheduleReceiver : BroadcastReceiver() {
             ACTION_PING -> handlePing(context)
             ACTION_SCHEDULED_BACKUP -> handleScheduledBackup(context, intent)
             ACTION_SCHEDULED_SYNC -> handleScheduledSync(context)
+            ScheduleManager.ACTION_ALARM_BACKUP -> {
+                Log.i(TAG, "闹钟触发: 定时备份")
+                handleScheduledBackup(context, intent)
+                // 重新设置下一个闹钟（setExactAndAllowWhileIdle 是一次性的）
+                ScheduleManager.updateAll(context)
+            }
+            ScheduleManager.ACTION_ALARM_SYNC -> {
+                Log.i(TAG, "闹钟触发: 定时同步")
+                handleScheduledSync(context)
+                ScheduleManager.updateAll(context)
+            }
         }
     }
 

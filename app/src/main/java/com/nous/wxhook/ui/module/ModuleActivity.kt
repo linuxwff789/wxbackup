@@ -21,6 +21,7 @@ import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
 import com.nous.wxhook.db.BackupManager
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
+import com.nous.wxhook.receiver.ScheduleManager
 import com.nous.wxhook.ui.M3
 import kotlinx.coroutines.launch
 
@@ -46,6 +47,7 @@ class ModuleActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         com.nous.wxhook.util.SetupManager.setup(this)
         BackupHookLocal.init(this)
+        ScheduleManager.updateAll(this)
         registerReceiver(backupFinishReceiver,
             android.content.IntentFilter(com.nous.wxhook.service.BackupService.ACTION_FINISH),
             RECEIVER_NOT_EXPORTED)
