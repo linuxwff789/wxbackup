@@ -42,6 +42,8 @@ class SyncService : Service() {
     }
 
     private fun startSync() {
+        // 定时闹钟可在未打开界面时冷启动服务，必须先使用本应用可写的私有目录。
+        BackupEnv.filesDirPath = filesDir.absolutePath
         try { startForeground(NOTIFICATION_ID, createNotification("同步中...")) } catch (_: Exception) {}
         Thread {
             val startTime = System.currentTimeMillis()

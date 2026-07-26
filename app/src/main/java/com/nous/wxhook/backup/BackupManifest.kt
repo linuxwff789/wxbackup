@@ -143,7 +143,7 @@ object BackupManifest {
         }
     }
 
-    fun addRecord(record: JSONObject) {
+    fun addRecord(record: JSONObject): Boolean = try {
         val dir = BackupEnv.backupDir
         BackupEnv.su("mkdir -p \"$dir\"")
         val f = File(dir, RECORDS_FILE)
@@ -156,6 +156,8 @@ object BackupManifest {
         val tmp = File(BackupEnv.filesDirForWrite(), RECORDS_FILE)
         tmp.writeText(arr.toString())
         BackupEnv.suCopy(tmp, f)
+    } catch (_: Exception) {
+        false
     }
 
     // ── Helpers ──
