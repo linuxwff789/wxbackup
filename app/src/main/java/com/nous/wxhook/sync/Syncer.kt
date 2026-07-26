@@ -115,9 +115,9 @@ object Syncer {
         val all = RootGateways.runQuiet(
             "find ${BackupEnv.backupDataDir} -maxdepth 2 -type f ! -path '*/tmp/*' 2>/dev/null"
         ).lines().filter { it.isNotBlank() }
-        val archives = all.filter { it.endsWith(".tar.zst") }
+        val archives = all.filter { BackupEnv.isArchiveFile(it) }
             .sortedByDescending { File(it).lastModified() }
-        val others = all.filter { !it.endsWith(".tar.zst") }.sorted()
+        val others = all.filter { !BackupEnv.isArchiveFile(it) }.sorted()
         return archives + others
     }
 

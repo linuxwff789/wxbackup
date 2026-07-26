@@ -37,6 +37,7 @@ object BackupOrchestrator {
             var totalFiles = 0L
             var totalSize = 0L
             val databaseSources = mutableListOf<NativeArchivePlan.Source>()
+            val fullDbStates = mutableListOf<Triple<String, Long, Long>>()
 
             // 1. Find WeChat users
             val wxPaths = WeChatSourceResolver.findWxPaths()
@@ -74,7 +75,7 @@ object BackupOrchestrator {
                     RootGateways.run("rm -f $sqlScript", 5_000)
                     result.stdout.lines().lastOrNull { it.all { c -> c.isDigit() } }?.toLong() ?: 0L
                 }.getOrDefault(0L)
-                BackupManifest.saveDbState(userHash, tag, 0L, maxRowId)
+                fullDbStates += Triple(userHash, 0L, maxRowId)
             }
 
             // 3. Scan source files for manifest
@@ -82,33 +83,42 @@ object BackupOrchestrator {
                 FileManifest.scanWeChatAttachments(wxBasePath, WeChatSourceResolver.extractUserHash(wxBasePath), ATT_DIRS)
             }
             val manifest = FileManifest.toManifest(sourceFiles, tag)
-            FileManifest.save(dir, manifest)
-            // Per-user manifest
+            val pendingFullUserManifests = mutableListOf<Pair<File, JSONObject>>()
+            val fullManifestSnapshots = mutableMapOf<String, String>()
+            // Build archive snapshots now, but commit manifests only after verification.
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val userDir = File(BackupEnv.backupDataDir, hash)
-                RootGateways.mkdirs(userDir.absolutePath)
-                val userFiles = sourceFiles.filter { it.path.startsWith("$hash/") }
-                FileManifest.save(userDir, FileManifest.toManifest(userFiles, tag))
+                val userManifest = FileManifest.toManifest(sourceFiles.filter { it.path.startsWith("$hash/") }, tag)
+                pendingFullUserManifests += userDir to userManifest
+                val snapshotPath = "${BackupEnv.backupDataDir}/tmp/${tag}_${hash}/file_manifest.json"
+                RootGateways.mkdirs(File(snapshotPath).parent ?: return BackupHookLocal.Result(false, "创建清单快照目录失败"))
+                if (!RootGateways.writeFile(snapshotPath, userManifest.toString())) {
+                    return BackupHookLocal.Result(false, "写入清单快照失败")
+                }
+                fullManifestSnapshots[hash] = snapshotPath
             }
             totalFiles += sourceFiles.size
 
-            // 4. Save config and state
+            // 4. Save config needed by the archive. Backup state is committed only
+            // after the archive has been written and verified.
             BackupManifest.saveDbConfig()
-            BackupManifest.saveState(tag, totalFiles, totalSize)
-            BackupManifest.addRecord(
-                BackupManifest.createRecord(tag, "full", totalFiles, totalSize, "全量备份完成", durationMs = System.currentTimeMillis() - startTime)
-            )
 
             // 5. Package sources into one tar.zst
-            val pkgFile = File(dir, "wxbackup_full_$tag.tar.zst")
+            val pkgFile = File(dir, "wxbackup_full_$tag${BackupEnv.archiveExtension()}")
             val tmpPkg = pkgFile.absolutePath
             val sources = mutableListOf<NativeArchivePlan.Source>()
             sources += databaseSources
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                sources += NativeArchivePlan.Source(File(BackupEnv.backupDataDir, "$hash/db_state.json").absolutePath, "$hash/db_state.json")
-                sources += NativeArchivePlan.Source(File(BackupEnv.backupDataDir, "$hash/file_manifest.json").absolutePath, "$hash/file_manifest.json")
+                val (_, fromRowId, toRowId) = fullDbStates.first { it.first == hash }
+                val stateSnapshotPath = "${BackupEnv.backupDataDir}/tmp/${tag}_${hash}/db_state.json"
+                RootGateways.mkdirs(File(stateSnapshotPath).parent ?: return BackupHookLocal.Result(false, "创建状态快照目录失败"))
+                if (!RootGateways.writeFile(stateSnapshotPath, BackupManifest.dbStateSnapshot(hash, tag, fromRowId, toRowId, incremental = false).toString())) {
+                    return BackupHookLocal.Result(false, "写入数据库状态快照失败")
+                }
+                sources += NativeArchivePlan.Source(stateSnapshotPath, "$hash/db_state.json")
+                sources += NativeArchivePlan.Source(fullManifestSnapshots[hash] ?: return BackupHookLocal.Result(false, "缺少清单快照"), "$hash/file_manifest.json")
                 sources += NativeArchivePlan.Source(File(BackupEnv.backupDir, "db_config.json").absolutePath, "$hash/db_config.json")
             }
             // Add files from scan results directly
@@ -140,6 +150,22 @@ object BackupOrchestrator {
                 return BackupHookLocal.Result(false, "打包失败: native=$writeResult verify=$verifyResult")
             }
             RootGateways.delete(pairsFile)
+            totalSize += pkgSize
+
+            // Commit cursors and visible backup state only after a verified archive.
+            FileManifest.save(dir, manifest)
+            for ((userDir, userManifest) in pendingFullUserManifests) {
+                FileManifest.save(userDir, userManifest)
+            }
+            for ((userHash, fromRowId, maxRowId) in fullDbStates) {
+                if (!BackupManifest.saveDbState(userHash, tag, fromRowId, maxRowId)) {
+                    return BackupHookLocal.Result(false, "保存数据库备份状态失败")
+                }
+            }
+            BackupManifest.saveState(tag, totalFiles, totalSize)
+            BackupManifest.addRecord(
+                BackupManifest.createRecord(tag, "full", totalFiles, totalSize, "全量备份完成", durationMs = System.currentTimeMillis() - startTime)
+            )
 
             // 6. Cloud sync
             cloudSync(callback)
@@ -167,6 +193,7 @@ object BackupOrchestrator {
 
             var incrFrom = 0L
             var incrTo = 0L
+            val pendingDbStates = mutableListOf<Triple<String, Long, Long>>()
 
             // Collect all incr sources (SQL, config, attachments)
             val incrSources = mutableListOf<NativeArchivePlan.Source>()
@@ -203,10 +230,10 @@ object BackupOrchestrator {
                             totalFiles++; newFiles++
                             incrSources += NativeArchivePlan.Source(tmpSql, "$userHash/$incrSqlName")
                             callback?.onProgress("[${userHash}] DB增量: ${incrTo - incrFrom}条新消息", totalFiles, totalSize)
+                            pendingDbStates += Triple(userHash, incrFrom, incrTo)
                         } else {
                             callback?.onProgress("[${userHash}] DB增量文件无效", totalFiles, totalSize)
                         }
-                        BackupManifest.updateDbState(userHash, tag, incrFrom, incrTo)
                     } else {
                         callback?.onProgress("[${userHash}] DB增量输出为空", totalFiles, totalSize)
                     }
@@ -245,8 +272,10 @@ object BackupOrchestrator {
                 }
             }
 
-            // 3. Update per-user manifest with full current state, then package
+            // 3. Build updated manifests, but do not commit them until the archive
+            // is verified; otherwise a failed archive would make files look backed up.
             val allCurrentFiles = mutableListOf<FileEntry>()
+            val pendingUserManifests = mutableListOf<Pair<File, JSONObject>>()
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val userDir = File(BackupEnv.backupDataDir, hash)
@@ -261,7 +290,7 @@ object BackupOrchestrator {
                     val userUpdatedManifest = FileManifest.toManifest(userCurrentFiles, tag)
                     userUpdatedManifest.put("incrFrom", incrFrom)
                     userUpdatedManifest.put("incrTo", incrTo)
-                    FileManifest.save(userDir, userUpdatedManifest)
+                    pendingUserManifests += userDir to userUpdatedManifest
 
                     val incrFiles = userDiff.added + userDiff.modified
                     if (incrFiles.isNotEmpty()) {
@@ -277,14 +306,24 @@ object BackupOrchestrator {
                 }
             }
 
-            // Update global manifest
             val globalManifest = FileManifest.toManifest(allCurrentFiles, tag)
-            FileManifest.save(dir, globalManifest)
 
             // 3b. Package incremental changes via JNI
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
-                incrSources += NativeArchivePlan.Source(File(BackupEnv.backupDataDir, "${userHash}/db_state.json").absolutePath, "$userHash/db_state.json")
+                val pendingState = pendingDbStates.firstOrNull { it.first == userHash }
+                val stateSource = if (pendingState != null) {
+                    val (_, fromRowId, toRowId) = pendingState
+                    val path = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/db_state.json"
+                    RootGateways.mkdirs(File(path).parent ?: return BackupHookLocal.Result(false, "创建状态快照目录失败"))
+                    if (!RootGateways.writeFile(path, BackupManifest.dbStateSnapshot(userHash, tag, fromRowId, toRowId, incremental = true).toString())) {
+                        return BackupHookLocal.Result(false, "写入数据库状态快照失败")
+                    }
+                    path
+                } else {
+                    File(BackupEnv.backupDataDir, "${userHash}/db_state.json").absolutePath
+                }
+                incrSources += NativeArchivePlan.Source(stateSource, "$userHash/db_state.json")
                 incrSources += NativeArchivePlan.Source(File(BackupEnv.backupDir, "db_config.json").absolutePath, "$userHash/db_config.json")
                 val incrManifestPath = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/file_manifest.json"
                 if (RootGateways.exists(incrManifestPath)) {
@@ -303,23 +342,35 @@ object BackupOrchestrator {
                 }
             }
             if (incrSources.isNotEmpty()) {
-                val incrArchive = File(dir, "incr_attachments_${tag}.tar.zst")
+                val incrArchive = File(dir, "incr_attachments_${tag}${BackupEnv.archiveExtension()}")
                 val tmpPkg = incrArchive.absolutePath
                 val plan = NativeArchivePlan(tmpPkg, incrSources)
                 val pairsFile = File(dir, "incr_pairs.txt").absolutePath
                 val localPairs = File(BackupEnv.filesDirPath, "incr_pairs.txt")
                 localPairs.writeText(plan.toPairsContent())
-                if (!RootGateways.copy(localPairs.absolutePath, pairsFile) || RootGateways.writeTarZstd(tmpPkg, pairsFile, BackupEnv.useZstd()) != 0) {
-                    localPairs.delete()
-                    return BackupHookLocal.Result(false, "增量打包失败")
-                }
+                val copied = RootGateways.copy(localPairs.absolutePath, pairsFile)
                 localPairs.delete()
+                val writeResult = if (copied) RootGateways.writeTarZstd(tmpPkg, pairsFile, BackupEnv.useZstd()) else -1
+                val verifyResult = if (writeResult == 0) RootGateways.verifyTarZstd(tmpPkg) else -1
                 RootGateways.delete(pairsFile)
                 val pkgSize = BackupEnv.backupSize(tmpPkg)
+                if (writeResult != 0 || verifyResult <= 0 || pkgSize <= 0L) {
+                    RootGateways.delete(tmpPkg)
+                    return BackupHookLocal.Result(false, "增量打包失败: native=$writeResult verify=$verifyResult")
+                }
                 if (pkgSize > 0L) {
                     totalFiles++; totalSize += pkgSize; newFiles++
                     callback?.onProgress("增量附件: ${incrArchive.name}", totalFiles, totalSize)
                 }
+            }
+
+            // Commit manifests and DB cursors only after the incremental archive is verified.
+            for ((userDir, manifest) in pendingUserManifests) {
+                FileManifest.save(userDir, manifest)
+            }
+            FileManifest.save(dir, globalManifest)
+            for ((userHash, fromRowId, toRowId) in pendingDbStates) {
+                BackupManifest.updateDbState(userHash, tag, fromRowId, toRowId)
             }
 
             // Save incremental SQL files
@@ -436,8 +487,8 @@ object BackupOrchestrator {
             val wxPaths = WeChatSourceResolver.findWxPaths()
             if (wxPaths.isEmpty()) return "微信未运行，请先打开微信再重建"
             callback?.onProgress("扫描备份文件...", 0, 0)
-            val fullArchives = RootGateways.runQuiet("ls ${BackupEnv.backupDataDir}/wxbackup_full_*.tar.zst 2>/dev/null").lines().filter { it.isNotBlank() }.sorted()
-            val incrArchives = RootGateways.runQuiet("ls ${BackupEnv.backupDataDir}/incr_attachments_*.tar.zst 2>/dev/null").lines().filter { it.isNotBlank() }.sorted()
+            val fullArchives = RootGateways.runQuiet("find ${BackupEnv.backupDataDir} -maxdepth 1 -type f \\( -name 'wxbackup_full_*.tar.zst' -o -name 'wxbackup_full_*.tar.gz' \\) 2>/dev/null").lines().filter { it.isNotBlank() }.sorted()
+            val incrArchives = RootGateways.runQuiet("find ${BackupEnv.backupDataDir} -maxdepth 1 -type f \\( -name 'incr_attachments_*.tar.zst' -o -name 'incr_attachments_*.tar.gz' \\) 2>/dev/null").lines().filter { it.isNotBlank() }.sorted()
             callback?.onProgress("全量: ${fullArchives.size}个, 增量: ${incrArchives.size}个", 0, 0)
             data class ChainPoint(val from: Long, val to: Long, val time: Long, val name: String, val isFull: Boolean, val hash: String)
             val centralizedStates = mutableMapOf<String, JSONObject>()
@@ -584,7 +635,7 @@ object BackupOrchestrator {
     /** Scan backup directory for full archives and return candidates sorted by time. */
     private fun scanBackupArchives(): List<File> {
         val dir = File(BackupEnv.backupDataDir)
-        val files = dir.listFiles { f -> f.name.startsWith("wxbackup_full_") && f.name.endsWith(".tar.zst") }
+        val files = dir.listFiles { f -> f.name.startsWith("wxbackup_full_") && BackupEnv.isArchiveFile(f.name) }
         return files?.sortedBy { it.lastModified() } ?: emptyList()
     }
 
@@ -686,6 +737,7 @@ object BackupOrchestrator {
                 appendLine("PWD='$pwd'")
                 appendLine("DUMP=\"$workDir/$dumpName\"")
                 appendLine("INCR=\"$workDir/incr.sql\"")
+                appendLine("touch \"\$INCR\"")
                 appendLine("")
                 // Use heredoc inside the shell script to pipe SQL
                 appendLine("\$SQLCIPHER \"\$DEC_DB\" <<'ENDSQL'")
@@ -697,7 +749,7 @@ object BackupOrchestrator {
                 appendLine(".read \"\$DUMP\"")
                 appendLine("")
                 appendLine("-- Apply incremental if exists")
-                appendLine(".import \"\$INCR\" IF EXISTS")
+                appendLine(".read \"\$INCR\"")
                 appendLine("")
                 appendLine(".clone \"\$OUT_DB\"")
                 appendLine(".quit")
@@ -740,11 +792,11 @@ object BackupOrchestrator {
             RootGateways.run("rm -rf \"$workDir\" && mkdir -p \"$workDir\"", 10_000)
 
             // Extract full archive via tar
-            RootGateways.run("tar -I zstd -xf \"${meta.fullArchive.absolutePath}\" -C \"$workDir\" 2>/dev/null", 120_000)
+            RootGateways.run("${BackupEnv.tarExtractCommand(meta.fullArchive.absolutePath, workDir)} 2>/dev/null", 120_000)
 
             // Extract incremental archives
             for (incrArc in meta.incrArchives) {
-                RootGateways.run("tar -I zstd -xf \"${incrArc.absolutePath}\" -C \"$workDir\" 2>/dev/null", 120_000)
+                RootGateways.run("${BackupEnv.tarExtractCommand(incrArc.absolutePath, workDir)} 2>/dev/null", 120_000)
             }
 
             // Copy attachment dirs to WeChat data dir
@@ -832,7 +884,7 @@ object BackupOrchestrator {
 
             // Find incremental archives for this user
             val incrArchives = File(BackupEnv.backupDataDir).listFiles { f ->
-                f.name.startsWith("incr_attachments_") && f.name.endsWith(".tar.zst")
+                f.name.startsWith("incr_attachments_") && BackupEnv.isArchiveFile(f.name)
             }?.sortedBy { it.lastModified() }?.filter { arc ->
                 try {
                     NativeArchive.listTar(arc.absolutePath).contains(userHash)

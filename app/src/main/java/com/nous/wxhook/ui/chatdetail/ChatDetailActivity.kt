@@ -29,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap
 private fun su(cmd: String): String = RootGateways.runQuiet(cmd)
 
 data class ChatMessage(
+    val msgId: Long,
     val msgSvrId: Long,
     val type: Int,
     val content: String?,
@@ -129,7 +130,7 @@ class ChatDetailActivity : AppCompatActivity() {
                     "PRAGMA key='$key';PRAGMA cipher_compatibility=3;" +
                     "PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;" +
                     "PRAGMA cipher_use_hmac=OFF;" +
-                    "SELECT msgSvrId,type,replace(replace(content,char(10),' '),'|','/')," +
+                    "SELECT localId,msgSvrId,type,replace(replace(content,char(10),' '),'|','/')," +
                     "createTime,isSend,imgPath " +
                     "FROM message WHERE talker='$safeTalker' ORDER BY createTime DESC LIMIT 500;"
                 )
@@ -154,15 +155,16 @@ class ChatDetailActivity : AppCompatActivity() {
                 val msgs = mutableListOf<ChatMessage>()
                 for (line in lines) {
                     val p = line.split("|")
-                    if (p.size >= 6 && !p[0].startsWith("ok")) {
+                    if (p.size >= 7 && !p[0].startsWith("ok")) {
                         msgs.add(
                             ChatMessage(
                                 p[0].toLongOrNull() ?: 0L,
-                                p[1].toIntOrNull() ?: 0,
-                                p[2],
-                                p[3].toLongOrNull() ?: 0L,
-                                p[4] == "1",
-                                p.getOrNull(5)
+                                p[1].toLongOrNull() ?: 0L,
+                                p[2].toIntOrNull() ?: 0,
+                                p[3],
+                                p[4].toLongOrNull() ?: 0L,
+                                p[5] == "1",
+                                p.getOrNull(6)
                             )
                         )
                     }
@@ -201,7 +203,7 @@ class ChatDetailActivity : AppCompatActivity() {
                     "PRAGMA key='$key';PRAGMA cipher_compatibility=3;" +
                     "PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;" +
                     "PRAGMA cipher_use_hmac=OFF;" +
-                    "SELECT msgSvrId,type,replace(replace(content,char(10),' '),'|','/')," +
+                    "SELECT localId,msgSvrId,type,replace(replace(content,char(10),' '),'|','/')," +
                     "createTime,isSend,imgPath " +
                     "FROM message WHERE talker='$safeTalker' AND content LIKE '%$safeKw%' " +
                     "ORDER BY createTime DESC LIMIT 200;"
@@ -213,15 +215,16 @@ class ChatDetailActivity : AppCompatActivity() {
                 val msgs = mutableListOf<ChatMessage>()
                 for (line in p.lines()) {
                     val pt = line.split("|")
-                    if (pt.size >= 6 && !pt[0].startsWith("ok")) {
+                    if (pt.size >= 7 && !pt[0].startsWith("ok")) {
                         msgs.add(
                             ChatMessage(
                                 pt[0].toLongOrNull() ?: 0L,
-                                pt[1].toIntOrNull() ?: 0,
-                                pt[2],
-                                pt[3].toLongOrNull() ?: 0L,
-                                pt[4] == "1",
-                                pt.getOrNull(5)
+                                pt[1].toLongOrNull() ?: 0L,
+                                pt[2].toIntOrNull() ?: 0,
+                                pt[3],
+                                pt[4].toLongOrNull() ?: 0L,
+                                pt[5] == "1",
+                                pt.getOrNull(6)
                             )
                         )
                     }
@@ -597,7 +600,7 @@ class MessageAdapter(
                     "PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;" +
                     "PRAGMA cipher_use_hmac=OFF;" +
                     "SELECT fileFullPath, totalLen, status " +
-                    "FROM appattach WHERE msgInfoId=${msg.msgSvrId} LIMIT 1;"
+                    "FROM appattach WHERE msgInfoId=${msg.msgId} LIMIT 1;"
                 )
                 val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:" +
                          "/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
@@ -646,14 +649,15 @@ class MessageAdapter(
         return nickCache.getOrPut(wxid) {
             val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:" +
                      "/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
-            val d = "/sdcard/Download/EnMicroMsg.db"
+            val d = activity.dbPath
             try {
                 val f = File(cacheDir, "nn_${wxid.hashCode()}.sql")
+                val safeWxid = wxid.replace("'", "''")
                 f.writeText(
                     "PRAGMA key='e9cd2ae';PRAGMA cipher_compatibility=3;" +
                     "PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;" +
                     "PRAGMA cipher_use_hmac=OFF;" +
-                    "SELECT nickname FROM rcontact WHERE username='$wxid' LIMIT 1;"
+                    "SELECT nickname FROM rcontact WHERE username='$safeWxid' LIMIT 1;"
                 )
                 val p = su("$sc '$d' < '${f.absolutePath}'")
                 p.lines().lastOrNull { it.isNotBlank() && !it.startsWith("ok") }?.trim() ?: wxid

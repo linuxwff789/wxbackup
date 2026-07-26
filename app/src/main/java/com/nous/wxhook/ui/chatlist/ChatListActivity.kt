@@ -172,7 +172,12 @@ class ChatListActivity : AppCompatActivity() {
                     val sqlDumpPath = "/data/local/tmp/browse_dump_${tag}.sql"
                     // 用手管命令从 tar.zst 提取 .dump 到文件（不经过 Java 内存）
                     RootGateways.run("rm -f $sqlDumpPath 2>/dev/null")
-                    RootGateways.run("tar -I zstd -x -f '${opt.path}' --to-stdout '6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql' > $sqlDumpPath 2>/dev/null")
+                    val extractCommand = if (opt.path.endsWith(".tar.gz")) {
+                        "tar -xzf '${opt.path}' --to-stdout '6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql'"
+                    } else {
+                        "tar -I zstd -x -f '${opt.path}' --to-stdout '6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql'"
+                    }
+                    RootGateways.run("$extractCommand > $sqlDumpPath 2>/dev/null")
                     if (RootGateways.runQuiet("test -s '$sqlDumpPath' && echo 1").trim() != "1") {
                         post { emptyView.text = "备份不含数据库"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE }; return@Thread
                     }
@@ -217,7 +222,12 @@ class ChatListActivity : AppCompatActivity() {
                 val baseDb = File(cacheDir, "browse_${baseTag}.db")
                 val sqlDumpPath = "/data/local/tmp/browse_dump_${baseTag}.sql"
                 RootGateways.run("rm -f $sqlDumpPath 2>/dev/null")
-                RootGateways.run("tar -I zstd -x -f '$baseArchive' --to-stdout '6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql' > $sqlDumpPath 2>/dev/null")
+                val extractCommand = if (baseArchive.endsWith(".tar.gz")) {
+                    "tar -xzf '$baseArchive' --to-stdout '6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql'"
+                } else {
+                    "tar -I zstd -x -f '$baseArchive' --to-stdout '6d1f34a5edc49e8b6d238141b2d004f3/EnMicroMsg_baseline.sql'"
+                }
+                RootGateways.run("$extractCommand > $sqlDumpPath 2>/dev/null")
                 if (RootGateways.runQuiet("test -s '$sqlDumpPath' && echo 1").trim() != "1") {
                     post { emptyView.text = "基线备份不含数据库"; emptyView.visibility = View.VISIBLE; progressBar.visibility = View.GONE }; return@Thread
                 }

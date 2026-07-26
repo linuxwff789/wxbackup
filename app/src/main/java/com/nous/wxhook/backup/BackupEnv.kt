@@ -32,6 +32,17 @@ object BackupEnv {
 
     fun ext(): String = if (useZstd()) ".sql.zst" else ".sql.gz"
 
+    fun archiveExtension(): String = if (useZstd()) ".tar.zst" else ".tar.gz"
+
+    fun isArchiveFile(name: String): Boolean = name.endsWith(".tar.zst") || name.endsWith(".tar.gz")
+
+    fun tarExtractCommand(archivePath: String, outputDir: String): String =
+        if (archivePath.endsWith(".tar.gz")) {
+            "tar -xzf \"$archivePath\" -C \"$outputDir\""
+        } else {
+            "tar -I zstd -xf \"$archivePath\" -C \"$outputDir\""
+        }
+
     // ── Root 操作 ──
 
     fun su(cmd: String, timeoutMs: Long = 60_000) =

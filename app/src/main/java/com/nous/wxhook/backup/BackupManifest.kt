@@ -44,6 +44,17 @@ object BackupManifest {
         return all.optJSONObject(userHash) ?: JSONObject()
     }
 
+    /** Build a db-state entry for an archive without committing it to live state. */
+    fun dbStateSnapshot(userHash: String, tag: String, fromRowId: Long, toRowId: Long, incremental: Boolean): JSONObject {
+        val current = JSONObject(loadDbState(userHash).toString())
+        current.put("lastBackupTag", tag)
+        current.put("lastBackupTime", System.currentTimeMillis())
+        current.put("lastMessageRowIdFrom", fromRowId)
+        if (toRowId > 0) current.put("lastMessageRowId", toRowId)
+        if (incremental) current.put("incrCount", current.optInt("incrCount", 0) + 1)
+        return current
+    }
+
     /** Update db_state during incremental backup. */
     fun updateDbState(userHash: String, tag: String, fromRowId: Long, toRowId: Long) {
         val f = dbStateFile()
@@ -87,20 +98,24 @@ object BackupManifest {
     // ── DB Config ──
 
     fun saveDbConfig() {
-        val config = JSONObject().apply {
+        val target = File(BackupEnv.backupDir, DB_CONFIG_FILE)
+        val existing = try {
+            JSONObject(BackupEnv.backupRead(target.absolutePath))
+        } catch (_: Exception) { JSONObject() }
+        val config = existing.apply {
             put("password", ArchiveService.getDbPassword())
             put("savedAt", System.currentTimeMillis())
         }
         val tmp = File(BackupEnv.filesDirForWrite(), DB_CONFIG_FILE)
         tmp.writeText(config.toString())
-        BackupEnv.suCopy(tmp, File(BackupEnv.backupDir, DB_CONFIG_FILE))
+        BackupEnv.suCopy(tmp, target)
     }
 
     fun setCompressionUseZstd(enabled: Boolean) {
         val cfg = try {
             JSONObject(BackupEnv.backupRead(File(BackupEnv.backupDir, DB_CONFIG_FILE).absolutePath))
         } catch (_: Exception) { JSONObject() }
-        cfg.put("zstd", enabled)
+        cfg.put("compression", if (enabled) "zstd" else "gzip")
         BackupEnv.backupWrite(File(BackupEnv.backupDir, DB_CONFIG_FILE).absolutePath, cfg.toString())
     }
 
