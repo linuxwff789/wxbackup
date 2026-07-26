@@ -108,12 +108,12 @@ object Syncer {
     }
 
     /**
-     * Scan backupDataDir for all files (archives + metadata), excluding tmp.
-     * Returns list of absolute paths, archives first then sorted.
+     * Scan top-level backup packages and metadata. Per-user state files are already
+     * embedded in archives; syncing them separately would flatten equal file names.
      */
     fun scanArchives(): List<String> {
         val all = RootGateways.runQuiet(
-            "find ${BackupEnv.backupDataDir} -maxdepth 2 -type f ! -path '*/tmp/*' 2>/dev/null"
+            "find ${BackupEnv.backupDataDir} -maxdepth 1 -type f 2>/dev/null"
         ).lines().filter { it.isNotBlank() }
         val archives = all.filter { BackupEnv.isArchiveFile(it) }
             .sortedByDescending { File(it).lastModified() }
