@@ -130,7 +130,7 @@ class ChatDetailActivity : AppCompatActivity() {
                     "PRAGMA key='$key';PRAGMA cipher_compatibility=3;" +
                     "PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;" +
                     "PRAGMA cipher_use_hmac=OFF;" +
-                    "SELECT localId,msgSvrId,type,replace(replace(content,char(10),' '),'|','/')," +
+                    "SELECT msgId,msgSvrId,type,replace(replace(content,char(10),' '),'|','/')," +
                     "createTime,isSend,imgPath " +
                     "FROM message WHERE talker='$safeTalker' ORDER BY createTime DESC LIMIT 500;"
                 )
@@ -203,7 +203,7 @@ class ChatDetailActivity : AppCompatActivity() {
                     "PRAGMA key='$key';PRAGMA cipher_compatibility=3;" +
                     "PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;" +
                     "PRAGMA cipher_use_hmac=OFF;" +
-                    "SELECT localId,msgSvrId,type,replace(replace(content,char(10),' '),'|','/')," +
+                    "SELECT msgId,msgSvrId,type,replace(replace(content,char(10),' '),'|','/')," +
                     "createTime,isSend,imgPath " +
                     "FROM message WHERE talker='$safeTalker' AND content LIKE '%$safeKw%' " +
                     "ORDER BY createTime DESC LIMIT 200;"
