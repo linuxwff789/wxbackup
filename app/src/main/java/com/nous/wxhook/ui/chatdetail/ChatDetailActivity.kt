@@ -192,7 +192,7 @@ class ChatDetailActivity : AppCompatActivity() {
         Thread {
             try {
                 val key = "e9cd2ae"
-                val dbPath = "/sdcard/Download/EnMicroMsg.db"
+                val dbPath = this.dbPath
                 val tag = System.currentTimeMillis().toString()
                 val sqlFile = File(cacheDir, "sr_${tag}.sql")
                 val safeKw = keyword.replace("'", "''")
@@ -552,8 +552,9 @@ class MessageAdapter(
                     else -> tv.text = parsed.content?.take(500) ?: "(空)"
                 }
             }
-            10000 -> { tv.text = parsed.content?.take(500) ?: ""; tv.setTextColor(M3.onSurfaceVariant(ctx)); tv.textSize = 12f }
-            10002 -> { tv.text = "[对方撤回了一条消息]"; tv.setTextColor(M3.onSurfaceVariant(ctx)) }
+            // 注意: 10000 & 0xFF = 16, 10002 & 0xFF = 18
+            16 -> { tv.text = parsed.content?.take(500) ?: ""; tv.setTextColor(M3.onSurfaceVariant(ctx)); tv.textSize = 12f }
+            18 -> { tv.text = "[对方撤回了一条消息]"; tv.setTextColor(M3.onSurfaceVariant(ctx)) }
             50 -> tv.text = "[动画表情]"
             else -> tv.text = msg.content?.take(300)?.ifEmpty { "(类型${msg.type})" } ?: "(空)"
         }
@@ -589,7 +590,6 @@ class MessageAdapter(
         Thread {
             try {
                 val key = "e9cd2ae"
-                val dbPath = "/sdcard/Download/EnMicroMsg.db"
                 val tag = System.currentTimeMillis().toString()
                 val sqlFile = File(cacheDir, "fi_${tag}.sql")
                 sqlFile.writeText(
@@ -601,7 +601,7 @@ class MessageAdapter(
                 )
                 val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:" +
                          "/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
-                val p = su("$sc '$dbPath' < '${sqlFile.absolutePath}'")
+                val p = su("$sc '${this@ChatDetailActivity.dbPath}' < '${sqlFile.absolutePath}'")
                 sqlFile.delete()
                 val infoLine = p.lines().lastOrNull { it.isNotBlank() && !it.startsWith("ok") }
                 handler.post {
@@ -745,8 +745,9 @@ class MessageAdapter(
             MessageParser.APP_RED_PACKET -> "🧧 红包"
             else -> "📦 ${parsed.typeDesc}"
         }
-        10000 -> "ℹ️ 系统"
-        10002 -> "↩️ 撤回"
+        // 注意: 10000 & 0xFF = 16, 10002 & 0xFF = 18
+        16 -> "ℹ️ 系统"
+        18 -> "↩️ 撤回"
         else -> "❓ 类型${msg.type}"
     }
 
