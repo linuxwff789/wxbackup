@@ -192,7 +192,7 @@ class ChatDetailActivity : AppCompatActivity() {
         Thread {
             try {
                 val key = "e9cd2ae"
-                val dbPath = this.dbPath
+                val dbPath = activity.dbPath
                 val tag = System.currentTimeMillis().toString()
                 val sqlFile = File(cacheDir, "sr_${tag}.sql")
                 val safeKw = keyword.replace("'", "''")
@@ -601,7 +601,7 @@ class MessageAdapter(
                 )
                 val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:" +
                          "/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
-                val p = su("$sc '${this@ChatDetailActivity.dbPath}' < '${sqlFile.absolutePath}'")
+                val p = su("$sc '${activity.dbPath}' < '${sqlFile.absolutePath}'")
                 sqlFile.delete()
                 val infoLine = p.lines().lastOrNull { it.isNotBlank() && !it.startsWith("ok") }
                 handler.post {
