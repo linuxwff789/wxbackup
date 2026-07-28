@@ -25,6 +25,7 @@ class MainActivity : AppCompatActivity() {
             Triple("备份管理", "📦", "全量/增量备份与恢复") to com.nous.wxhook.ui.module.ModuleActivity::class.java,
             Triple("数据合并", "🔗", "合并多个备份文件") to com.nous.wxhook.ui.merge.MergeActivity::class.java,
             Triple("云同步", "☁️", "WebDAV / 阿里云盘同步") to com.nous.wxhook.ui.cloud.CloudConfigActivity::class.java,
+            Triple("存档管理", "🗂️", "浏览选择存档，对比恢复") to com.nous.wxhook.ui.archive.ArchiveActivity::class.java,
             Triple("设置", "⚙️", "WebDAV 配置、备份路径等") to com.nous.wxhook.ui.settings.SettingsActivity::class.java,
         )
 

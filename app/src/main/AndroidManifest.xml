@@ -37,6 +37,8 @@
         <activity android:name=".ui.search.SearchActivity" android:exported="false" />
         <activity android:name=".ui.backup.BackupActivity" android:exported="false" />
         <activity android:name=".ui.merge.MergeActivity" android:exported="false" />
+        <activity android:name=".ui.archive.ArchiveActivity" android:exported="false" />
+        <activity android:name=".ui.archive.ArchiveDiffActivity" android:exported="false" />
 
         <receiver
             android:name=".receiver.MessageReceiver"

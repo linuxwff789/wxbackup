@@ -1,5 +1,6 @@
 package com.nous.wxhook.sync
 
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import openlistbridge.Openlistbridge
@@ -19,17 +20,22 @@ class OpenListCloudClient(
 ) : CloudClient {
 
     private var handle: String? = null
+    private val TAG = "wxhook:OpenListCC"
 
     private suspend fun ensureHandle(): String {
         if (handle == null) {
             val result = withContext(Dispatchers.IO) {
+                Log.d(TAG, "creating driver: $driverType")
                 Openlistbridge.create(driverType, configJson)
             }
             val parsed = JSONObject(result)
             if (!parsed.optBoolean("success", false)) {
-                throw Exception(parsed.optString("error", "create failed"))
+                val err = parsed.optString("error", "create failed")
+                Log.e(TAG, "driver create failed: $err")
+                throw Exception(err)
             }
             handle = parsed.getJSONObject("data").getString("handle")
+            Log.i(TAG, "driver created, handle=${handle?.take(8)}...")
         }
         return handle!!
     }
@@ -39,10 +45,16 @@ class OpenListCloudClient(
         return withContext(Dispatchers.IO) {
             when (method) {
                 "list" -> Openlistbridge.list(h, args[0])
+                "get" -> Openlistbridge.get(h, args[0])
                 "url" -> Openlistbridge.getDownloadURL(h, args[0])
                 "upload" -> Openlistbridge.upload(h, args[0], args[1], args[2], args.getOrElse(3) { "application/octet-stream" })
                 "mkdir" -> Openlistbridge.mkdir(h, args[0], args[1])
                 "delete" -> Openlistbridge.delete(h, args[0])
+                "rename" -> Openlistbridge.rename(h, args[0], args[1])
+                "move" -> Openlistbridge.move(h, args[0], args[1])
+                "copy" -> Openlistbridge.copy(h, args[0], args[1])
+                "storage" -> Openlistbridge.getStorageDetails(h)
+                "destroy" -> Openlistbridge.destroy(h)
                 else -> throw Exception("unknown method: $method")
             }
         }
@@ -142,6 +154,72 @@ class OpenListCloudClient(
                     )
                 }
                 Result.success(items)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+
+    override suspend fun get(remotePath: String): Result<RemoteObject> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val r = call("get", remotePath)
+                val parsed = checkSuccess(r)
+                val obj = parsed.getJSONObject("data")
+                Result.success(RemoteObject(
+                    path = obj.optString("path", ""),
+                    size = obj.optLong("size", 0),
+                    modTime = obj.optLong("modified_at", 0),
+                ))
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+
+    override suspend fun rename(remotePath: String, newName: String): Result<Unit> {
+        return withContext(Dispatchers.IO) {
+            try {
+                checkSuccess(call("rename", remotePath, newName))
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+
+    override suspend fun move(srcPath: String, dstDirPath: String): Result<Unit> {
+        return withContext(Dispatchers.IO) {
+            try {
+                checkSuccess(call("move", srcPath, dstDirPath))
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+
+    override suspend fun copy(srcPath: String, dstDirPath: String): Result<Unit> {
+        return withContext(Dispatchers.IO) {
+            try {
+                checkSuccess(call("copy", srcPath, dstDirPath))
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+
+    override suspend fun getStorageDetails(): Result<Pair<Long, Long>> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val r = call("storage")
+                val parsed = checkSuccess(r)
+                val data = parsed.getJSONObject("data")
+                Result.success(Pair(
+                    data.optLong("total_space", 0),
+                    data.optLong("used_space", 0),
+                ))
             } catch (e: Exception) {
                 Result.failure(e)
             }

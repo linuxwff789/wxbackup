@@ -172,4 +172,24 @@ class WebDavClient(
             Result.failure(e)
         }
     }
+
+    override suspend fun get(remotePath: String): Result<RemoteObject> {
+        return Result.failure(Exception("WebDAV get not implemented"))
+    }
+
+    override suspend fun rename(remotePath: String, newName: String): Result<Unit> {
+        return Result.failure(Exception("WebDAV rename not implemented"))
+    }
+
+    override suspend fun move(srcPath: String, dstDirPath: String): Result<Unit> {
+        return Result.failure(Exception("WebDAV move not implemented"))
+    }
+
+    override suspend fun copy(srcPath: String, dstDirPath: String): Result<Unit> {
+        return Result.failure(Exception("WebDAV copy not implemented"))
+    }
+
+    override suspend fun getStorageDetails(): Result<Pair<Long, Long>> {
+        return Result.failure(Exception("WebDAV storage details not implemented"))
+    }
 }

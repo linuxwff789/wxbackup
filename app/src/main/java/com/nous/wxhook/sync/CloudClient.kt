@@ -34,5 +34,10 @@ interface CloudClient {
     suspend fun upload(local: File, remote: String): Result<RemoteObject>
     suspend fun download(remote: String, local: File): Result<Unit>
     suspend fun list(remote: String): Result<List<RemoteObject>>
+    suspend fun get(remotePath: String): Result<RemoteObject>
+    suspend fun rename(remotePath: String, newName: String): Result<Unit>
+    suspend fun move(srcPath: String, dstDirPath: String): Result<Unit>
+    suspend fun copy(srcPath: String, dstDirPath: String): Result<Unit>
+    suspend fun getStorageDetails(): Result<Pair<Long, Long>>
     suspend fun delete(remote: String): Result<Unit>
 }
