@@ -45,7 +45,8 @@ class OpenListCloudClient(
         return withContext(Dispatchers.IO) {
             when (method) {
                 "list" -> Openlistbridge.list(h, args[0])
-                "get" -> Openlistbridge.get(h, args[0])
+                // TODO: uncomment after openlistbridge.aar v0.3.5+ is published
+                // "get" -> Openlistbridge.get(h, args[0])
                 "url" -> Openlistbridge.getDownloadURL(h, args[0])
                 "upload" -> Openlistbridge.upload(h, args[0], args[1], args[2], args.getOrElse(3) { "application/octet-stream" })
                 "mkdir" -> Openlistbridge.mkdir(h, args[0], args[1])
@@ -53,8 +54,9 @@ class OpenListCloudClient(
                 "rename" -> Openlistbridge.rename(h, args[0], args[1])
                 "move" -> Openlistbridge.move(h, args[0], args[1])
                 "copy" -> Openlistbridge.copy(h, args[0], args[1])
-                "storage" -> Openlistbridge.getStorageDetails(h)
-                "destroy" -> Openlistbridge.destroy(h)
+                // TODO: uncomment after openlistbridge.aar v0.3.5+ is published
+                // "storage" -> Openlistbridge.getStorageDetails(h)
+                // "destroy" -> Openlistbridge.destroy(h)
                 else -> throw Exception("unknown method: $method")
             }
         }

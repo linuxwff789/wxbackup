@@ -175,7 +175,7 @@ SELECT 'merged' AS stat, count(*) AS cnt FROM message;
         RootGateways.run("cat > '$sqlFile' << 'MERGEEOF'\n$script\nMERGEEOF", 5_000)
 
         val r = RootGateways.run(
-            "cd $TOOLS_DIR && LD_LIBRARY_PATH=\\$PWD $SQLCIPHER < '$sqlFile' 2>/dev/null | tail -5",
+            "cd $TOOLS_DIR && LD_LIBRARY_PATH=$TOOLS_DIR $SQLCIPHER < '$sqlFile' 2>/dev/null | tail -5",
             600_000
         )
         RootGateways.run("rm -f '$sqlFile' 2>/dev/null")

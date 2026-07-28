@@ -270,7 +270,8 @@ object ArchiveManager {
         val pws = "PRAGMA key='$pw';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;"
         val r = RootGateways.runQuiet(
             "cd /data/data/com.termux/files/home/wxbackup/tools && " +
-            "LD_LIBRARY_PATH=\\$PWD ./sqlcipher '$PHONE_DB_PATH' \"$pws SELECT count(*) FROM message;\" 2>/dev/null | tail -1"
+            "export LD_LIBRARY_PATH=/data/data/com.termux/files/home/wxbackup/tools && " +
+            "./sqlcipher '$PHONE_DB_PATH' \"$pws SELECT count(*) FROM message;\" 2>/dev/null | tail -1"
         )
         val count = r.trim().toLongOrNull() ?: 0L
         Log.d(TAG, "getPhoneMsgCount: $count (raw: ${r.trim()})")
