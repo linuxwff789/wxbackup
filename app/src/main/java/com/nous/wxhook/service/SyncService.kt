@@ -61,7 +61,7 @@ class SyncService : Service() {
                 }
                 val remoteCfgRaw = RootGateways.runQuiet("cat \"${BackupEnv.backupDir}/remote_config.json\" 2>/dev/null").ifBlank { "{}" }
                 val remoteCfg = org.json.JSONObject(remoteCfgRaw)
-                if (!remoteCfg.optBoolean("enabled", false)) {
+                if (!remoteCfg.optBoolean("enabled", true)) {
                     result = "同步未启用"; appendLog(result); updateNotification(result); sendResult(false, result)
                     BackupManifest.addRecord(BackupManifest.createRecord(tag, "sync", 0L, 0L, result, durationMs = System.currentTimeMillis() - startTime))
                     return@Thread

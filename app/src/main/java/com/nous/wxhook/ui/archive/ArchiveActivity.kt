@@ -184,15 +184,76 @@ class ArchiveActivity : AppCompatActivity() {
     }
 
     private fun showCloudArchives() {
-        // Cloud archive listing — placeholder for OpenListCloudClient integration
-        android.app.AlertDialog.Builder(this)
-            .setTitle("☁️ 云端存档")
-            .setMessage("云端功能需要配置阿里云盘或 WebDAV。\n请在「云同步」设置中添加账号。")
-            .setPositiveButton("去配置") { _, _ ->
-                startActivity(android.content.Intent(this, com.nous.wxhook.ui.cloud.CloudConfigActivity::class.java))
+        Thread {
+            val config = com.nous.wxhook.sync.Syncer.loadConfig()
+            if (!config.isValid) {
+                runOnUiThread {
+                    android.app.AlertDialog.Builder(this@ArchiveActivity)
+                        .setTitle("☁️ 云端存档")
+                        .setMessage("云端功能需要配置阿里云盘或 WebDAV。\n请在「设置」→「云存储驱动」中添加账号。")
+                        .setPositiveButton("去配置") { _, _ ->
+                            startActivity(android.content.Intent(this@ArchiveActivity, com.nous.wxhook.ui.cloud.CloudConfigActivity::class.java))
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                }
+                return@Thread
             }
-            .setNegativeButton("取消", null)
-            .show()
+            val client = com.nous.wxhook.sync.Syncer.createClient(config)
+            if (client == null) {
+                runOnUiThread {
+                    android.app.AlertDialog.Builder(this@ArchiveActivity)
+                        .setTitle("☁️ 云端存档")
+                        .setMessage("创建云存储客户端失败")
+                        .setPositiveButton("确定", null)
+                        .show()
+                }
+                return@Thread
+            }
+            runOnUiThread {
+                val dialog = android.app.AlertDialog.Builder(this@ArchiveActivity)
+                    .setTitle("☁️ 云端存档")
+                    .setMessage("正在获取远端文件列表...")
+                    .setNegativeButton("取消", null)
+                    .show()
+                Thread {
+                    val result = kotlinx.coroutines.runBlocking { client.list(config.remotePath) }
+                    runOnUiThread {
+                        dialog.dismiss()
+                        if (result.isSuccess) {
+                            val files = result.getOrNull() ?: emptyList()
+                            if (files.isEmpty()) {
+                                android.widget.Toast.makeText(this@ArchiveActivity, "远端无存档文件", android.widget.Toast.LENGTH_LONG).show()
+                            } else {
+                                val sb = StringBuilder()
+                                for (f in files.take(20)) {
+                                    val name = java.io.File(f.path).name
+                                    val size = when {
+                                        f.size > 1024*1024*1024 -> "%.1fGB".format(f.size.toFloat()/(1024*1024*1024))
+                                        f.size > 1024*1024 -> "%.1fMB".format(f.size.toFloat()/(1024*1024))
+                                        else -> "${f.size}B"
+                                    }
+                                    sb.appendLine("📄 $name ($size)")
+                                }
+                                if (files.size > 20) sb.appendLine("... 还有 ${files.size - 20} 个文件")
+                                android.app.AlertDialog.Builder(this@ArchiveActivity)
+                                    .setTitle("☁️ 云端存档 (${files.size})")
+                                    .setMessage(sb.toString())
+                                    .setPositiveButton("确定", null)
+                                    .show()
+                            }
+                        } else {
+                            val err = result.exceptionOrNull()?.message ?: "未知错误"
+                            android.app.AlertDialog.Builder(this@ArchiveActivity)
+                                .setTitle("☁️ 云端存档")
+                                .setMessage("获取失败: $err")
+                                .setPositiveButton("确定", null)
+                                .show()
+                        }
+                    }
+                }.start()
+            }
+        }.start()
     }
 
     private fun startRestore() {
