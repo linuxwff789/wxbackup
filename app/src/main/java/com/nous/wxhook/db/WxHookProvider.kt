@@ -29,9 +29,18 @@ class WxHookProvider : ContentProvider() {
         return when (uri.path) {
             "/key" -> {
                 val cursor = MatrixCursor(arrayOf("key", "time", "len"))
-                val key = capturedKey
+                var key = capturedKey
+                var time = capturedTime
+                if (key == null) {
+                    // Fallback to SharedPreferences (persists across app restarts)
+                    try {
+                        val prefs = context?.getSharedPreferences("wxhook", android.content.Context.MODE_PRIVATE)
+                        key = prefs?.getString("last_key", null)
+                        time = prefs?.getLong("last_key_time", 0) ?: 0L
+                    } catch (_: Exception) {}
+                }
                 if (key != null) {
-                    cursor.addRow(arrayOf(key, capturedTime, key.length / 2))
+                    cursor.addRow(arrayOf(key, time, key.length / 2))
                 }
                 cursor
             }
