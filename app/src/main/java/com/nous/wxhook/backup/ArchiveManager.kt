@@ -86,10 +86,13 @@ object ArchiveManager {
             Log.d(TAG, "scanLocalArchives: no backupdata/ dir")
         }
 
-        // Scan archive packages: .tar.zst files
-        val packages = dir.listFiles()?.filter {
-            it.name.endsWith(".tar.zst") || it.name.endsWith(".tar.gz")
-        }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        // Scan archive packages: .tar.zst files (in backupdata/)
+        val pkgDir = File(dir, "backupdata")
+        val packages = if (pkgDir.exists()) {
+            pkgDir.listFiles()?.filter {
+                it.name.endsWith(".tar.zst") || it.name.endsWith(".tar.gz")
+            }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        } else emptyList()
         Log.d(TAG, "scanLocalArchives: found ${packages.size} archive packages")
         packages.forEach { f ->
             val tag = f.nameWithoutExtension
