@@ -300,7 +300,8 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
 
         // 6. 密钥检测
         try {
-            val cursor = context.contentResolver.query(
+            val app = getApplication<Application>()
+            val cursor = app.contentResolver.query(
                 android.net.Uri.parse("content://com.nous.wxhook.db_provider/key"),
                 null, null, null, null
             )
