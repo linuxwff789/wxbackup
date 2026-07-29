@@ -40,7 +40,7 @@ class DecryptService : Service() {
             try {
                 updateNotification("读取密钥...")
                 val mmFiles = runCatching {
-                    val pid = com.nous.wxhook.rootbridge.backup.TargetAppController.findWeChatPid()
+                    val pid = com.nous.wxhook.backup.TargetAppController.findWeChatPid()
                     if (pid != null) "/proc/$pid/root/data/data/com.tencent.mm/files"
                     else "/data/data/com.tencent.mm/files"
                 }.getOrDefault("/data/data/com.tencent.mm/files")
