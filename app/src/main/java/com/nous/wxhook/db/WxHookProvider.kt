@@ -14,6 +14,8 @@ class WxHookProvider : ContentProvider() {
         private var capturedKey: String? = null
         private var capturedTime: Long = 0
 
+        const val KEY_URI = "content://com.nous.wxhook.db_provider/key"
+
         fun setKey(key: String) {
             capturedKey = key
             capturedTime = System.currentTimeMillis()

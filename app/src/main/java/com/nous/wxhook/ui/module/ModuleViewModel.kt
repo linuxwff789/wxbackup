@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nous.wxhook.db.BackupManager
+import com.nous.wxhook.db.WxHookProvider
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.rootbridge.backup.BackupHookLocal
 import com.nous.wxhook.sync.Syncer
@@ -206,7 +207,7 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 val app = getApplication<Application>()
                 val cursor = app.contentResolver.query(
-                    android.net.Uri.parse("content://com.nous.wxhook.db_provider/key"),
+                    android.net.Uri.parse(WxHookProvider.KEY_URI),
                     null, null, null, null
                 )
                 val key = if (cursor != null && cursor.moveToFirst()) {
@@ -310,7 +311,7 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
         try {
             val app = getApplication<Application>()
             val cursor = app.contentResolver.query(
-                android.net.Uri.parse("content://com.nous.wxhook.db_provider/key"),
+                android.net.Uri.parse(WxHookProvider.KEY_URI),
                 null, null, null, null
             )
             val key = if (cursor != null && cursor.moveToFirst()) {

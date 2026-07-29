@@ -11,6 +11,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
+import com.nous.wxhook.db.WxHookProvider
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.ui.M3
 import java.io.File
@@ -76,7 +77,7 @@ class SearchActivity : AppCompatActivity() {
             var key: String? = null
             try {
                 val cursor = contentResolver.query(
-                    android.net.Uri.parse("content://com.nous.wxhook.db_provider/key"),
+                    android.net.Uri.parse(WxHookProvider.KEY_URI),
                     null, null, null, null
                 )
                 if (cursor != null && cursor.moveToFirst()) {

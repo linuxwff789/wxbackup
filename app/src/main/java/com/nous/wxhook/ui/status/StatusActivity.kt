@@ -12,6 +12,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
 import com.nous.wxhook.db.DbCleanup
+import com.nous.wxhook.db.WxHookProvider
 import com.nous.wxhook.ui.M3
 
 class StatusActivity : AppCompatActivity() {
@@ -55,7 +56,7 @@ class StatusActivity : AppCompatActivity() {
         var key: String? = null
         try {
             val cursor = contentResolver.query(
-                android.net.Uri.parse("content://com.nous.wxhook.db_provider/key"),
+                android.net.Uri.parse(WxHookProvider.KEY_URI),
                 null, null, null, null
             )
             if (cursor != null && cursor.moveToFirst()) {
