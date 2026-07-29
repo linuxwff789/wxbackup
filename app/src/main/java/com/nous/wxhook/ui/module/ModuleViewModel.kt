@@ -300,9 +300,16 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
 
         // 6. 密钥检测
         try {
-            val keyFile = File("/data/local/tmp/.wechat_key")
-            if (keyFile.exists()) {
-                val key = keyFile.readText().lines().find { it.startsWith("key=") } ?: "未知"
+            val cursor = context.contentResolver.query(
+                android.net.Uri.parse("content://com.nous.wxhook.db_provider/key"),
+                null, null, null, null
+            )
+            val key = if (cursor != null && cursor.moveToFirst()) {
+                val hex = cursor.getString(cursor.getColumnIndexOrThrow("key"))
+                cursor.close()
+                if (hex != null) "key=${hex}" else null
+            } else null
+            if (key != null) {
                 sb.appendLine("✅ 密钥: $key")
             } else {
                 sb.appendLine("⚠️ 密钥: 未捕获")

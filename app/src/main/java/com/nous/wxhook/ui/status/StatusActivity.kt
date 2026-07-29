@@ -54,9 +54,15 @@ class StatusActivity : AppCompatActivity() {
         val sb = StringBuilder()
         var key: String? = null
         try {
-            val hex = java.io.File("/data/local/tmp/.wechat_key").readText()
-                .lines().find { it.startsWith("key=") }?.removePrefix("key=")
-            if (hex != null) key = hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
+            val cursor = contentResolver.query(
+                android.net.Uri.parse("content://com.nous.wxhook.db_provider/key"),
+                null, null, null, null
+            )
+            if (cursor != null && cursor.moveToFirst()) {
+                val hex = cursor.getString(cursor.getColumnIndexOrThrow("key"))
+                if (hex != null) key = hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
+                cursor.close()
+            }
         } catch (_: Exception) {}
         sb.appendLine("密钥: ${if (key != null) "✅ $key" else "❌ 未捕获"}")
         val dbFile = java.io.File("/sdcard/Download/EnMicroMsg.db")

@@ -75,8 +75,15 @@ class SearchActivity : AppCompatActivity() {
         Thread {
             var key: String? = null
             try {
-                val hex = File("/data/local/tmp/.wechat_key").readText().lines().find { it.startsWith("key=") }?.removePrefix("key=")
-                if (hex != null) key = hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
+                val cursor = contentResolver.query(
+                    android.net.Uri.parse("content://com.nous.wxhook.db_provider/key"),
+                    null, null, null, null
+                )
+                if (cursor != null && cursor.moveToFirst()) {
+                    val hex = cursor.getString(cursor.getColumnIndexOrThrow("key"))
+                    cursor.close()
+                    if (hex != null) key = hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("")
+                }
             } catch (_: Exception) {}
             if (key == null) { handler.post { resultView.text = "❌ 未捕获密钥" }; return@Thread }
             val dbPath = "/sdcard/Download/EnMicroMsg.db"
