@@ -89,7 +89,7 @@
 
         <provider
             android:name=".db.WxHookProvider"
-            android:authorities="com.nous.wxhook.provider"
+            android:authorities="com.nous.wxhook.db_provider"
             android:exported="true" />
 
         <service

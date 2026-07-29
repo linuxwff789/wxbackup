@@ -22,7 +22,13 @@ object ArchiveService {
     fun getDbPassword(): String {
         if (cachedPassword != null) return cachedPassword!!
         cachedPassword = try {
-            val raw = BackupEnv.suOut("cat /data/local/tmp/.wechat_key 2>/dev/null")
+            // Key written by Xposed hook to WeChat's files dir
+            val mmFiles = runCatching {
+                val pid = com.nous.wxhook.rootbridge.backup.TargetAppController.findWeChatPid()
+                if (pid != null) "/proc/$pid/root/data/data/com.tencent.mm/files"
+                else "/data/data/com.tencent.mm/files"
+            }.getOrDefault("/data/data/com.tencent.mm/files")
+            val raw = BackupEnv.suOut("cat $mmFiles/.wechat_key 2>/dev/null")
             // Parse key=hex format: key=65396364326165 → e9cd2ae
             val keyLine = raw.lines().firstOrNull { it.startsWith("key=") }
             if (keyLine != null) {

@@ -39,7 +39,12 @@ class DecryptService : Service() {
         Thread {
             try {
                 updateNotification("读取密钥...")
-                val hex = File("/data/local/tmp/.wechat_key").readText()
+                val mmFiles = runCatching {
+                    val pid = com.nous.wxhook.rootbridge.backup.TargetAppController.findWeChatPid()
+                    if (pid != null) "/proc/$pid/root/data/data/com.tencent.mm/files"
+                    else "/data/data/com.tencent.mm/files"
+                }.getOrDefault("/data/data/com.tencent.mm/files")
+                val hex = RootGateways.runQuiet("cat $mmFiles/.wechat_key 2>/dev/null")
                     .lines().find { it.startsWith("key=") }?.removePrefix("key=")
                 if (hex == null) {
                     updateNotification("密钥未找到")

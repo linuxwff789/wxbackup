@@ -12,7 +12,7 @@ import java.util.Locale
 object KeyCaptureHook {
 
     private const val TAG = "[wxhook:Key]"
-    private const val PROVIDER_URI = "content://com.nous.wxhook.provider/key"
+    private const val PROVIDER_URI = "content://com.nous.wxhook.db_provider/key"
     private var keyCaptured = false
 
     private external fun nativeHello(): String
@@ -77,9 +77,9 @@ object KeyCaptureHook {
     private fun pushKey(ctx: Context, keyHex: String, pageSize: String, version: String) {
         val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(Date())
 
-        // Write to .wechat_key
+        // Write to .wechat_key in WeChat's own data dir (accessed via su later)
         try {
-            File("/data/local/tmp/.wechat_key").writeText(
+            File(ctx.filesDir, ".wechat_key").writeText(
                 "key=$keyHex\npageSize=$pageSize\nversion=$version\ntime=$now\n"
             )
             XposedBridge.log("$TAG wrote .wechat_key")
