@@ -169,11 +169,7 @@ class ArchiveActivity : AppCompatActivity() {
                         }
                         card.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(6)) })
 
-                        val tf: android.graphics.Typeface = when {
-                            isSelected -> Typeface.DEFAULT_BOLD
-                            a.source == "phone" -> Typeface.ITALIC
-                            else -> Typeface.DEFAULT
-                        }
+                        val tf = (if (isSelected) Typeface.DEFAULT_BOLD else if (a.source == "phone") Typeface.ITALIC else Typeface.DEFAULT) as android.graphics.Typeface
                         val nameLine = TextView(this).apply {
                             text = "$marker$srcIcon${a.tag}"
                             textSize = 14f; typeface = tf
