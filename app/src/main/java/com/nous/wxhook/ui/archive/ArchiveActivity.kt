@@ -11,9 +11,13 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
 import com.nous.wxhook.backup.ArchiveManager
 import com.nous.wxhook.backup.ArchiveManager.ArchiveInfo
+import com.nous.wxhook.backup.BackupEnv
 import com.nous.wxhook.backup.RestoreEngine
 import com.nous.wxhook.root.RootGateways
+import com.nous.wxhook.sync.Syncer
 import com.nous.wxhook.ui.M3
+import kotlinx.coroutines.runBlocking
+import java.io.File
 
 class ArchiveActivity : AppCompatActivity() {
 
@@ -46,7 +50,7 @@ class ArchiveActivity : AppCompatActivity() {
                 textSize = 14f; setPadding(0, dp(4), 0, 0); typeface = Typeface.DEFAULT_BOLD
             })
             statusCard.addView(TextView(this).apply {
-                text = "消息: ${selected.messageCount} · 附件: ${selected.totalAttachmentFiles} 文件"
+                text = "消息: ${selected.messageCount} · 附件: ${selected.totalAttachmentFiles} 文件 · ${if (selected.source == "cloud") "☁️云端" else "📦本地"}"
                 textSize = 13f; setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
             })
         } else {
@@ -62,7 +66,7 @@ class ArchiveActivity : AppCompatActivity() {
         })
         root.addView(statusCard)
 
-        // Refresh + Diff buttons
+        // Action buttons
         val actionCard = cardBg()
         actionCard.addView(TextView(this).apply { text = "📋 操作"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
         actionCard.addView(TextView(this).apply {
@@ -77,24 +81,20 @@ class ArchiveActivity : AppCompatActivity() {
             setOnClickListener { showDiff() }
         })
         btnRow.addView(MaterialButton(this).apply {
-            text = "☁️ 云端列表"; layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8) }
-            insetTop = 0; insetBottom = 0
-            setOnClickListener { showCloudArchives() }
-        })
-        actionCard.addView(btnRow)
-        actionCard.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
-        actionCard.addView(MaterialButton(this).apply {
-            text = "▶️ 恢复选中存档"
+            text = "▶️ 恢复"; layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8) }
             insetTop = 0; insetBottom = 0
             isEnabled = selected != null
             setOnClickListener { startRestore() }
         })
+        actionCard.addView(btnRow)
         root.addView(actionCard)
 
-        // Archive list placeholder (populated by refreshList)
+        // Archive list (populated by refreshList)
         val listCard = cardBg()
         listCard.id = View.generateViewId()
-        listCard.addView(TextView(this).apply { text = "📦 本地存档"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
+        listCard.addView(TextView(this).apply {
+            text = "📦 本地 + ☁️ 云端存档"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD
+        })
         listCard.addView(TextView(this).apply {
             text = "点击「刷新」加载存档列表"
             textSize = 14f; setPadding(0, dp(8), 0, 0); setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
@@ -110,39 +110,85 @@ class ArchiveActivity : AppCompatActivity() {
 
     private fun refreshList(root: LinearLayout) {
         Thread {
-            val archives = ArchiveManager.scanLocalArchives()
+            val localArchives = ArchiveManager.scanLocalArchives()
+            val cloudArchives = fetchCloudArchives()
+            val allArchives = (localArchives + cloudArchives).sortedByDescending { it.backupTime }
             val selected = ArchiveManager.getSelectedArchive()
+
             runOnUiThread {
-                // Remove old list card and rebuild
                 val oldCard = root.findViewWithTag<View>("archives") ?: return@runOnUiThread
                 val idx = root.indexOfChild(oldCard)
                 root.removeView(oldCard)
 
+                val localCount = localArchives.size
+                val cloudCount = cloudArchives.size
                 val card = cardBg().apply { tag = "archives" }
-                card.addView(TextView(this).apply { text = "📦 本地存档 (${archives.size})"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
+                card.addView(TextView(this).apply {
+                    text = "存档列表 (本地 $localCount · 云端 $cloudCount)"
+                    textSize = 17f; typeface = Typeface.DEFAULT_BOLD
+                })
 
-                if (archives.isEmpty()) {
+                if (allArchives.isEmpty()) {
+                    val hint = if (cloudArchives.isEmpty() && !Syncer.loadConfig().isValid)
+                        "暂无存档\\n请先通过备份功能创建备份\\n或在「设置→云存储驱动」配置云端"
+                    else "暂无存档"
                     card.addView(TextView(this).apply {
-                        text = "暂无存档\n请先通过备份功能创建备份"
-                        textSize = 14f; setPadding(0, dp(8), 0, 0); setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
+                        text = hint; textSize = 14f; setPadding(0, dp(8), 0, 0)
+                        setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
                     })
                 } else {
-                    for (a in archives) {
+                    for (a in allArchives) {
                         val isSelected = selected?.tag == a.tag
                         val marker = if (isSelected) "→ " else "  "
+                        val srcIcon = if (a.source == "cloud") "☁️ " else "📦 "
+                        val srcColor = if (a.source == "cloud") M3.colorPrimary(this) else M3.onSurface(this)
                         card.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(6)) })
-                        val line = TextView(this).apply {
-                            text = "$marker${a.tag}"
+
+                        val nameLine = TextView(this).apply {
+                            text = "$marker$srcIcon${a.tag}"
                             textSize = 14f; typeface = if (isSelected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                            setTextColor(srcColor)
                         }
-                        line.setOnClickListener {
-                            ArchiveManager.selectArchive(a.tag)
-                            refreshList(root)
+                        nameLine.setOnClickListener {
+                            if (a.source == "cloud") {
+                                // Cloud archive: download first then select
+                                android.app.AlertDialog.Builder(this@ArchiveActivity)
+                                    .setTitle("☁️ 云端存档")
+                                    .setMessage("是否下载 ${a.tag} 到本地后再恢复？\\n\\n大小: ${ArchiveManager.formatSize(a.totalAttachmentSize)}")
+                                    .setPositiveButton("下载并选中") { _, _ ->
+                                        downloadAndSelect(a, root)
+                                    }
+                                    .setNegativeButton("取消", null)
+                                    .show()
+                            } else {
+                                ArchiveManager.selectArchive(a.tag)
+                                refreshList(root)
+                            }
                         }
-                        card.addView(line)
+                        card.addView(nameLine)
                         card.addView(TextView(this).apply {
-                            text = "  ${a.backupTimeStr} · ${a.messageCount}条消息 · ${a.totalAttachmentFiles}个附件 · ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
+                            val sizeStr = ArchiveManager.formatSize(a.totalAttachmentSize)
+                            val detail = if (a.source == "cloud") "$sizeStr"
+                                else "${a.backupTimeStr} · ${a.messageCount}条消息 · ${a.totalAttachmentFiles}个附件 · $sizeStr"
+                            text = "  $detail"
                             textSize = 12f; setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
+                        })
+                    }
+
+                    // Download all cloud archives button
+                    if (cloudArchives.isNotEmpty()) {
+                        card.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
+                        card.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                            text = "☁️⬇ 下载所有云端存档到本地"
+                            insetTop = 0; insetBottom = 0
+                            setOnClickListener {
+                                android.app.AlertDialog.Builder(this@ArchiveActivity)
+                                    .setTitle("下载云端存档")
+                                    .setMessage("将 ${cloudArchives.size} 个云端文件下载到本地备份目录？")
+                                    .setPositiveButton("下载") { _, _ -> downloadAllCloud(cloudArchives, root) }
+                                    .setNegativeButton("取消", null)
+                                    .show()
+                            }
                         })
                     }
                 }
@@ -151,8 +197,80 @@ class ArchiveActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun fetchCloudArchives(): List<ArchiveInfo> {
+        val config = Syncer.loadConfig()
+        if (!config.isValid) return emptyList()
+        val client = Syncer.createClient(config) ?: return emptyList()
+        return try {
+            val result = runBlocking { client.list(config.remotePath) }
+            if (result.isFailure) return emptyList()
+            result.getOrNull()?.map { f ->
+            ArchiveInfo(
+                tag = File(f.path).name,
+                backupTime = f.modTime,
+                backupTimeStr = ArchiveManager.formatTime(f.modTime),
+                    totalAttachmentSize = f.size,
+                    path = f.path,
+                    source = "cloud",
+                )
+            } ?: emptyList()
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private fun downloadAndSelect(archive: ArchiveInfo, root: LinearLayout) {
+        Thread {
+            val config = Syncer.loadConfig()
+            val client = Syncer.createClient(config) ?: run {
+                runOnUiThread { android.widget.Toast.makeText(this, "创建云客户端失败", android.widget.Toast.LENGTH_LONG).show() }
+                return@Thread
+            }
+            val localPath = "${BackupEnv.backupDataDir}/${archive.tag}"
+            runOnUiThread { android.widget.Toast.makeText(this, "下载中: ${archive.tag}", android.widget.Toast.LENGTH_LONG).show() }
+            try {
+                val result = runBlocking { client.download(archive.path, File(localPath)) }
+                if (result.isSuccess) {
+                    runOnUiThread {
+                        android.widget.Toast.makeText(this, "下载完成: ${archive.tag}", android.widget.Toast.LENGTH_SHORT).show()
+                        ArchiveManager.selectArchive(archive.tag)
+                        refreshList(root)
+                    }
+                } else {
+                    runOnUiThread {
+                        android.widget.Toast.makeText(this, "下载失败: ${result.exceptionOrNull()?.message}", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { android.widget.Toast.makeText(this, "下载异常: ${e.message}", android.widget.Toast.LENGTH_LONG).show() }
+            }
+        }.start()
+    }
+
+    private fun downloadAllCloud(cloudArchives: List<ArchiveInfo>, root: LinearLayout) {
+        Thread {
+            val config = Syncer.loadConfig()
+            val client = Syncer.createClient(config) ?: return@Thread
+            var ok = 0; var fail = 0
+            for (a in cloudArchives) {
+                val localPath = "${BackupEnv.backupDataDir}/${a.tag}"
+                try {
+                    val r = runBlocking { client.download(a.path, File(localPath)) }
+                    if (r.isSuccess) ok++ else fail++
+                } catch (_: Exception) { fail++ }
+            }
+            val msg = "下载完成: $ok 成功, $fail 失败"
+            runOnUiThread {
+                android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
+                refreshList(root)
+            }
+        }.start()
+    }
+
     private fun showDiff() {
         val selected = ArchiveManager.getSelectedArchive() ?: return
+        if (selected.source == "cloud") {
+            android.widget.Toast.makeText(this, "云端存档请先下载到本地后再对比", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
         Thread {
             val phoneMsg = ArchiveManager.getPhoneMsgCount()
             val phoneAtt = ArchiveManager.getPhoneAttachmentCounts()
@@ -183,84 +301,14 @@ class ArchiveActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun showCloudArchives() {
-        Thread {
-            val config = com.nous.wxhook.sync.Syncer.loadConfig()
-            if (!config.isValid) {
-                runOnUiThread {
-                    android.app.AlertDialog.Builder(this@ArchiveActivity)
-                        .setTitle("☁️ 云端存档")
-                        .setMessage("云端功能需要配置阿里云盘或 WebDAV。\n请在「设置」→「云存储驱动」中添加账号。")
-                        .setPositiveButton("去配置") { _, _ ->
-                            startActivity(android.content.Intent(this@ArchiveActivity, com.nous.wxhook.ui.cloud.CloudConfigActivity::class.java))
-                        }
-                        .setNegativeButton("取消", null)
-                        .show()
-                }
-                return@Thread
-            }
-            val client = com.nous.wxhook.sync.Syncer.createClient(config)
-            if (client == null) {
-                runOnUiThread {
-                    android.app.AlertDialog.Builder(this@ArchiveActivity)
-                        .setTitle("☁️ 云端存档")
-                        .setMessage("创建云存储客户端失败")
-                        .setPositiveButton("确定", null)
-                        .show()
-                }
-                return@Thread
-            }
-            runOnUiThread {
-                val dialog = android.app.AlertDialog.Builder(this@ArchiveActivity)
-                    .setTitle("☁️ 云端存档")
-                    .setMessage("正在获取远端文件列表...")
-                    .setNegativeButton("取消", null)
-                    .show()
-                Thread {
-                    val result = kotlinx.coroutines.runBlocking { client.list(config.remotePath) }
-                    runOnUiThread {
-                        dialog.dismiss()
-                        if (result.isSuccess) {
-                            val files = result.getOrNull() ?: emptyList()
-                            if (files.isEmpty()) {
-                                android.widget.Toast.makeText(this@ArchiveActivity, "远端无存档文件", android.widget.Toast.LENGTH_LONG).show()
-                            } else {
-                                val sb = StringBuilder()
-                                for (f in files.take(20)) {
-                                    val name = java.io.File(f.path).name
-                                    val size = when {
-                                        f.size > 1024*1024*1024 -> "%.1fGB".format(f.size.toFloat()/(1024*1024*1024))
-                                        f.size > 1024*1024 -> "%.1fMB".format(f.size.toFloat()/(1024*1024))
-                                        else -> "${f.size}B"
-                                    }
-                                    sb.appendLine("📄 $name ($size)")
-                                }
-                                if (files.size > 20) sb.appendLine("... 还有 ${files.size - 20} 个文件")
-                                android.app.AlertDialog.Builder(this@ArchiveActivity)
-                                    .setTitle("☁️ 云端存档 (${files.size})")
-                                    .setMessage(sb.toString())
-                                    .setPositiveButton("确定", null)
-                                    .show()
-                            }
-                        } else {
-                            val err = result.exceptionOrNull()?.message ?: "未知错误"
-                            android.app.AlertDialog.Builder(this@ArchiveActivity)
-                                .setTitle("☁️ 云端存档")
-                                .setMessage("获取失败: $err")
-                                .setPositiveButton("确定", null)
-                                .show()
-                        }
-                    }
-                }.start()
-            }
-        }.start()
-    }
-
     private fun startRestore() {
         val selected = ArchiveManager.getSelectedArchive() ?: return
+        if (selected.source == "cloud") {
+            android.widget.Toast.makeText(this, "云端存档请先下载到本地后再恢复", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
         Log.i(TAG, "startRestore: ${selected.tag}")
-
-        val dialog = android.app.AlertDialog.Builder(this)
+        android.app.AlertDialog.Builder(this)
             .setTitle("🗂️ 恢复存档")
             .setMessage("即将恢复存档 ${selected.tag}\n\n" +
                 "操作步骤:\n" +
@@ -302,11 +350,8 @@ class ArchiveActivity : AppCompatActivity() {
                 }
 
                 runOnUiThread {
-                    if (result) {
-                        logView.append("\n\n✅ 恢复完成！请启动微信验证")
-                    } else {
-                        logView.append("\n\n❌ 恢复失败，查看日志")
-                    }
+                    if (result) logView.append("\n\n✅ 恢复完成！请启动微信验证")
+                    else logView.append("\n\n❌ 恢复失败，查看日志")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "doRestore: ${e.message}", e)

@@ -296,7 +296,7 @@ object ArchiveManager {
 
     // ── Helpers ──
 
-    private fun formatTime(millis: Long): String {
+    fun formatTime(millis: Long): String {
         if (millis <= 0) return ""
         return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(millis))
     }
