@@ -91,6 +91,7 @@ class ArchiveActivity : AppCompatActivity() {
 
         // Archive list (populated by refreshList)
         val listCard = cardBg()
+        listCard.tag = "archives"
         listCard.id = View.generateViewId()
         listCard.addView(TextView(this).apply {
             text = "📦 本地 + ☁️ 云端存档"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD
