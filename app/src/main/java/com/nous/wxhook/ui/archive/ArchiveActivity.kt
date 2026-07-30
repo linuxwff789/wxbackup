@@ -113,7 +113,23 @@ class ArchiveActivity : AppCompatActivity() {
         Thread {
             val localArchives = ArchiveManager.scanLocalArchives()
             val cloudArchives = fetchCloudArchives()
-            val allArchives = (localArchives + cloudArchives).sortedByDescending { it.backupTime }
+
+            // Phone current state
+            val phoneMsgCount = ArchiveManager.getPhoneMsgCount()
+            val phoneAttCounts = ArchiveManager.getPhoneAttachmentCounts()
+            val phoneAttTotal = phoneAttCounts.values.sum()
+
+            val allArchives = mutableListOf<ArchiveInfo>()
+            // Current phone data shown first
+            allArchives.add(ArchiveInfo(
+                tag = "📱 当前手机数据",
+                backupTime = System.currentTimeMillis(),
+                backupTimeStr = "实时",
+                messageCount = phoneMsgCount,
+                totalAttachmentFiles = phoneAttTotal,
+                source = "phone",
+            ))
+            allArchives.addAll((localArchives + cloudArchives).sortedByDescending { it.backupTime })
             val selected = ArchiveManager.getSelectedArchive()
 
             runOnUiThread {
@@ -139,38 +155,49 @@ class ArchiveActivity : AppCompatActivity() {
                     })
                 } else {
                     for (a in allArchives) {
-                        val isSelected = selected?.tag == a.tag
+                        val isSelected = selected?.tag == a.tag && a.source != "phone"
                         val marker = if (isSelected) "→ " else "  "
-                        val srcIcon = if (a.source == "cloud") "☁️云端 " else "📦本地 "
-                        val srcColor = if (a.source == "cloud") M3.colorPrimary(this) else M3.onSurface(this)
+                        val srcIcon = when (a.source) {
+                            "cloud" -> "☁️云端 "
+                            "phone" -> "📱"
+                            else -> "📦本地 "
+                        }
+                        val srcColor = when (a.source) {
+                            "cloud" -> M3.colorPrimary(this)
+                            "phone" -> M3.colorTertiary(this)
+                            else -> M3.onSurface(this)
+                        }
                         card.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(6)) })
 
                         val nameLine = TextView(this).apply {
                             text = "$marker$srcIcon${a.tag}"
-                            textSize = 14f; typeface = if (isSelected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                            textSize = 14f; typeface = if (isSelected) Typeface.DEFAULT_BOLD else if (a.source == "phone") Typeface.ITALIC else Typeface.DEFAULT
                             setTextColor(srcColor)
                         }
-                        nameLine.setOnClickListener {
-                            if (a.source == "cloud") {
-                                // Cloud archive: download first then select
-                                android.app.AlertDialog.Builder(this@ArchiveActivity)
-                                    .setTitle("☁️ 云端存档")
-                                    .setMessage("是否下载 ${a.tag} 到本地后再恢复？\\n\\n大小: ${ArchiveManager.formatSize(a.totalAttachmentSize)}")
-                                    .setPositiveButton("下载并选中") { _, _ ->
-                                        downloadAndSelect(a, root)
-                                    }
-                                    .setNegativeButton("取消", null)
-                                    .show()
-                            } else {
-                                ArchiveManager.selectArchive(a.tag)
-                                refreshList(root)
+                        if (a.source != "phone") {
+                            nameLine.setOnClickListener {
+                                if (a.source == "cloud") {
+                                    android.app.AlertDialog.Builder(this@ArchiveActivity)
+                                        .setTitle("☁️ 云端存档")
+                                        .setMessage("是否下载 ${a.tag} 到本地后再恢复？\\n\\n大小: ${ArchiveManager.formatSize(a.totalAttachmentSize)}")
+                                        .setPositiveButton("下载并选中") { _, _ ->
+                                            downloadAndSelect(a, root)
+                                        }
+                                        .setNegativeButton("取消", null)
+                                        .show()
+                                } else {
+                                    ArchiveManager.selectArchive(a.tag)
+                                    refreshList(root)
+                                }
                             }
                         }
                         card.addView(nameLine)
                         card.addView(TextView(this).apply {
-                            val sizeStr = ArchiveManager.formatSize(a.totalAttachmentSize)
-                            val detail = if (a.source == "cloud") "$sizeStr"
-                                else "${a.backupTimeStr} · ${a.messageCount}条消息 · ${a.totalAttachmentFiles}个附件 · $sizeStr"
+                            val detail = when (a.source) {
+                                "phone" -> "  ${phoneMsgCount}条消息 · ${phoneAttTotal}个附件"
+                                "cloud" -> "  ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
+                                else -> "  ${a.backupTimeStr} · ${a.messageCount}条消息 · ${a.totalAttachmentFiles}个附件 · ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
+                            }
                             text = "  $detail"
                             textSize = 12f; setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
                         })
