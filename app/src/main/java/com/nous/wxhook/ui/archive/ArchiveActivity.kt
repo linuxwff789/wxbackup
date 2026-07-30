@@ -141,7 +141,7 @@ class ArchiveActivity : AppCompatActivity() {
                     for (a in allArchives) {
                         val isSelected = selected?.tag == a.tag
                         val marker = if (isSelected) "→ " else "  "
-                        val srcIcon = if (a.source == "cloud") "☁️ " else "📦 "
+                        val srcIcon = if (a.source == "cloud") "☁️云端 " else "📦本地 "
                         val srcColor = if (a.source == "cloud") M3.colorPrimary(this) else M3.onSurface(this)
                         card.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(6)) })
 
@@ -205,11 +205,13 @@ class ArchiveActivity : AppCompatActivity() {
         return try {
             val result = runBlocking { client.list(config.remotePath) }
             if (result.isFailure) return emptyList()
-            result.getOrNull()?.map { f ->
-            ArchiveInfo(
-                tag = File(f.path).name,
-                backupTime = f.modTime,
-                backupTimeStr = ArchiveManager.formatTime(f.modTime),
+            result.getOrNull()?.filter { f ->
+                f.path.endsWith(".tar.zst") || f.path.endsWith(".tar.gz")
+            }?.map { f ->
+                ArchiveInfo(
+                    tag = File(f.path).name.removeSuffix(".tar.zst").removeSuffix(".tar.gz"),
+                    backupTime = f.modTime,
+                    backupTimeStr = ArchiveManager.formatTime(f.modTime),
                     totalAttachmentSize = f.size,
                     path = f.path,
                     source = "cloud",
