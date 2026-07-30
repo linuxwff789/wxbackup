@@ -158,7 +158,7 @@ class ChatListActivity : AppCompatActivity() {
 
         Thread {
             try {
-                val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
+                val sc = "LD_PRELOAD=/data/local/tmp/wxhook_bin/libz.so.1:/data/local/tmp/wxhook_bin/libcrypto.so.3:/data/local/tmp/wxhook_bin/libedit.so:/data/local/tmp/wxhook_bin/libncursesw.so.6 /data/local/tmp/wxhook_bin/sqlcipher"
                 val backupDir = "/sdcard/Download/wxhook_backup/backupdata"
                 val tag = opt.tag
 
@@ -358,8 +358,8 @@ class ChatListActivity : AppCompatActivity() {
                     "ORDER BY c.conversationTime DESC LIMIT 200;"
                 )
 
-                val sc = "LD_PRELOAD=/data/local/libz.so.1:/data/local/libcrypto.so.3:" +
-                         "/data/local/libedit.so:/data/local/libncursesw.so.6 /data/local/sqlcipher"
+                val sc = "LD_PRELOAD=/data/local/tmp/wxhook_bin/libz.so.1:/data/local/tmp/wxhook_bin/libcrypto.so.3:" +
+                         "/data/local/tmp/wxhook_bin/libedit.so:/data/local/tmp/wxhook_bin/libncursesw.so.6 /data/local/tmp/wxhook_bin/sqlcipher"
                 val out = RootGateways.runQuiet("$sc '$dbPath' < '${sqlFile.absolutePath}'")
                 val lines = out.lines()
                 sqlFile.delete()
