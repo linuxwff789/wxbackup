@@ -164,14 +164,19 @@ class ArchiveActivity : AppCompatActivity() {
                         }
                         val srcColor = when (a.source) {
                             "cloud" -> M3.colorPrimary(this)
-                            "phone" -> M3.colorTertiary(this)
+                            "phone" -> M3.colorSecondary(this)
                             else -> M3.onSurface(this)
                         }
                         card.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(6)) })
 
+                        val tf: android.graphics.Typeface = when {
+                            isSelected -> Typeface.DEFAULT_BOLD
+                            a.source == "phone" -> Typeface.ITALIC
+                            else -> Typeface.DEFAULT
+                        }
                         val nameLine = TextView(this).apply {
                             text = "$marker$srcIcon${a.tag}"
-                            textSize = 14f; typeface = if (isSelected) Typeface.DEFAULT_BOLD else if (a.source == "phone") Typeface.ITALIC else Typeface.DEFAULT
+                            textSize = 14f; typeface = tf
                             setTextColor(srcColor)
                         }
                         if (a.source != "phone") {
