@@ -30,3 +30,9 @@ tmp_fix*.py
 app/src/main/assets/bin/openlist-cli
 app/libs/openlistbridge.aar
 apk-download/
+
+# 大目录，不应提交到仓库
+backup_download/
+tools/
+*.apk
+*.zip
