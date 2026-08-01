@@ -43,22 +43,9 @@ class ArchiveActivity : AppCompatActivity() {
         // Selected archive status
         val selected = ArchiveManager.getSelectedArchive()
         val statusCard = cardBg()
+        statusCard.tag = "status"
         statusCard.addView(TextView(this).apply { text = "🗂️ 存档管理"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
-        if (selected != null) {
-            statusCard.addView(TextView(this).apply {
-                text = "已选中: ${selected.tag}"
-                textSize = 14f; setPadding(0, dp(4), 0, 0); typeface = Typeface.DEFAULT_BOLD
-            })
-            statusCard.addView(TextView(this).apply {
-                text = "消息: ${selected.messageCount} · 附件: ${selected.totalAttachmentFiles} 文件 · ${if (selected.source == "cloud") "☁️云端" else "📦本地"}"
-                textSize = 13f; setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
-            })
-        } else {
-            statusCard.addView(TextView(this).apply {
-                text = "未选中存档"
-                textSize = 14f; setPadding(0, dp(4), 0, 0); setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
-            })
-        }
+        statusCard.addView(selectedStatusLine())
         statusCard.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
         statusCard.addView(MaterialButton(this).apply {
             text = "🔄 刷新存档列表"
@@ -108,6 +95,37 @@ class ArchiveActivity : AppCompatActivity() {
     }
 
     override fun onSupportNavigateUp(): Boolean { finish(); return true }
+
+    /** 顶部状态卡的选中信息行（下载/选中后随刷新同步更新） */
+    private fun selectedStatusLine(): TextView {
+        val selected = ArchiveManager.getSelectedArchive()
+        return if (selected != null) {
+            TextView(this).apply {
+                text = "已选中: ${selected.tag}"
+                textSize = 14f; setPadding(0, dp(4), 0, 0); typeface = Typeface.DEFAULT_BOLD
+            }
+        } else {
+            TextView(this).apply {
+                text = "未选中存档"
+                textSize = 14f; setPadding(0, dp(4), 0, 0); setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
+            }
+        }
+    }
+
+    private fun refreshStatusCard(root: LinearLayout) {
+        val oldCard = root.findViewWithTag<View>("status") ?: return
+        val idx = root.indexOfChild(oldCard)
+        root.removeView(oldCard)
+        val card = cardBg().apply { tag = "status" }
+        card.addView(TextView(this).apply { text = "🗂️ 存档管理"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
+        card.addView(selectedStatusLine())
+        card.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
+        card.addView(MaterialButton(this).apply {
+            text = "🔄 刷新存档列表"
+            insetTop = 0; insetBottom = 0; setOnClickListener { refreshList(root) }
+        })
+        root.addView(card, idx)
+    }
 
     private fun refreshList(root: LinearLayout) {
         Thread {
@@ -222,6 +240,7 @@ class ArchiveActivity : AppCompatActivity() {
                     }
                 }
                 root.addView(card, idx)
+                refreshStatusCard(root)
             }
         }.start()
     }
