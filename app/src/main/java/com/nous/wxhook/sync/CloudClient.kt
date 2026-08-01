@@ -32,7 +32,11 @@ interface CloudClient {
     suspend fun testConnection(): Result<Unit>
     suspend fun ensureDirectory(path: String): Result<Unit>
     suspend fun upload(local: File, remote: String): Result<RemoteObject>
-    suspend fun download(remote: String, local: File): Result<Unit>
+    suspend fun download(
+        remote: String,
+        local: File,
+        onProgress: ((downloaded: Long, total: Long) -> Unit)? = null,
+    ): Result<Unit>
     suspend fun list(remote: String): Result<List<RemoteObject>>
     suspend fun get(remotePath: String): Result<RemoteObject>
     suspend fun rename(remotePath: String, newName: String): Result<Unit>

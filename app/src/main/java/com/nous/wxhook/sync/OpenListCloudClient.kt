@@ -117,7 +117,7 @@ class OpenListCloudClient(
         }
     }
 
-    override suspend fun download(remotePath: String, local: File): Result<Unit> {
+    override suspend fun download(remotePath: String, local: File, onProgress: ((downloaded: Long, total: Long) -> Unit)?): Result<Unit> {
         return withContext(Dispatchers.IO) {
             try {
                 val h = ensureHandle()
@@ -130,7 +130,25 @@ class OpenListCloudClient(
                     .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
                     .build().newCall(request).execute()
                 if (response.code in 200..299) {
-                    response.body?.bytes()?.let { local.writeBytes(it) }
+                    response.body?.let { body ->
+                        val total = body.contentLength()
+                        val out = java.io.ByteArrayOutputStream()
+                        body.byteStream().use { input ->
+                            val buffer = ByteArray(64 * 1024)
+                            var done = 0L
+                            var lastReport = 0L
+                            var read: Int
+                            while (input.read(buffer).also { read = it } != -1) {
+                                out.write(buffer, 0, read)
+                                done += read
+                                if (done - lastReport >= 512 * 1024 || done >= total) {
+                                    lastReport = done
+                                    onProgress?.invoke(done, total)
+                                }
+                            }
+                        }
+                        local.writeBytes(out.toByteArray())
+                    }
                     Result.success(Unit)
                 } else {
                     Result.failure(Exception("download failed: ${response.code}"))

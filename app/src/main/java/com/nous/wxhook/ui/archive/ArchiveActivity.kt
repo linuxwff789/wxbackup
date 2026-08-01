@@ -1,6 +1,7 @@
 package com.nous.wxhook.ui.archive
 
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -11,9 +12,9 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
 import com.nous.wxhook.backup.ArchiveManager
 import com.nous.wxhook.backup.ArchiveManager.ArchiveInfo
-import com.nous.wxhook.backup.BackupEnv
 import com.nous.wxhook.backup.RestoreEngine
 import com.nous.wxhook.root.RootGateways
+import com.nous.wxhook.service.CloudDownloadService
 import com.nous.wxhook.sync.Syncer
 import com.nous.wxhook.ui.M3
 import kotlinx.coroutines.runBlocking
@@ -22,6 +23,21 @@ import java.io.File
 class ArchiveActivity : AppCompatActivity() {
 
     private val TAG = "wxhook:ArchiveUI"
+    private val downloadFinishReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(ctx: android.content.Context?, intent: android.content.Intent?) {
+            if (intent?.action == CloudDownloadService.ACTION_FINISH) {
+                val ok = intent.getIntExtra(CloudDownloadService.EXTRA_OK, 0)
+                val fail = intent.getIntExtra(CloudDownloadService.EXTRA_FAIL, 0)
+                android.widget.Toast.makeText(
+                    this@ArchiveActivity,
+                    "下载完成: $ok 成功, $fail 失败",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+                refreshList(rootLayout ?: return)
+            }
+        }
+    }
+    private var rootLayout: LinearLayout? = null
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun cardBg() = LinearLayout(this).apply {
@@ -34,6 +50,12 @@ class ArchiveActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Android 13+ 通知需要运行时权限（前台服务进度依赖通知栏）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                try { requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001) } catch (_: Exception) {}
+            }
+        }
         supportActionBar?.title = "存档管理"
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
@@ -92,6 +114,22 @@ class ArchiveActivity : AppCompatActivity() {
         root.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(16)) })
         sv.addView(root)
         setContentView(sv)
+        rootLayout = root
+        // 监听下载服务完成广播，自动刷新列表
+        android.content.IntentFilter().also { filter ->
+            filter.addAction(CloudDownloadService.ACTION_FINISH)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(downloadFinishReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(downloadFinishReceiver, filter)
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { unregisterReceiver(downloadFinishReceiver) } catch (_: Exception) {}
     }
 
     override fun onSupportNavigateUp(): Boolean { finish(); return true }
@@ -268,53 +306,15 @@ class ArchiveActivity : AppCompatActivity() {
     }
 
     private fun downloadAndSelect(archive: ArchiveInfo, root: LinearLayout) {
-        Thread {
-            val config = Syncer.loadConfig()
-            val client = Syncer.createClient(config) ?: run {
-                runOnUiThread { android.widget.Toast.makeText(this, "创建云客户端失败", android.widget.Toast.LENGTH_LONG).show() }
-                return@Thread
-            }
-            val localPath = "${BackupEnv.backupDataDir}/${File(archive.path).name}"
-            File(localPath).parentFile?.mkdirs()
-            runOnUiThread { android.widget.Toast.makeText(this, "下载中: ${archive.tag}", android.widget.Toast.LENGTH_LONG).show() }
-            try {
-                val result = runBlocking { client.download(archive.path, File(localPath)) }
-                if (result.isSuccess) {
-                    runOnUiThread {
-                        android.widget.Toast.makeText(this, "下载完成: ${archive.tag}", android.widget.Toast.LENGTH_SHORT).show()
-                        ArchiveManager.selectArchive(archive.tag)
-                        refreshList(root)
-                    }
-                } else {
-                    runOnUiThread {
-                        android.widget.Toast.makeText(this, "下载失败: ${result.exceptionOrNull()?.message}", android.widget.Toast.LENGTH_LONG).show()
-                    }
-                }
-            } catch (e: Exception) {
-                runOnUiThread { android.widget.Toast.makeText(this, "下载异常: ${e.message}", android.widget.Toast.LENGTH_LONG).show() }
-            }
-        }.start()
+        val localName = File(archive.path).name
+        CloudDownloadService.start(this, listOf(archive.path to localName))
+        android.widget.Toast.makeText(this, "开始下载: ${archive.tag}（通知栏查看进度）", android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun downloadAllCloud(cloudArchives: List<ArchiveInfo>, root: LinearLayout) {
-        Thread {
-            val config = Syncer.loadConfig()
-            val client = Syncer.createClient(config) ?: return@Thread
-            var ok = 0; var fail = 0
-            for (a in cloudArchives) {
-                val localPath = "${BackupEnv.backupDataDir}/${File(a.path).name}"
-                File(localPath).parentFile?.mkdirs()
-                try {
-                    val r = runBlocking { client.download(a.path, File(localPath)) }
-                    if (r.isSuccess) ok++ else fail++
-                } catch (_: Exception) { fail++ }
-            }
-            val msg = "下载完成: $ok 成功, $fail 失败"
-            runOnUiThread {
-                android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
-                refreshList(root)
-            }
-        }.start()
+        val jobs = cloudArchives.map { it.path to File(it.path).name }
+        CloudDownloadService.start(this, jobs)
+        android.widget.Toast.makeText(this, "开始下载 ${jobs.size} 个云端存档（通知栏查看进度）", android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun showDiff() {
