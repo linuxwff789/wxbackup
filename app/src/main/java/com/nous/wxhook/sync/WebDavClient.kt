@@ -43,6 +43,40 @@ class WebDavClient(
         return "Basic ${java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())}"
     }
 
+    /**
+     * 将远端路径解析为完整 URL。兼容三种 href 格式：
+     * 1. 完整 URL（http(s)://...）→ 直接使用
+     * 2. 绝对路径（/remote.php/dav/...）→ 基于服务器 origin 拼接，避免路径重复
+     * 3. 相对路径（wxhook-backup/xxx.tar.zst）→ 基于 base url 拼接
+     */
+    private fun resolveUrl(remote: String): String {
+        val base = url.trimEnd('/')
+        return when {
+            remote.startsWith("http://") || remote.startsWith("https://") -> remote
+            remote.startsWith("/") -> {
+                val origin = Regex("^(https?://[^/]+)").find(base)?.groupValues?.get(1) ?: base
+                "$origin$remote"
+            }
+            else -> "$base/$remote"
+        }
+    }
+
+    /** 解析 WebDAV 返回的 HTTP 日期（如 "Wed, 23 Jul 2025 07:35:01 GMT"）为毫秒时间戳 */
+    private fun parseHttpDate(date: String): Long {
+        val candidates = listOf(
+            "EEE, dd MMM yyyy HH:mm:ss z",   // RFC 1123
+            "EEEE, dd-MMM-yy HH:mm:ss z",     // RFC 850
+            "EEE MMM d HH:mm:ss yyyy",        // ANSI C
+        )
+        for (pattern in candidates) {
+            try {
+                return java.text.SimpleDateFormat(pattern, java.util.Locale.US)
+                    .parse(date.trim())?.time ?: 0L
+            } catch (_: Exception) {}
+        }
+        return 0L
+    }
+
     override suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val body = """<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>"""
@@ -105,13 +139,21 @@ class WebDavClient(
             }
 
             val files = mutableListOf<RemoteObject>()
-            val hrefRegex = Regex("<[dD]:href>([^<]+)</[dD]:href>")
-            val matches = hrefRegex.findAll(responseBody)
-            for (match in matches) {
-                val href = match.groupValues[1]
+            // PROPFIND 响应按 <response> 块解析，兼容带/不带命名空间前缀的标签
+            val responseBlocks = Regex("<[a-zA-Z0-9-]+:?response>([\\s\\S]*?)</[a-zA-Z0-9-]+:?response>")
+                .findAll(responseBody)
+            for (block in responseBlocks) {
+                val xml = block.groupValues[1]
+                val hrefMatch = Regex("<[a-zA-Z0-9-]+:?href>([^<]+)</[a-zA-Z0-9-]+:?href>").find(xml)
+                    ?: continue
+                val href = hrefMatch.groupValues[1]
                 val name = href.trimEnd('/').substringAfterLast('/')
                 if (name.isNotEmpty()) {
-                    files.add(RemoteObject(href, 0, 0))
+                    val size = Regex("<[a-zA-Z0-9-]+:?getcontentlength>([0-9]+)</[a-zA-Z0-9-]+:?getcontentlength>")
+                        .find(xml)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+                    val modTime = Regex("<[a-zA-Z0-9-]+:?getlastmodified>([^<]+)</[a-zA-Z0-9-]+:?getlastmodified>")
+                        .find(xml)?.groupValues?.get(1)?.let(::parseHttpDate) ?: 0L
+                    files.add(RemoteObject(href, size, modTime))
                 }
             }
             Result.success(files)
@@ -139,7 +181,7 @@ class WebDavClient(
 
     override suspend fun download(remote: String, local: File): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val fullUrl = "${url.trimEnd('/')}/$remote"
+            val fullUrl = resolveUrl(remote)
             val request = Request.Builder()
                 .url(fullUrl)
                 .header("Authorization", authHeader())

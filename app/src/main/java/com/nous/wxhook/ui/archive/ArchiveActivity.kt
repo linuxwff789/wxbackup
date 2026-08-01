@@ -255,7 +255,8 @@ class ArchiveActivity : AppCompatActivity() {
                 runOnUiThread { android.widget.Toast.makeText(this, "创建云客户端失败", android.widget.Toast.LENGTH_LONG).show() }
                 return@Thread
             }
-            val localPath = "${BackupEnv.backupDataDir}/${archive.tag}"
+            val localPath = "${BackupEnv.backupDataDir}/${File(archive.path).name}"
+            File(localPath).parentFile?.mkdirs()
             runOnUiThread { android.widget.Toast.makeText(this, "下载中: ${archive.tag}", android.widget.Toast.LENGTH_LONG).show() }
             try {
                 val result = runBlocking { client.download(archive.path, File(localPath)) }
@@ -282,7 +283,8 @@ class ArchiveActivity : AppCompatActivity() {
             val client = Syncer.createClient(config) ?: return@Thread
             var ok = 0; var fail = 0
             for (a in cloudArchives) {
-                val localPath = "${BackupEnv.backupDataDir}/${a.tag}"
+                val localPath = "${BackupEnv.backupDataDir}/${File(a.path).name}"
+                File(localPath).parentFile?.mkdirs()
                 try {
                     val r = runBlocking { client.download(a.path, File(localPath)) }
                     if (r.isSuccess) ok++ else fail++
