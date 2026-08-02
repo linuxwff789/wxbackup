@@ -232,6 +232,24 @@ class ArchiveActivity : AppCompatActivity() {
                             setTextColor(srcColor)
                         }
                         if (a.source != "phone") {
+                            nameLine.setOnLongClickListener {
+                                if (a.source != "local") return@setOnLongClickListener false
+                                android.app.AlertDialog.Builder(this@ArchiveActivity)
+                                    .setTitle("删除本地存档")
+                                    .setMessage("删除 ${a.tag}？此操作不可撤销。")
+                                    .setPositiveButton("删除") { _, _ ->
+                                        Thread {
+                                            val ok = ArchiveManager.deleteLocalArchive(a)
+                                            runOnUiThread {
+                                                android.widget.Toast.makeText(this@ArchiveActivity, if (ok) "已删除" else "删除失败", android.widget.Toast.LENGTH_SHORT).show()
+                                                refreshList(root)
+                                            }
+                                        }.start()
+                                    }
+                                    .setNegativeButton("取消", null)
+                                    .show()
+                                true
+                            }
                             nameLine.setOnClickListener {
                                 if (a.source == "cloud") {
                                     android.app.AlertDialog.Builder(this@ArchiveActivity)

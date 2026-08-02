@@ -234,19 +234,54 @@ object ArchiveManager {
             Log.w(TAG, "selectArchive: archive not found: $tag")
             return false
         }
-        Log.i(TAG, "selectArchive: selected ${match.tag} (msgs=${match.messageCount})")
+        val usable = materialize(match) ?: run {
+            Log.w(TAG, "selectArchive: cannot materialize ${match.path}")
+            return false
+        }
+        Log.i(TAG, "selectArchive: selected ${usable.tag} (msgs=${usable.messageCount})")
         val json = JSONObject().apply {
-            put("tag", match.tag)
-            put("hash", match.hash)
-            put("backupTime", match.backupTime)
-            put("messageCount", match.messageCount)
-            put("password", match.password)
-            put("path", match.path)
-            put("totalAttachmentFiles", match.totalAttachmentFiles)
+            put("tag", usable.tag)
+            put("hash", usable.hash)
+            put("backupTime", usable.backupTime)
+            put("backupTimeStr", usable.backupTimeStr)
+            put("messageCount", usable.messageCount)
+            put("password", usable.password)
+            put("path", usable.path)
+            put("source", usable.source)
+            put("totalAttachmentFiles", usable.totalAttachmentFiles)
+            put("totalAttachmentSize", usable.totalAttachmentSize)
         }
         RootGateways.run("mkdir -p /data/local/tmp 2>/dev/null")
         RootGateways.run("cat > '$SELECTED_FILE' << 'EOF'\n${json.toString(2)}\nEOF")
         return true
+    }
+
+    private fun materialize(archive: ArchiveInfo): ArchiveInfo? {
+        if (!archive.path.endsWith(".tar.zst") && !archive.path.endsWith(".tar.gz")) {
+            return archive.takeIf { File(it.path).isDirectory }
+        }
+        val target = File(BackupEnv.backupDataDir, "extracted_${archive.tag}")
+        if (!target.exists() || target.listFiles()?.none { it.isDirectory && File(it, "db_state.json").exists() } == true) {
+            RootGateways.run("rm -rf '${target.absolutePath}' && mkdir -p '${target.absolutePath}'", 30_000)
+            val result = RootGateways.run(BackupEnv.tarExtractCommand(archive.path, target.absolutePath), 600_000)
+            if (!result.isSuccess) {
+                Log.e(TAG, "materialize failed: ${result.stderr}")
+                return null
+            }
+        }
+        val dir = target.listFiles()?.firstOrNull { it.isDirectory && File(it, "db_state.json").exists() }
+            ?: return null
+        return readArchiveInfo(dir)
+    }
+
+    fun clearSelection(): Boolean = RootGateways.run("rm -f '$SELECTED_FILE' 2>/dev/null").isSuccess
+
+    fun deleteLocalArchive(archive: ArchiveInfo): Boolean {
+        if (archive.source != "local" || archive.path.isBlank()) return false
+        val ok = RootGateways.run("rm -rf '${archive.path}'", 120_000).isSuccess
+        RootGateways.run("rm -rf '${File(BackupEnv.backupDataDir, "extracted_${archive.tag}").absolutePath}'", 120_000)
+        if (ok && getSelectedArchive()?.tag == archive.tag) clearSelection()
+        return ok
     }
 
     fun getSelectedArchive(): ArchiveInfo? {
@@ -258,10 +293,13 @@ object ArchiveManager {
                 tag = j.optString("tag", ""),
                 hash = j.optString("hash", ""),
                 backupTime = j.optLong("backupTime", 0),
+                backupTimeStr = j.optString("backupTimeStr", formatTime(j.optLong("backupTime", 0))),
                 messageCount = j.optLong("messageCount", 0),
                 password = j.optString("password", "e9cd2ae"),
                 path = j.optString("path", ""),
+                source = j.optString("source", "local"),
                 totalAttachmentFiles = j.optInt("totalAttachmentFiles", 0),
+                totalAttachmentSize = j.optLong("totalAttachmentSize", 0),
             )
         } catch (_: Exception) { null }
     }
