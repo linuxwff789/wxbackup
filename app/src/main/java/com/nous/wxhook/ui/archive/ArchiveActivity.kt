@@ -16,6 +16,7 @@ import com.nous.wxhook.backup.RestoreEngine
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.service.CloudDownloadService
 import com.nous.wxhook.sync.Syncer
+import com.nous.wxhook.sync.ArchiveDownloadPlanner
 import com.nous.wxhook.ui.M3
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -325,14 +326,36 @@ class ArchiveActivity : AppCompatActivity() {
 
     private fun downloadAndSelect(archive: ArchiveInfo, root: LinearLayout) {
         val localName = File(archive.path).name
-        CloudDownloadService.start(this, listOf(archive.path to localName))
+        val localPath = File(com.nous.wxhook.backup.BackupEnv.backupDataDir, localName)
+        val jobs = ArchiveDownloadPlanner.missingOrChanged(
+            listOf(ArchiveDownloadPlanner.Candidate(archive.path, localPath.absolutePath, archive.totalAttachmentSize))
+        )
+        if (jobs.isEmpty()) {
+            ArchiveManager.selectArchive(archive.tag)
+            refreshList(root)
+            android.widget.Toast.makeText(this, "本地已有完整存档，跳过下载", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        CloudDownloadService.start(this, jobs.map { it.remotePath to it.name })
         android.widget.Toast.makeText(this, "开始下载: ${archive.tag}（通知栏查看进度）", android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun downloadAllCloud(cloudArchives: List<ArchiveInfo>, root: LinearLayout) {
-        val jobs = cloudArchives.map { it.path to File(it.path).name }
-        CloudDownloadService.start(this, jobs)
-        android.widget.Toast.makeText(this, "开始下载 ${jobs.size} 个云端存档（通知栏查看进度）", android.widget.Toast.LENGTH_LONG).show()
+        val candidates = cloudArchives.map { archive ->
+            val name = File(archive.path).name
+            ArchiveDownloadPlanner.Candidate(
+                remotePath = archive.path,
+                localPath = File(com.nous.wxhook.backup.BackupEnv.backupDataDir, name).absolutePath,
+                remoteSize = archive.totalAttachmentSize,
+            )
+        }
+        val jobs = ArchiveDownloadPlanner.missingOrChanged(candidates)
+        if (jobs.isEmpty()) {
+            android.widget.Toast.makeText(this, "本地已具备全部云端存档，跳过下载", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        CloudDownloadService.start(this, jobs.map { it.remotePath to it.name })
+        android.widget.Toast.makeText(this, "开始下载 ${jobs.size} 个新增或变更存档（通知栏查看进度）", android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun showDiff() {
