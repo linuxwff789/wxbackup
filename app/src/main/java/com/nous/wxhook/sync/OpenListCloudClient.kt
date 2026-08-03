@@ -7,6 +7,7 @@ import openlistbridge.Openlistbridge
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * CloudClient adapter backed by gomobile-compiled Go JNI library.
@@ -21,6 +22,12 @@ class OpenListCloudClient(
 
     private var handle: String? = null
     private val TAG = "wxhook:OpenListCC"
+    private val httpClient: okhttp3.OkHttpClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .build()
+    }
 
     private suspend fun ensureHandle(): String {
         if (handle == null) {
@@ -125,29 +132,13 @@ class OpenListCloudClient(
                 val parsed = checkSuccess(r)
                 val url = parsed.getJSONObject("data").getString("url")
                 val request = okhttp3.Request.Builder().url(url).get().build()
-                val response = okhttp3.OkHttpClient.Builder()
-                    .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                    .build().newCall(request).execute()
+                val response = httpClient.newCall(request).execute()
                 if (response.code in 200..299) {
                     response.body?.let { body ->
                         val total = body.contentLength()
-                        val out = java.io.ByteArrayOutputStream()
                         body.byteStream().use { input ->
-                            val buffer = ByteArray(64 * 1024)
-                            var done = 0L
-                            var lastReport = 0L
-                            var read: Int
-                            while (input.read(buffer).also { read = it } != -1) {
-                                out.write(buffer, 0, read)
-                                done += read
-                                if (done - lastReport >= 512 * 1024 || done >= total) {
-                                    lastReport = done
-                                    onProgress?.invoke(done, total)
-                                }
-                            }
+                            DownloadStreamWriter.copy(input, local, total, onProgress)
                         }
-                        local.writeBytes(out.toByteArray())
                     }
                     Result.success(Unit)
                 } else {

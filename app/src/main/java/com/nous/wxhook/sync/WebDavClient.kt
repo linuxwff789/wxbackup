@@ -191,23 +191,9 @@ class WebDavClient(
             if (response.code in 200..299) {
                 response.body?.let { body ->
                     val total = body.contentLength()
-                    val out = java.io.ByteArrayOutputStream()
                     body.byteStream().use { input ->
-                        val buffer = ByteArray(64 * 1024)
-                        var done = 0L
-                        var lastReport = 0L
-                        var read: Int
-                        while (input.read(buffer).also { read = it } != -1) {
-                            out.write(buffer, 0, read)
-                            done += read
-                            // 每 512KB 或结束时上报一次进度，避免刷屏
-                            if (done - lastReport >= 512 * 1024 || done >= total) {
-                                lastReport = done
-                                onProgress?.invoke(done, total)
-                            }
-                        }
+                        DownloadStreamWriter.copy(input, local, total, onProgress)
                     }
-                    local.writeBytes(out.toByteArray())
                 }
                 Result.success(Unit)
             } else {
