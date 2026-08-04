@@ -106,7 +106,7 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
         } else {
             // 降级路径（RootService 未就绪）：用一条 shell find 兜底，保证功能可用
             val script = dirs.joinToString(" ") { d ->
-                "p='$d'; if [ -d \"\\$p\" ]; then echo \"$d \\$(find \\\"\\$p\\\" -type f 2>/dev/null | wc -l)\"; fi"
+                "p='$d'; if [ -d \"\$p\" ]; then echo \"$d \$(find \"\$p\" -type f 2>/dev/null | wc -l)\"; fi"
             }
             run(script, 60_000).let { r ->
                 if (!r.isSuccess) return@withContext emptyMap()
