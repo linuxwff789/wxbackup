@@ -488,6 +488,10 @@ class ArchiveActivity : AppCompatActivity() {
                         put("phoneRowIdFrom", diff.phoneMsgRowIdFrom)
                         put("phoneRowId", diff.phoneMsgRowId)
                         put("rowIdGap", diff.rowIdGap)
+                        put("chainCount", diff.chainPackageCount)
+                        put("chainFrom", diff.chainFrom)
+                        put("chainTo", diff.chainTo)
+                        put("chainHasGap", diff.chainHasGap)
                         put("phoneTotalAtt", diff.phoneTotalAttachments)
                         put("archiveTotalAtt", diff.archiveTotalAttachments)
                         put("attachments", org.json.JSONObject(diff.attachments.mapValues {

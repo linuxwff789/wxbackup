@@ -37,19 +37,28 @@ class ArchiveDiffActivity : AppCompatActivity() {
         val infoCard = cardBg()
         infoCard.addView(TextView(this).apply { text = "📊 ${j.optString("archiveTag", "?")} vs 手机当前"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
         infoCard.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4)) })
-        // 消息口径：存档=rowid 区间，手机=count(*) + rowid 区间，差异用 rowid 判断
+        // 消息口径：存档=存档链（基线+增量）rowid 区间，手机=count(*) + rowid 区间，差异用 rowid 判断
         val archTo = j.optLong("archiveRowId", 0)
         val phoneTo = j.optLong("phoneRowId", 0)
         val gap = j.optLong("rowIdGap", 0)
-        infoCard.addView(row("📝 消息", "手机当前", "${formatNum(j.optLong("phoneMsg", 0))} 条"))
-        infoCard.addView(row("🗂️ rowid", "存档", rowIdRange(j.optLong("archiveRowIdFrom", 0), archTo)))
+        val chainCount = j.optInt("chainCount", 1)
+        val chainFrom = j.optLong("chainFrom", 0)
+        val chainTo = j.optLong("chainTo", 0)
+        val chainHasGap = j.optBoolean("chainHasGap", false)
+        infoCard.addView(row("📝 消息", "手机当前", "${group(j.optLong("phoneMsg", 0))} 条"))
+        val chainLabel = if (chainCount > 1) "存档链(${chainCount}包)" else "存档"
+        val chainRange = rowIdRange(if (chainFrom > 0) chainFrom else j.optLong("archiveRowIdFrom", 0), if (chainTo > 0) chainTo else archTo)
+        infoCard.addView(row("🗂️ rowid", chainLabel, chainRange))
         infoCard.addView(row("", "手机", rowIdRange(j.optLong("phoneRowIdFrom", 0), phoneTo)))
         val gapText = when {
-            gap > 0 -> "存档领先 ${formatNum(gap)} 个 rowid（存档更新）"
-            gap < 0 -> "手机领先 ${formatNum(-gap)} 个 rowid（手机更新）"
+            gap > 0 -> "存档领先 ${group(gap)} 个 rowid（存档更新）"
+            gap < 0 -> "手机领先 ${group(-gap)} 个 rowid（手机更新）"
             else -> "rowid 一致"
         }
         infoCard.addView(row("", "进度", gapText, M3.colorPrimary(this)))
+        if (chainHasGap) {
+            infoCard.addView(row("⚠️", "存档链", "包之间 rowid 不连续，可能存在缺口", M3.colorError(this)))
+        }
         if (phoneTo <= 0 && j.optLong("phoneMsg", 0) <= 0) {
             infoCard.addView(row("⚠️", "手机数据", "读取失败（请确认微信已登录、root 权限正常）", M3.colorError(this)))
         }

@@ -57,6 +57,11 @@ object ArchiveManager {
         val phoneMsgRowId: Long,
         /** 存档领先/落后手机的 rowid 差值（正=存档更新，负=手机更新）。 */
         val rowIdGap: Long,
+        /** 存档链：同 hash 的基线+增量包合并后的覆盖范围。 */
+        val chainPackageCount: Int,
+        val chainFrom: Long,
+        val chainTo: Long,
+        val chainHasGap: Boolean,
         val attachments: Map<String, AttachmentDiff>,
         val phoneTotalAttachments: Int,
         val archiveTotalAttachments: Int,
@@ -289,9 +294,14 @@ object ArchiveManager {
         val archiveMsgRowId = archive.messageRowId
         val phoneMsgRowIdFrom = getPhoneMsgRowIdFrom()
         val phoneMsgRowId = getPhoneMsgRowId()
-        // 消息口径：存档侧是 rowid（lastMessageRowId），手机侧是 count(*)，两者不可直接相减。
+        // 增量备份：单独一个增量包的 rowid 区间只是全链的一段，必须把同 hash 的
+        // 基线+全部增量包串成存档链，用链的总覆盖范围与手机对比。
+        val chain = buildArchiveChain(archive)
+        val chainFrom = chain.from
+        val chainTo = chain.to
+        // 消息口径：存档侧是 rowid（链覆盖到 max rowid），手机侧是 count(*)，不可直接相减。
         // 差异用 rowid 判断（正=存档更新，负=手机更新），不再输出假的 count 差值和 union。
-        val rowIdGap = archiveMsgRowId - phoneMsgRowId
+        val rowIdGap = chainTo - phoneMsgRowId
 
         // 附件只对比标准目录（避免 manifest 里 sfs/appbrand 等其他目录造成假缺失）
         val allDirs = ATTACHMENT_DIRS.filter { it in phoneAttachments || it in archive.attachmentCounts }
@@ -321,10 +331,48 @@ object ArchiveManager {
             phoneMsgRowIdFrom = phoneMsgRowIdFrom,
             phoneMsgRowId = phoneMsgRowId,
             rowIdGap = rowIdGap,
+            chainPackageCount = chain.packageCount,
+            chainFrom = chainFrom,
+            chainTo = chainTo,
+            chainHasGap = chain.hasGap,
             attachments = attDiffs,
             phoneTotalAttachments = phoneTotal,
             archiveTotalAttachments = archiveTotal,
         )
+    }
+
+    /** 存档链信息：同 hash 的基线+增量包合并后的 rowid 覆盖范围。 */
+    data class ArchiveChain(
+        val packageCount: Int,
+        val from: Long,
+        val to: Long,
+        val hasGap: Boolean,
+    )
+
+    /**
+     * 构建存档链：扫描 backupdata 下所有包，JNI 读各包 db_state.json，
+     * 取与目标存档同 hash 的包，按 rowid 排序后合并覆盖范围。
+     */
+    fun buildArchiveChain(target: ArchiveInfo): ArchiveChain {
+        val pkgDir = File(File(BACKUP_DIR), "backupdata")
+        val pkgs = pkgDir.listFiles()?.filter {
+            it.name.endsWith(".tar.zst") || it.name.endsWith(".tar.gz")
+        } ?: emptyList()
+        val metas = pkgs.mapNotNull { readPackageInfo(it) }
+        val chain = metas.filter { it.hash == target.hash || target.hash.isBlank() }
+        if (chain.isEmpty()) return ArchiveChain(0, 0L, 0L, false)
+
+        val sorted = chain.sortedBy { it.messageRowId }
+        val from = sorted.map { it.messageRowIdFrom }.filter { it > 0 }.minOrNull() ?: 0L
+        val to = sorted.maxOf { it.messageRowId }
+        // 连续性：增量包 from 应 <= 前一个包 to（允许同值，rowid 空洞不算缺口）
+        var hasGap = false
+        var prevTo = -1L
+        for (p in sorted) {
+            if (prevTo >= 0 && p.messageRowIdFrom > 0 && p.messageRowIdFrom > prevTo + 1) hasGap = true
+            if (p.messageRowId > prevTo) prevTo = p.messageRowId
+        }
+        return ArchiveChain(sorted.size, from, to, hasGap)
     }
 
     // ── Select current archive ──
