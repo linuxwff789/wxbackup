@@ -76,7 +76,7 @@ object ArchiveManager {
         if (extracted.exists()) {
             Log.d(TAG, "scanLocalArchives: scanning backupdata/: ${extracted.listFiles()?.size ?: 0} entries")
             for (child in extracted.listFiles()?.sorted() ?: emptyList()) {
-                if (!child.isDirectory) continue
+                if (!child.isDirectory || !isArchiveDirCandidate(child.name)) continue
                 val info = readArchiveInfo(child)
                 if (info != null) {
                     Log.i(TAG, "scanLocalArchives: found archive [${info.tag}] msgs=${info.messageCount} atts=${info.totalAttachmentFiles}")
@@ -113,6 +113,10 @@ object ArchiveManager {
         Log.i(TAG, "scanLocalArchives: total ${archives.size} archives found")
         return archives
     }
+
+    /** 过滤解压缓存目录和临时目录，避免把 extracted_* / tmp 显示成存档。 */
+    fun isArchiveDirCandidate(name: String): Boolean =
+        !name.startsWith("extracted_") && name != "tmp"
 
     private fun readArchiveInfo(dir: File): ArchiveInfo? {
         val hash = dir.name

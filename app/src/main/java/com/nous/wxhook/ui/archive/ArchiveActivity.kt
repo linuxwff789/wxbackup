@@ -262,8 +262,19 @@ class ArchiveActivity : AppCompatActivity() {
                                         .setNegativeButton("取消", null)
                                         .show()
                                 } else {
-                                    ArchiveManager.selectArchive(a.tag)
-                                    refreshList(root)
+                                    // 解压可能耗时（全量包），放到后台线程，避免卡 UI
+                                    val tag = a.tag
+                                    android.widget.Toast.makeText(this@ArchiveActivity, "正在准备存档 $tag ...", android.widget.Toast.LENGTH_SHORT).show()
+                                    Thread {
+                                        val ok = ArchiveManager.selectArchive(tag)
+                                        runOnUiThread {
+                                            if (ok) {
+                                                refreshList(root)
+                                            } else {
+                                                android.widget.Toast.makeText(this@ArchiveActivity, "选中失败（解压存档失败）", android.widget.Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }.start()
                                 }
                             }
                         }
