@@ -32,7 +32,8 @@ jobs:
         run: |
           mkdir -p app/src/main/assets/bin
           # zstd remains for SQL dump and legacy .zst read paths.
-          curl -fsSL "https://github.com/linuxwff789/wxhook/releases/download/native-binaries/zstd" \
+          # 注意：native-binaries 由 compile-native.yml 上传到 wxbackup 仓库（不是 wxhook）
+          curl -fsSL "https://github.com/linuxwff789/wxbackup/releases/download/native-binaries/zstd" \
             -o app/src/main/assets/bin/zstd
           chmod 755 app/src/main/assets/bin/*
           ls -lh app/src/main/assets/bin/
