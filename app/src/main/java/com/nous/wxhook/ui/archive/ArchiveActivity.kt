@@ -356,7 +356,7 @@ class ArchiveActivity : AppCompatActivity() {
             .setNegativeButton("关闭", null)
             .create()
 
-        // 本地包：后台解压并填充完整信息（进度条提示，不用 toast）
+        // 本地包：用 JNI 读包内 JSON 填充完整信息（不 shell 解压）
         val needsPrep = a.source == "local" &&
             (a.path.endsWith(".tar.zst") || a.path.endsWith(".tar.gz")) &&
             (a.messageRowId <= 0 || a.totalAttachmentFiles <= 0)
@@ -416,12 +416,12 @@ class ArchiveActivity : AppCompatActivity() {
             progressRow.visibility = android.view.View.VISIBLE
             dialog.show()
             Thread {
-                val full = ArchiveManager.ensureExtracted(a)
+                val full = ArchiveManager.refreshPackageMeta(a)
                 runOnUiThread {
                     progressRow.visibility = android.view.View.GONE
                     val ready = full ?: a
                     if (full == null) {
-                        infoText.text = "本地存档 📦\n时间: ${a.backupTimeStr}\nrowid: ${a.messageRowId}\n消息数: ${a.messageCount}\n附件数: ${a.totalAttachmentFiles}\n大小: ${ArchiveManager.formatSize(a.totalAttachmentSize)}\n\n⚠️ 解压失败，可先尝试在列表中刷新"
+                        infoText.text = "本地存档 📦\n时间: ${a.backupTimeStr}\nrowid: ${a.messageRowId}\n消息数: ${a.messageCount}\n附件数: ${a.totalAttachmentFiles}\n大小: ${ArchiveManager.formatSize(a.totalAttachmentSize)}\n\n⚠️ 读取包内信息失败，可先尝试在列表中刷新"
                     } else {
                         fillInfo(ready)
                     }

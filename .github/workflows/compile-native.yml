@@ -30,7 +30,14 @@ jobs:
           cd /tmp
           curl -sL https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz | tar xz
           cd zstd-1.5.6
-          make zstd-release -j$(nproc) CC="gcc -O2"
+          # NDK arm64 交叉编译（runner 是 x86-64，直接 gcc 会编出 x86-64 ELF，手机上无法执行）
+          curl -sL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          unzip -q ndk.zip
+          export NDK_TOOLCHAIN=/tmp/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin
+          make zstd-release -j$(nproc) \
+            CC="$NDK_TOOLCHAIN/aarch64-linux-android21-clang" \
+            AR="$NDK_TOOLCHAIN/llvm-ar" \
+            RANLIB="$NDK_TOOLCHAIN/llvm-ranlib"
           cp programs/zstd $GITHUB_WORKSPACE/dist/zstd
 
       - name: Upload Release

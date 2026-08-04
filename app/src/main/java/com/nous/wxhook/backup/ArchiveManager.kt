@@ -2,6 +2,7 @@ package com.nous.wxhook.backup
 
 import android.util.Log
 import com.nous.wxhook.root.RootGateways
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -112,24 +113,17 @@ object ArchiveManager {
         } else emptyList()
         Log.d(TAG, "scanLocalArchives: found ${packages.size} archive packages")
         packages.forEach { f ->
-            val cached = pkgInfoCache[f.absolutePath]
-            val info = if (cached != null && cached.first == f.lastModified()) {
-                cached.second
-            } else {
-                // JNI 读元数据失败时也显示（仅大小/时间），不能整个存档消失
-                readPackageInfo(f) ?: ArchiveInfo(
-                    tag = f.nameWithoutExtension.removeSuffix(".tar").removeSuffix(".zst").removeSuffix(".gz"),
-                    backupTime = f.lastModified(),
-                    backupTimeStr = formatTime(f.lastModified()),
-                    totalAttachmentSize = f.length(),
-                    path = f.absolutePath,
-                    source = "local",
-                ).also {
-                    pkgInfoCache[f.absolutePath] = f.lastModified() to it
-                }
-            }
-            Log.i(TAG, "scanLocalArchives: found package [${info.tag}] msgs=${info.messageCount} rowid=${info.messageRowId} size=${formatSize(f.length())}")
-            archives.add(info)
+            // 刷新只显示文件名+大小，不解压、不读包内元数据（详情时才处理）
+            val tag = f.nameWithoutExtension.removeSuffix(".tar").removeSuffix(".zst").removeSuffix(".gz")
+            archives.add(ArchiveInfo(
+                tag = tag,
+                backupTime = f.lastModified(),
+                backupTimeStr = formatTime(f.lastModified()),
+                totalAttachmentSize = f.length(),
+                path = f.absolutePath,
+                source = "local",
+            ))
+            Log.i(TAG, "scanLocalArchives: found package [${tag}] size=${formatSize(f.length())}")
         }
 
         Log.i(TAG, "scanLocalArchives: total ${archives.size} archives found")
@@ -137,7 +131,7 @@ object ArchiveManager {
     }
 
     /**
-     * 用 JNI 直接从 tar 包读取元数据（db_state.json / db_config.json），
+     * 用 JNI 直接从 tar 包读取元数据（db_state.json / db_config.json / file_manifest.json），
      * 不整包解压、不 listTar 全量扫包。失败返回 null（调用方回退到仅大小信息）。
      */
     private fun readPackageInfo(pkg: File): ArchiveInfo? {
@@ -156,6 +150,24 @@ object ArchiveManager {
                 if (cfgRaw.isNotBlank()) password = JSONObject(cfgRaw).optString("password", password)
             } catch (_: Exception) {}
 
+            // 附件统计：JNI 读 file_manifest.json（包前部，快），不 listTar
+            var counts = emptyMap<String, Int>()
+            try {
+                val manRaw = RootGateways.readFileFromTar(pkg.absolutePath, "$hash/file_manifest.json")
+                if (manRaw.isNotBlank()) {
+                    val man = JSONObject(manRaw)
+                    val files = man.optJSONArray("files") ?: JSONArray()
+                    val c = mutableMapOf<String, Int>()
+                    for (i in 0 until files.length()) {
+                        val f = files.getJSONObject(i)
+                        val rel = f.optString("path", "").removePrefix("$hash/")
+                        val dir = rel.substringBefore("/")
+                        if (dir.isNotBlank()) c[dir] = (c[dir] ?: 0) + 1
+                    }
+                    counts = c
+                }
+            } catch (_: Exception) {}
+
             ArchiveInfo(
                 tag = tag,
                 hash = hash,
@@ -163,15 +175,19 @@ object ArchiveManager {
                 backupTimeStr = formatTime(backupTime),
                 messageCount = state.optLong("lastMessageRowId", 0),
                 messageRowId = state.optLong("lastMessageRowId", 0),
-                totalAttachmentFiles = 0,
+                totalAttachmentFiles = counts.values.sum(),
                 totalAttachmentSize = pkg.length(),
                 password = password,
                 path = pkg.absolutePath,
                 source = "local",
-                attachmentCounts = emptyMap(),
+                attachmentCounts = counts,
             )
         } catch (_: Exception) { null }
     }
+
+    /** 详情用：JNI 读包内 JSON（db_state/db_config/file_manifest），不 shell 解压。 */
+    fun refreshPackageMeta(archive: ArchiveInfo): ArchiveInfo? =
+        readPackageInfo(File(archive.path))
 
     /** 过滤解压缓存目录和临时目录，避免把 extracted_* / tmp 显示成存档。 */
     fun isArchiveDirCandidate(name: String): Boolean =
