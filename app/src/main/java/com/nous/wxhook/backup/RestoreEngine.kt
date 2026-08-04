@@ -211,15 +211,23 @@ SELECT 'merged' AS stat, count(*) AS cnt FROM message;
         archive: ArchiveInfo,
         progress: ((String) -> Unit)? = null,
     ): Boolean {
+        // 选中时不再整包解压；恢复前确保解压完成
+        val usable = ArchiveManager.ensureExtracted(archive)
+        if (usable == null) {
+            progress?.invoke("❌ 存档解压失败，无法恢复")
+            Log.e(TAG, "restore: extract failed for ${archive.tag}")
+            return false
+        }
+        progress?.invoke("✅ 存档解压完成")
         val tag = archive.tag
         val pwd = archive.password
         val mergedPath = "/sdcard/Download/wxhook_backup/merged_${tag}_${System.currentTimeMillis()}.db"
 
         progress?.invoke("🔗 合并数据库...")
-        Log.i(TAG, "restore: starting restore for $tag")
+        Log.i(TAG, "restore: starting restore for $tag path=${usable.path}")
 
         // Step 1: Merge
-        val merged = mergeDb(archive.path, PHONE_DB, mergedPath, pwd)
+        val merged = mergeDb(usable.path, PHONE_DB, mergedPath, pwd)
         if (merged == null) {
             Log.e(TAG, "restore: merge failed")
             progress?.invoke("❌ 合并失败")
@@ -241,7 +249,7 @@ SELECT 'merged' AS stat, count(*) AS cnt FROM message;
         if (archive.totalAttachmentFiles > 0) {
             progress?.invoke("📁 复制附件...")
             Log.i(TAG, "restore: copying ${archive.totalAttachmentFiles} attachments")
-            copyAttachments(archive.path)
+            copyAttachments(usable.path)
             progress?.invoke("✅ 附件复制完成")
         } else {
             Log.d(TAG, "restore: no attachments to copy")

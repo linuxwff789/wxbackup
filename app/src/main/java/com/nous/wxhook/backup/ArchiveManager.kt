@@ -22,6 +22,9 @@ object ArchiveManager {
     private const val BACKUP_DIR = "/sdcard/Download/wxhook_backup"
     private const val SELECTED_FILE = "/data/local/tmp/wxhook_selected_archive.json"
 
+    /** 包元数据缓存：path -> (包 mtime, ArchiveInfo)，避免每次刷新都 JNI 扫包。 */
+    private val pkgInfoCache = mutableMapOf<String, Pair<Long, ArchiveInfo>>()
+
     data class ArchiveInfo(
         val tag: String,
         val hash: String = "",
@@ -107,20 +110,81 @@ object ArchiveManager {
         } else emptyList()
         Log.d(TAG, "scanLocalArchives: found ${packages.size} archive packages")
         packages.forEach { f ->
-            val tag = f.nameWithoutExtension
-                .removeSuffix(".tar").removeSuffix(".zst").removeSuffix(".gz")
-            Log.i(TAG, "scanLocalArchives: found package [${tag}] size=${formatSize(f.length())}")
-            archives.add(ArchiveInfo(
-                tag = tag,
-                backupTime = f.lastModified(),
-                backupTimeStr = formatTime(f.lastModified()),
-                path = f.absolutePath,
-                source = "local",
-            ))
+            val cached = pkgInfoCache[f.absolutePath]
+            val info = if (cached != null && cached.first == f.lastModified()) {
+                cached.second
+            } else {
+                readPackageInfo(f)?.also {
+                    pkgInfoCache[f.absolutePath] = f.lastModified() to it
+                }
+            }
+            if (info != null) {
+                Log.i(TAG, "scanLocalArchives: found package [${info.tag}] msgs=${info.messageCount} rowid=${info.messageRowId} size=${formatSize(f.length())}")
+                archives.add(info)
+            }
         }
 
         Log.i(TAG, "scanLocalArchives: total ${archives.size} archives found")
         return archives
+    }
+
+    /**
+     * 用 JNI 直接从 tar 包读取元数据（db_state.json / db_config.json / file_manifest.json），
+     * 不整包解压。失败返回 null（调用方回退到仅大小信息）。
+     */
+    private fun readPackageInfo(pkg: File): ArchiveInfo? {
+        return try {
+            val listing = RootGateways.listTar(pkg.absolutePath)
+            val statePath = listing.lines().firstOrNull { it.endsWith("/db_state.json") }
+                ?: return null
+            val hash = statePath.substringBefore("/")
+            val stateRaw = RootGateways.readFileFromTar(pkg.absolutePath, statePath)
+            if (stateRaw.isBlank()) return null
+            val state = JSONObject(stateRaw)
+            val tag = pkg.nameWithoutExtension
+                .removeSuffix(".tar").removeSuffix(".zst").removeSuffix(".gz")
+            val backupTime = state.optLong("lastBackupTime", pkg.lastModified())
+
+            var password = "e9cd2ae"
+            try {
+                val cfgRaw = RootGateways.readFileFromTar(pkg.absolutePath, "$hash/db_config.json")
+                if (cfgRaw.isNotBlank()) password = JSONObject(cfgRaw).optString("password", password)
+            } catch (_: Exception) {}
+
+            var counts = emptyMap<String, Int>()
+            var totalSize = 0L
+            try {
+                val manRaw = RootGateways.readFileFromTar(pkg.absolutePath, "$hash/file_manifest.json")
+                if (manRaw.isNotBlank()) {
+                    val man = JSONObject(manRaw)
+                    val files = man.optJSONArray("files") ?: JSONArray()
+                    val c = mutableMapOf<String, Int>()
+                    for (i in 0 until files.length()) {
+                        val f = files.getJSONObject(i)
+                        val rel = f.optString("path", "").removePrefix("$hash/")
+                        val dir = rel.substringBefore("/")
+                        if (dir.isNotBlank()) c[dir] = (c[dir] ?: 0) + 1
+                        totalSize += f.optLong("size", 0)
+                    }
+                    counts = c
+                }
+            } catch (_: Exception) {}
+
+            ArchiveInfo(
+                tag = tag,
+                hash = hash,
+                backupTime = backupTime,
+                backupTimeStr = formatTime(backupTime),
+                messageCount = state.optLong("lastMessageRowId", 0),
+                messageRowId = state.optLong("lastMessageRowId", 0),
+                totalAttachmentFiles = counts.values.sum(),
+                totalAttachmentSize = totalSize,
+                password = password,
+                path = pkg.absolutePath,
+                source = "local",
+                attachmentCounts = counts,
+            )
+        } catch (_: Exception) { null }
     }
 
     /** 过滤解压缓存目录和临时目录，避免把 extracted_* / tmp 显示成存档。 */
@@ -254,10 +318,9 @@ object ArchiveManager {
             Log.w(TAG, "selectArchive: archive not found: $tag")
             return false
         }
-        val usable = materialize(match) ?: run {
-            Log.w(TAG, "selectArchive: cannot materialize ${match.path}")
-            return false
-        }
+        // 包元数据已由 scanLocalArchives 通过 JNI 读取（hash/rowid/password/附件统计），
+        // 不再整包解压；真正需要文件内容时（恢复）再 ensureExtracted。
+        val usable = match
         Log.i(TAG, "selectArchive: selected ${usable.tag} (msgs=${usable.messageCount})")
         val json = JSONObject().apply {
             put("tag", usable.tag)
@@ -277,7 +340,8 @@ object ArchiveManager {
         return true
     }
 
-    private fun materialize(archive: ArchiveInfo): ArchiveInfo? {
+    /** 确保 tar 包已解压，返回解压后的目录信息（恢复前调用）。 */
+    fun ensureExtracted(archive: ArchiveInfo): ArchiveInfo? {
         if (!archive.path.endsWith(".tar.zst") && !archive.path.endsWith(".tar.gz")) {
             return archive.takeIf { File(it.path).isDirectory }
         }
@@ -288,7 +352,7 @@ object ArchiveManager {
             RootGateways.run("rm -rf '${target.absolutePath}' && mkdir -p '${target.absolutePath}'", 30_000)
             val result = RootGateways.run(BackupEnv.tarExtractCommand(archive.path, target.absolutePath), 600_000)
             if (!result.isSuccess) {
-                Log.e(TAG, "materialize failed: ${result.stderr}")
+                Log.e(TAG, "ensureExtracted failed: ${result.stderr}")
                 return null
             }
         }

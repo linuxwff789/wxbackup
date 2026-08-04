@@ -273,19 +273,9 @@ class ArchiveActivity : AppCompatActivity() {
                                         .setNegativeButton("取消", null)
                                         .show()
                                 } else {
-                                    // 解压可能耗时（全量包），放到后台线程，避免卡 UI
                                     val tag = a.tag
-                                    android.widget.Toast.makeText(this@ArchiveActivity, "正在准备存档 $tag ...", android.widget.Toast.LENGTH_SHORT).show()
-                                    Thread {
-                                        val ok = ArchiveManager.selectArchive(tag)
-                                        runOnUiThread {
-                                            if (ok) {
-                                                refreshList(root)
-                                            } else {
-                                                android.widget.Toast.makeText(this@ArchiveActivity, "选中失败（解压存档失败）", android.widget.Toast.LENGTH_LONG).show()
-                                            }
-                                        }
-                                    }.start()
+                                    ArchiveManager.selectArchive(tag)
+                                    refreshList(root)
                                 }
                             }
                         }
@@ -294,7 +284,7 @@ class ArchiveActivity : AppCompatActivity() {
                             val detail = when (a.source) {
                                 "phone" -> "  ${phoneMsgCount}条消息 · ${phoneAttTotal}个附件"
                                 "cloud" -> "  ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
-                                else -> "  ${a.backupTimeStr} · ${a.messageCount}条消息 · ${a.totalAttachmentFiles}个附件 · ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
+                                else -> "  ${a.backupTimeStr} · rowid ${a.messageRowId} · ${a.totalAttachmentFiles}个附件 · ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
                             }
                             text = "  $detail"
                             textSize = 12f; setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
