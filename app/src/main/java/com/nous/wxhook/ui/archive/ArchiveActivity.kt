@@ -407,7 +407,7 @@ class ArchiveActivity : AppCompatActivity() {
         fun fillInfo(archive: ArchiveInfo) {
             infoText.text = when (archive.source) {
                 "cloud" -> "云端存档 ☁️\n时间: ${archive.backupTimeStr}\n大小: ${ArchiveManager.formatSize(archive.totalAttachmentSize)}"
-                else -> "本地存档 📦\n时间: ${archive.backupTimeStr}\nrowid: ${archive.messageRowId}\n消息数: ${archive.messageCount}\n附件数: ${archive.totalAttachmentFiles}\n大小: ${ArchiveManager.formatSize(archive.totalAttachmentSize)}"
+                else -> "本地存档 📦\n时间: ${archive.backupTimeStr}\nrowid: ${archive.messageRowIdFrom} ~ ${archive.messageRowId}\n消息数: ${archive.messageCount}\n附件数: ${archive.totalAttachmentFiles}\n大小: ${ArchiveManager.formatSize(archive.totalAttachmentSize)}"
             }
         }
 
@@ -482,8 +482,10 @@ class ArchiveActivity : AppCompatActivity() {
                     putExtra("diff_json", org.json.JSONObject().apply {
                         put("archiveTag", archive.tag)
                         put("archiveMsg", diff.archiveMsgCount)
+                        put("archiveRowIdFrom", diff.archiveMsgRowIdFrom)
                         put("archiveRowId", diff.archiveMsgRowId)
                         put("phoneMsg", diff.phoneMsgCount)
+                        put("phoneRowIdFrom", diff.phoneMsgRowIdFrom)
                         put("phoneRowId", diff.phoneMsgRowId)
                         put("unionMsg", diff.unionMsg)
                         put("onlyInArchive", diff.onlyInArchive)

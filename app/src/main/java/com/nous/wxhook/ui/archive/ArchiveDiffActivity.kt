@@ -39,8 +39,8 @@ class ArchiveDiffActivity : AppCompatActivity() {
         infoCard.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4)) })
         infoCard.addView(row("📝 消息", "存档", formatNum(j.optLong("archiveMsg", 0))))
         infoCard.addView(row("", "手机", formatNum(j.optLong("phoneMsg", 0))))
-        infoCard.addView(row("🗂️ rowid", "存档", formatNum(j.optLong("archiveRowId", 0))))
-        infoCard.addView(row("", "手机", formatNum(j.optLong("phoneRowId", 0))))
+        infoCard.addView(row("🗂️ rowid", "存档", rowIdRange(j.optLong("archiveRowIdFrom", 0), j.optLong("archiveRowId", 0))))
+        infoCard.addView(row("", "手机", rowIdRange(j.optLong("phoneRowIdFrom", 0), j.optLong("phoneRowId", 0))))
         infoCard.addView(row("", "仅存档有", formatNum(j.optLong("onlyInArchive", 0)), M3.colorPrimary(this)))
         infoCard.addView(row("", "仅手机有", formatNum(j.optLong("onlyInPhone", 0)), M3.colorPrimary(this)))
         infoCard.addView(row("", "合并后", formatNum(j.optLong("unionMsg", 0)), M3.colorPrimary(this)))
@@ -94,4 +94,8 @@ class ArchiveDiffActivity : AppCompatActivity() {
     }
 
     private fun formatNum(n: Long) = if (n >= 10000) "${n / 1000}K" else "$n"
+
+    /** rowid 范围显示：from ~ to（from=0 时只显示 to）。 */
+    private fun rowIdRange(from: Long, to: Long): String =
+        if (from > 0 && to >= from) "${formatNum(from)} ~ ${formatNum(to)}" else formatNum(to)
 }

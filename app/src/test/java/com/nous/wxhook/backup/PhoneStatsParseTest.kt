@@ -26,6 +26,7 @@ class PhoneStatsParseTest {
     fun phoneStatsTotalSumsCounts() {
         val stats = ArchiveManager.PhoneStats(
             msgCount = 100,
+            msgRowIdFrom = 90,
             msgRowId = 120,
             attachmentCounts = mapOf("image2" to 10, "video" to 5),
         )

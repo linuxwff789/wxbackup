@@ -34,6 +34,7 @@ object ArchiveManager {
         val backupTime: Long = 0,
         val backupTimeStr: String = "",
         val messageCount: Long = 0,
+        val messageRowIdFrom: Long = 0,
         val messageRowId: Long = 0,
         val totalAttachmentFiles: Int = 0,
         val totalAttachmentSize: Long = 0,
@@ -47,8 +48,10 @@ object ArchiveManager {
 
     data class DiffResult(
         val archiveMsgCount: Long,
+        val archiveMsgRowIdFrom: Long,
         val archiveMsgRowId: Long,
         val phoneMsgCount: Long,
+        val phoneMsgRowIdFrom: Long,
         val phoneMsgRowId: Long,
         val unionMsg: Long,
         val onlyInArchive: Long,
@@ -69,6 +72,7 @@ object ArchiveManager {
     /** 手机侧数据库 + 附件统计（一次 root 调用拿全）。 */
     data class PhoneStats(
         val msgCount: Long,
+        val msgRowIdFrom: Long,
         val msgRowId: Long,
         val attachmentCounts: Map<String, Int>,
     ) {
@@ -174,6 +178,7 @@ object ArchiveManager {
                 backupTime = backupTime,
                 backupTimeStr = formatTime(backupTime),
                 messageCount = state.optLong("lastMessageRowId", 0),
+                messageRowIdFrom = state.optLong("lastMessageRowIdFrom", 0),
                 messageRowId = state.optLong("lastMessageRowId", 0),
                 totalAttachmentFiles = counts.values.sum(),
                 totalAttachmentSize = pkg.length(),
@@ -215,6 +220,7 @@ object ArchiveManager {
 
         val tag = state.optString("lastBackupTag", hash)
         val backupTime = state.optLong("lastBackupTime", dir.lastModified())
+        val msgRowIdFrom = state.optLong("lastMessageRowIdFrom", 0)
         val msgCount = state.optLong("lastMessageRowId", 0)
 
         // Count SQL dump message lines (rowid 优先，避免每次刷新对大 SQL 跑 grep)
@@ -255,6 +261,7 @@ object ArchiveManager {
             backupTime = backupTime,
             backupTimeStr = formatTime(backupTime),
             messageCount = sqlMsgCount,
+            messageRowIdFrom = msgRowIdFrom,
             messageRowId = msgCount,
             totalAttachmentFiles = totalFiles,
             totalAttachmentSize = totalSize,
@@ -271,7 +278,9 @@ object ArchiveManager {
     fun diffArchive(archive: ArchiveInfo, phoneMsgCount: Long, phoneAttachments: Map<String, Int>): DiffResult {
         Log.d(TAG, "diffArchive: arch=${archive.tag} archMsg=${archive.messageCount} phoneMsg=$phoneMsgCount")
         val archiveMsgCount = archive.messageCount
+        val archiveMsgRowIdFrom = archive.messageRowIdFrom
         val archiveMsgRowId = archive.messageRowId
+        val phoneMsgRowIdFrom = getPhoneMsgRowIdFrom()
         val phoneMsgRowId = getPhoneMsgRowId()
         val onlyInArchive = maxOf(0L, archiveMsgCount - phoneMsgCount)
         val onlyInPhone = maxOf(0L, phoneMsgCount - archiveMsgCount)
@@ -298,8 +307,10 @@ object ArchiveManager {
 
         return DiffResult(
             archiveMsgCount = archiveMsgCount,
+            archiveMsgRowIdFrom = archiveMsgRowIdFrom,
             archiveMsgRowId = archiveMsgRowId,
             phoneMsgCount = phoneMsgCount,
+            phoneMsgRowIdFrom = phoneMsgRowIdFrom,
             phoneMsgRowId = phoneMsgRowId,
             unionMsg = unionMsg,
             onlyInArchive = onlyInArchive,
@@ -414,12 +425,13 @@ object ArchiveManager {
         val r = RootGateways.runQuiet(
             "cd $bin && " +
             "export LD_LIBRARY_PATH=$bin && " +
-            "./sqlcipher '$PHONE_DB_PATH' \"$pws SELECT count(*) FROM message;SELECT coalesce(max(rowid),0) FROM message;\" 2>/dev/null | tail -2",
+            "./sqlcipher '$PHONE_DB_PATH' \"$pws SELECT count(*) FROM message;SELECT coalesce(min(rowid),0) FROM message;SELECT coalesce(max(rowid),0) FROM message;\" 2>/dev/null | tail -3",
             60_000
         )
-        val dbLines = r.lines().filter { it.isNotBlank() && it.all { c -> c.isDigit() } }.takeLast(2)
+        val dbLines = r.lines().filter { it.isNotBlank() && it.all { c -> c.isDigit() } }.takeLast(3)
         val msgCount = dbLines.getOrNull(0)?.toLongOrNull() ?: 0L
-        val msgRowId = dbLines.getOrNull(1)?.toLongOrNull() ?: 0L
+        val msgRowIdFrom = dbLines.getOrNull(1)?.toLongOrNull() ?: 0L
+        val msgRowId = dbLines.getOrNull(2)?.toLongOrNull() ?: 0L
 
         // 附件统计：一次 root 调用遍历全部目录
         val attDirs = listOf("image2", "voice2", "video", "avatar", "emoji", "cdn")
@@ -432,16 +444,18 @@ object ArchiveManager {
             val parts = line.trim().split(" ")
             if (parts.size >= 2) counts[parts[0]] = parts[1].toIntOrNull() ?: 0
         }
-        val stats = PhoneStats(msgCount, msgRowId, counts)
+        val stats = PhoneStats(msgCount, msgRowIdFrom, msgRowId, counts)
         phoneStatsCache = stats
         phoneStatsTime = now
-        Log.d(TAG, "getPhoneStats: msg=$msgCount rowid=$msgRowId atts=${counts.values.sum()}")
+        Log.d(TAG, "getPhoneStats: msg=$msgCount rowid=$msgRowIdFrom..$msgRowId atts=${counts.values.sum()}")
         return stats
     }
 
     fun getPhoneMsgCount(): Long = getPhoneStats().msgCount
 
     fun getPhoneMsgRowId(): Long = getPhoneStats().msgRowId
+
+    fun getPhoneMsgRowIdFrom(): Long = getPhoneStats().msgRowIdFrom
 
     fun getPhoneAttachmentCounts(): Map<String, Int> = getPhoneStats().attachmentCounts
 
