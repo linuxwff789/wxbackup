@@ -2,7 +2,6 @@ package com.nous.wxhook.backup
 
 import android.util.Log
 import com.nous.wxhook.root.RootGateways
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -22,6 +21,8 @@ object ArchiveManager {
     private const val TAG = "wxhook:ArchiveMgr"
     private const val BACKUP_DIR = "/sdcard/Download/wxhook_backup"
     private const val SELECTED_FILE = "/data/local/tmp/wxhook_selected_archive.json"
+    // 当前设备微信用户 hash（备份包内路径前缀），避免 listTar 全量扫包
+    private const val WX_USER_HASH = "6d1f34a5edc49e8b6d238141b2d004f3"
 
     /** 包元数据缓存：path -> (包 mtime, ArchiveInfo)，避免每次刷新都 JNI 扫包。 */
     private val pkgInfoCache = mutableMapOf<String, Pair<Long, ArchiveInfo>>()
@@ -136,16 +137,13 @@ object ArchiveManager {
     }
 
     /**
-     * 用 JNI 直接从 tar 包读取元数据（db_state.json / db_config.json / file_manifest.json），
-     * 不整包解压。失败返回 null（调用方回退到仅大小信息）。
+     * 用 JNI 直接从 tar 包读取元数据（db_state.json / db_config.json），
+     * 不整包解压、不 listTar 全量扫包。失败返回 null（调用方回退到仅大小信息）。
      */
     private fun readPackageInfo(pkg: File): ArchiveInfo? {
         return try {
-            val listing = RootGateways.listTar(pkg.absolutePath)
-            val statePath = listing.lines().firstOrNull { it.endsWith("/db_state.json") }
-                ?: return null
-            val hash = statePath.substringBefore("/")
-            val stateRaw = RootGateways.readFileFromTar(pkg.absolutePath, statePath)
+            val hash = WX_USER_HASH
+            val stateRaw = RootGateways.readFileFromTar(pkg.absolutePath, "$hash/db_state.json")
             if (stateRaw.isBlank()) return null
             val state = JSONObject(stateRaw)
             val tag = pkg.nameWithoutExtension
@@ -158,25 +156,6 @@ object ArchiveManager {
                 if (cfgRaw.isNotBlank()) password = JSONObject(cfgRaw).optString("password", password)
             } catch (_: Exception) {}
 
-            var counts = emptyMap<String, Int>()
-            var totalSize = 0L
-            try {
-                val manRaw = RootGateways.readFileFromTar(pkg.absolutePath, "$hash/file_manifest.json")
-                if (manRaw.isNotBlank()) {
-                    val man = JSONObject(manRaw)
-                    val files = man.optJSONArray("files") ?: JSONArray()
-                    val c = mutableMapOf<String, Int>()
-                    for (i in 0 until files.length()) {
-                        val f = files.getJSONObject(i)
-                        val rel = f.optString("path", "").removePrefix("$hash/")
-                        val dir = rel.substringBefore("/")
-                        if (dir.isNotBlank()) c[dir] = (c[dir] ?: 0) + 1
-                        totalSize += f.optLong("size", 0)
-                    }
-                    counts = c
-                }
-            } catch (_: Exception) {}
-
             ArchiveInfo(
                 tag = tag,
                 hash = hash,
@@ -184,12 +163,12 @@ object ArchiveManager {
                 backupTimeStr = formatTime(backupTime),
                 messageCount = state.optLong("lastMessageRowId", 0),
                 messageRowId = state.optLong("lastMessageRowId", 0),
-                totalAttachmentFiles = counts.values.sum(),
-                totalAttachmentSize = totalSize,
+                totalAttachmentFiles = 0,
+                totalAttachmentSize = pkg.length(),
                 password = password,
                 path = pkg.absolutePath,
                 source = "local",
-                attachmentCounts = counts,
+                attachmentCounts = emptyMap(),
             )
         } catch (_: Exception) { null }
     }
