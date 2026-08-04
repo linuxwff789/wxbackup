@@ -232,27 +232,33 @@ object ArchiveManager {
             } catch (_: Exception) { msgCount }
         } else msgCount
 
-        // Scan attachment directories — 一次 root find 调用统计全部目录（避免 Java walk 逐文件 stat）
-        val attDirs = listOf("image2", "voice2", "video", "avatar", "emoji", "cdn")
+        // 附件统计：直接读 file_manifest.json（含全部文件名），不遍历目录
         val counts = mutableMapOf<String, Int>()
         val sizes = mutableMapOf<String, Long>()
         var totalFiles = 0
         var totalSize = 0L
-        val statScript = attDirs.joinToString(" ") { ad ->
-            "p='${dir.absolutePath}/$ad'; if [ -d \"\$p\" ]; then echo \"$ad \$(find \"\$p\" -type f 2>/dev/null | wc -l) \$(du -sb \"\$p\" 2>/dev/null | cut -f1)\"; fi"
-        }
-        val statOut = RootGateways.runQuiet(statScript, 120_000)
-        for (line in statOut.lines()) {
-            val parts = line.trim().split(" ")
-            if (parts.size < 3) continue
-            val ad = parts[0]
-            val n = parts[1].toIntOrNull() ?: 0
-            val sz = parts[2].toLongOrNull() ?: 0L
-            counts[ad] = n
-            sizes[ad] = sz
-            totalFiles += n
-            totalSize += sz
-            Log.d(TAG, "readArchiveInfo: $hash/$ad: $n files, ${formatSize(sz)}")
+        try {
+            val manifestFile = File(dir, "file_manifest.json")
+            if (manifestFile.exists()) {
+                val manifest = JSONObject(manifestFile.readText())
+                val files = manifest.optJSONArray("files") ?: JSONArray()
+                for (i in 0 until files.length()) {
+                    val f = files.getJSONObject(i)
+                    val rel = f.optString("path", "").removePrefix("$hash/")
+                    val ad = rel.substringBefore("/")
+                    if (ad.isBlank()) continue
+                    counts[ad] = (counts[ad] ?: 0) + 1
+                    val sz = f.optLong("size", 0)
+                    sizes[ad] = (sizes[ad] ?: 0L) + sz
+                    totalFiles++
+                    totalSize += sz
+                }
+                Log.d(TAG, "readArchiveInfo: $hash manifest files=$totalFiles size=${formatSize(totalSize)}")
+            } else {
+                Log.d(TAG, "readArchiveInfo: no file_manifest.json for $hash")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "readArchiveInfo: manifest parse failed: ${e.message}")
         }
 
         return ArchiveInfo(
