@@ -60,6 +60,15 @@ object ArchiveManager {
         val union: Int,
     )
 
+    /** 手机侧数据库 + 附件统计（一次 root 调用拿全）。 */
+    data class PhoneStats(
+        val msgCount: Long,
+        val msgRowId: Long,
+        val attachmentCounts: Map<String, Int>,
+    ) {
+        val totalAttachments: Int get() = attachmentCounts.values.sum()
+    }
+
     // ── Scan local archives ──
 
     fun scanLocalArchives(): List<ArchiveInfo> {
@@ -142,38 +151,37 @@ object ArchiveManager {
         val backupTime = state.optLong("lastBackupTime", dir.lastModified())
         val msgCount = state.optLong("lastMessageRowId", 0)
 
-        // Count SQL dump message lines
+        // Count SQL dump message lines (rowid 优先，避免每次刷新对大 SQL 跑 grep)
         val sqlDump = dir.listFiles()?.find { it.name.endsWith("_baseline.sql") }
-        val sqlMsgCount = if (sqlDump != null) {
+        val sqlMsgCount = if (msgCount > 0) msgCount else if (sqlDump != null) {
             try {
                 val r = RootGateways.runQuiet("grep -c '^INSERT INTO message ' '${sqlDump.absolutePath}' 2>/dev/null")
                 r.trim().toLongOrNull() ?: msgCount
             } catch (_: Exception) { msgCount }
         } else msgCount
 
-        // Scan attachment directories
+        // Scan attachment directories — 一次 root find 调用统计全部目录（避免 Java walk 逐文件 stat）
         val attDirs = listOf("image2", "voice2", "video", "avatar", "emoji", "cdn")
         val counts = mutableMapOf<String, Int>()
         val sizes = mutableMapOf<String, Long>()
         var totalFiles = 0
         var totalSize = 0L
-
-        for (ad in attDirs) {
-            val d = File(dir, ad)
-            if (d.exists()) {
-                try {
-                    val files = d.walkTopDown().filter { it.isFile }.toList()
-                    counts[ad] = files.size
-                    sizes[ad] = files.sumOf { it.length() }
-                    totalFiles += files.size
-                    totalSize += sizes[ad] ?: 0L
-                    Log.d(TAG, "readArchiveInfo: $hash/$ad: ${files.size} files, ${formatSize(sizes[ad] ?: 0L)}")
-                } catch (e: Exception) {
-                    Log.w(TAG, "readArchiveInfo: $hash/$ad scan error: ${e.message}")
-                }
-            }
+        val statScript = attDirs.joinToString(" ") { ad ->
+            "p='${dir.absolutePath}/$ad'; if [ -d \"\$p\" ]; then echo \"$ad \$(find \"\$p\" -type f 2>/dev/null | wc -l) \$(du -sb \"\$p\" 2>/dev/null | cut -f1)\"; fi"
         }
-        Log.d(TAG, "readArchiveInfo: $hash total: $totalFiles attachments, ${formatSize(totalSize)}")
+        val statOut = RootGateways.runQuiet(statScript, 120_000)
+        for (line in statOut.lines()) {
+            val parts = line.trim().split(" ")
+            if (parts.size < 3) continue
+            val ad = parts[0]
+            val n = parts[1].toIntOrNull() ?: 0
+            val sz = parts[2].toLongOrNull() ?: 0L
+            counts[ad] = n
+            sizes[ad] = sz
+            totalFiles += n
+            totalSize += sz
+            Log.d(TAG, "readArchiveInfo: $hash/$ad: $n files, ${formatSize(sz)}")
+        }
 
         return ArchiveInfo(
             tag = tag,
@@ -322,43 +330,58 @@ object ArchiveManager {
 
     // ── Phone state ──
 
-    fun getPhoneMsgCount(): Long {
+    private var phoneStatsCache: PhoneStats? = null
+    private var phoneStatsTime = 0L
+    private const val PHONE_STATS_TTL = 5_000L
+
+    /** 一次 root 调用获取手机消息数 + rowid + 附件统计，5 秒内存缓存。 */
+    fun getPhoneStats(): PhoneStats {
+        val now = System.currentTimeMillis()
+        val cached = phoneStatsCache
+        if (cached != null && now - phoneStatsTime < PHONE_STATS_TTL) return cached
         val pw = getSelectedArchive()?.password ?: "e9cd2ae"
         val pws = "PRAGMA key='$pw';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;"
         val r = RootGateways.runQuiet(
             "cd /data/data/com.termux/files/home/wxbackup/tools && " +
             "export LD_LIBRARY_PATH=/data/data/com.termux/files/home/wxbackup/tools && " +
-            "./sqlcipher '$PHONE_DB_PATH' \"$pws SELECT count(*) FROM message;\" 2>/dev/null | tail -1"
+            "./sqlcipher '$PHONE_DB_PATH' \"$pws SELECT count(*) FROM message;SELECT coalesce(max(rowid),0) FROM message;\" 2>/dev/null | tail -2"
         )
-        val count = r.trim().toLongOrNull() ?: 0L
-        Log.d(TAG, "getPhoneMsgCount: $count (raw: ${r.trim()})")
-        return count
-    }
+        val dbLines = r.lines().filter { it.isNotBlank() && it.all { c -> c.isDigit() } }.takeLast(2)
+        val msgCount = dbLines.getOrNull(0)?.toLongOrNull() ?: 0L
+        val msgRowId = dbLines.getOrNull(1)?.toLongOrNull() ?: 0L
 
-    fun getPhoneAttachmentCounts(): Map<String, Int> {
-        val counts = mutableMapOf<String, Int>()
-        for (d in listOf("image2", "voice2", "video", "avatar", "emoji", "cdn")) {
-            val r = RootGateways.runQuiet(
-                "find '$PHONE_ATTACH_DIR/$d' -type f 2>/dev/null | wc -l"
-            )
-            counts[d] = r.trim().toIntOrNull() ?: 0
-            Log.d(TAG, "getPhoneAttachmentCounts: $d = ${counts[d]}")
+        // 附件统计：一次 root 调用遍历全部目录
+        val attDirs = listOf("image2", "voice2", "video", "avatar", "emoji", "cdn")
+        val statScript = attDirs.joinToString(" ") { d ->
+            "p='$PHONE_ATTACH_DIR/$d'; if [ -d \"\$p\" ]; then echo \"$d \$(find \"\$p\" -type f 2>/dev/null | wc -l)\"; fi"
         }
-        Log.i(TAG, "getPhoneAttachmentCounts: total ${counts.values.sum()}")
-        return counts
+        val statOut = RootGateways.runQuiet(statScript, 60_000)
+        val counts = mutableMapOf<String, Int>()
+        for (line in statOut.lines()) {
+            val parts = line.trim().split(" ")
+            if (parts.size >= 2) counts[parts[0]] = parts[1].toIntOrNull() ?: 0
+        }
+        val stats = PhoneStats(msgCount, msgRowId, counts)
+        phoneStatsCache = stats
+        phoneStatsTime = now
+        Log.d(TAG, "getPhoneStats: msg=$msgCount rowid=$msgRowId atts=${counts.values.sum()}")
+        return stats
     }
 
-    fun getPhoneMsgRowId(): Long {
-        val pw = getSelectedArchive()?.password ?: "e9cd2ae"
-        val pws = "PRAGMA key='$pw';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;"
-        val r = RootGateways.runQuiet(
-            "cd /data/data/com.termux/files/home/wxbackup/tools && " +
-            "export LD_LIBRARY_PATH=/data/data/com.termux/files/home/wxbackup/tools && " +
-            "./sqlcipher '$PHONE_DB_PATH' \"$pws SELECT coalesce(max(rowid),0) FROM message;\" 2>/dev/null | tail -1"
-        )
-        val rowId = r.trim().toLongOrNull() ?: 0L
-        Log.d(TAG, "getPhoneMsgRowId: $rowId (raw: ${r.trim()})")
-        return rowId
+    fun getPhoneMsgCount(): Long = getPhoneStats().msgCount
+
+    fun getPhoneMsgRowId(): Long = getPhoneStats().msgRowId
+
+    fun getPhoneAttachmentCounts(): Map<String, Int> = getPhoneStats().attachmentCounts
+
+    /** 解析 "dir count" 行（root find 统计输出）。 */
+    fun parseDirCounts(output: String): Map<String, Int> {
+        val counts = mutableMapOf<String, Int>()
+        for (line in output.lines()) {
+            val parts = line.trim().split(" ")
+            if (parts.size >= 2) counts[parts[0]] = parts[1].toIntOrNull() ?: 0
+        }
+        return counts
     }
 
     // ── Helpers ──

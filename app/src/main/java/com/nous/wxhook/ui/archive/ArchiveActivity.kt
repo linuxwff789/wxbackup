@@ -168,13 +168,24 @@ class ArchiveActivity : AppCompatActivity() {
 
     private fun refreshList(root: LinearLayout) {
         Thread {
-            val localArchives = ArchiveManager.scanLocalArchives()
-            val cloudArchives = fetchCloudArchives()
-
-            // Phone current state
-            val phoneMsgCount = ArchiveManager.getPhoneMsgCount()
-            val phoneAttCounts = ArchiveManager.getPhoneAttachmentCounts()
-            val phoneAttTotal = phoneAttCounts.values.sum()
+            // 本地扫描 / 云端列表 / 手机统计 三路并行，全部完成后一次性渲染
+            val executor = java.util.concurrent.Executors.newFixedThreadPool(3)
+            val localArchives: List<ArchiveInfo>
+            val cloudArchives: List<ArchiveInfo>
+            val phoneMsgCount: Long
+            val phoneAttTotal: Int
+            try {
+                val localFuture = executor.submit<java.util.List<ArchiveInfo>> { ArchiveManager.scanLocalArchives() }
+                val cloudFuture = executor.submit<java.util.List<ArchiveInfo>> { fetchCloudArchives() }
+                val phoneFuture = executor.submit<ArchiveManager.PhoneStats> { ArchiveManager.getPhoneStats() }
+                localArchives = localFuture.get()
+                cloudArchives = cloudFuture.get()
+                val phone = phoneFuture.get()
+                phoneMsgCount = phone.msgCount
+                phoneAttTotal = phone.totalAttachments
+            } finally {
+                executor.shutdown()
+            }
 
             val allArchives = mutableListOf<ArchiveInfo>()
             // Current phone data shown first
