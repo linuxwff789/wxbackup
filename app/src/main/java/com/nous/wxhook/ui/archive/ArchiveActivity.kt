@@ -338,57 +338,100 @@ class ArchiveActivity : AppCompatActivity() {
 
     /** 长按详情对话框：展示存档信息，操作按钮都在这里触发。 */
     private fun showArchiveDetail(a: ArchiveInfo, root: LinearLayout) {
-        val info = when (a.source) {
-            "cloud" -> "云端存档 ☁️\n时间: ${a.backupTimeStr}\n大小: ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
-            else -> "本地存档 📦\n时间: ${a.backupTimeStr}\nrowid: ${a.messageRowId}\n消息数: ${a.messageCount}\n附件数: ${a.totalAttachmentFiles}\n大小: ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
-        }
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), dp(8)) }
+        val infoText = TextView(this).apply { textSize = 14f }
+        content.addView(infoText)
+        val progressRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL; visibility = android.view.View.GONE; setPadding(0, dp(12), 0, 0) }
+        val progressBar = android.widget.ProgressBar(this)
+        val progressLabel = TextView(this).apply { text = "正在准备存档数据..."; textSize = 13f; setTextColor(M3.onSurfaceVariant(this@ArchiveActivity)); setPadding(dp(12), 0, 0, 0) }
+        progressRow.addView(progressBar)
+        progressRow.addView(progressLabel)
+        content.addView(progressRow)
+        val btnCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(btnCol)
+
         val dialog = android.app.AlertDialog.Builder(this)
             .setTitle("📋 ${a.tag}")
-            .setMessage(info)
+            .setView(content)
             .setNegativeButton("关闭", null)
             .create()
-        val btnCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), 0, dp(24), dp(8)) }
-        if (a.source == "cloud") {
-            btnCol.addView(MaterialButton(this).apply {
-                text = "⬇️ 下载并选中"; insetTop = 0; insetBottom = 0
-                setOnClickListener { dialog.dismiss(); downloadAndSelect(a, root) }
-            })
-        } else {
-            btnCol.addView(MaterialButton(this).apply {
-                text = "📊 对比差异"; insetTop = 0; insetBottom = 0
-                setOnClickListener { dialog.dismiss(); showDiff(a) }
-            })
-            btnCol.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
-            btnCol.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                text = "▶️ 恢复"; insetTop = 0; insetBottom = 0
-                setOnClickListener { dialog.dismiss(); startRestore(a) }
-            })
-            btnCol.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
-            btnCol.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                text = "🗑️ 删除本地存档"; insetTop = 0; insetBottom = 0
-                setTextColor(M3.colorError(this@ArchiveActivity))
-                setOnClickListener {
-                    dialog.dismiss()
-                    android.app.AlertDialog.Builder(this@ArchiveActivity)
-                        .setTitle("删除本地存档")
-                        .setMessage("删除 ${a.tag}？此操作不可撤销。")
-                        .setPositiveButton("删除") { _, _ ->
-                            Thread {
-                                val ok = ArchiveManager.deleteLocalArchive(a)
-                                runOnUiThread {
-                                    android.widget.Toast.makeText(this@ArchiveActivity, if (ok) "已删除" else "删除失败", android.widget.Toast.LENGTH_SHORT).show()
-                                    if (ok) selectedTags.remove(a.tag)
-                                    refreshList(root)
-                                }
-                            }.start()
-                        }
-                        .setNegativeButton("取消", null)
-                        .show()
-                }
-            })
+
+        // 本地包：后台解压并填充完整信息（进度条提示，不用 toast）
+        val needsPrep = a.source == "local" &&
+            (a.path.endsWith(".tar.zst") || a.path.endsWith(".tar.gz")) &&
+            (a.messageRowId <= 0 || a.totalAttachmentFiles <= 0)
+
+        fun renderButtons(archive: ArchiveInfo) {
+            btnCol.removeAllViews()
+            if (archive.source == "cloud") {
+                btnCol.addView(MaterialButton(this).apply {
+                    text = "⬇️ 下载并选中"; insetTop = 0; insetBottom = 0
+                    setOnClickListener { dialog.dismiss(); downloadAndSelect(archive, root) }
+                })
+            } else {
+                btnCol.addView(MaterialButton(this).apply {
+                    text = "📊 对比差异"; insetTop = 0; insetBottom = 0
+                    setOnClickListener { dialog.dismiss(); showDiff(archive) }
+                })
+                btnCol.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
+                btnCol.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                    text = "▶️ 恢复"; insetTop = 0; insetBottom = 0
+                    setOnClickListener { dialog.dismiss(); startRestore(archive) }
+                })
+                btnCol.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
+                btnCol.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                    text = "🗑️ 删除本地存档"; insetTop = 0; insetBottom = 0
+                    setTextColor(M3.colorError(this@ArchiveActivity))
+                    setOnClickListener {
+                        dialog.dismiss()
+                        android.app.AlertDialog.Builder(this@ArchiveActivity)
+                            .setTitle("删除本地存档")
+                            .setMessage("删除 ${archive.tag}？此操作不可撤销。")
+                            .setPositiveButton("删除") { _, _ ->
+                                Thread {
+                                    val ok = ArchiveManager.deleteLocalArchive(archive)
+                                    runOnUiThread {
+                                        android.widget.Toast.makeText(this@ArchiveActivity, if (ok) "已删除" else "删除失败", android.widget.Toast.LENGTH_SHORT).show()
+                                        if (ok) selectedTags.remove(archive.tag)
+                                        refreshList(root)
+                                    }
+                                }.start()
+                            }
+                            .setNegativeButton("取消", null)
+                            .show()
+                    }
+                })
+            }
         }
-        dialog.setView(btnCol, dp(0), dp(0), dp(0), dp(0))
-        dialog.show()
+
+        fun fillInfo(archive: ArchiveInfo) {
+            infoText.text = when (archive.source) {
+                "cloud" -> "云端存档 ☁️\n时间: ${archive.backupTimeStr}\n大小: ${ArchiveManager.formatSize(archive.totalAttachmentSize)}"
+                else -> "本地存档 📦\n时间: ${archive.backupTimeStr}\nrowid: ${archive.messageRowId}\n消息数: ${archive.messageCount}\n附件数: ${archive.totalAttachmentFiles}\n大小: ${ArchiveManager.formatSize(archive.totalAttachmentSize)}"
+            }
+        }
+
+        fillInfo(a)
+        if (needsPrep) {
+            progressRow.visibility = android.view.View.VISIBLE
+            dialog.show()
+            Thread {
+                val full = ArchiveManager.ensureExtracted(a)
+                runOnUiThread {
+                    progressRow.visibility = android.view.View.GONE
+                    val ready = full ?: a
+                    if (full == null) {
+                        infoText.text = "本地存档 📦\n时间: ${a.backupTimeStr}\nrowid: ${a.messageRowId}\n消息数: ${a.messageCount}\n附件数: ${a.totalAttachmentFiles}\n大小: ${ArchiveManager.formatSize(a.totalAttachmentSize)}\n\n⚠️ 解压失败，可先尝试在列表中刷新"
+                    } else {
+                        fillInfo(ready)
+                    }
+                    renderButtons(ready)
+                }
+            }.start()
+        } else {
+            dialog.show()
+            renderButtons(a)
+        }
     }
 
     private fun downloadAndSelect(archive: ArchiveInfo, root: LinearLayout) {

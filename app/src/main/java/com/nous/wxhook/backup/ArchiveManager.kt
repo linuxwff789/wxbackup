@@ -393,10 +393,13 @@ object ArchiveManager {
         if (cached != null && now - phoneStatsTime < PHONE_STATS_TTL) return cached
         val pw = password ?: getSelectedArchive()?.password ?: "e9cd2ae"
         val pws = "PRAGMA key='$pw';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;"
+        // sqlcipher 必须用 App 自带 bin（/data/local/tmp/wxhook_bin），不能依赖 Termux 路径
+        val bin = BackupEnv.binDir
         val r = RootGateways.runQuiet(
-            "cd /data/data/com.termux/files/home/wxbackup/tools && " +
-            "export LD_LIBRARY_PATH=/data/data/com.termux/files/home/wxbackup/tools && " +
-            "./sqlcipher '$PHONE_DB_PATH' \"$pws SELECT count(*) FROM message;SELECT coalesce(max(rowid),0) FROM message;\" 2>/dev/null | tail -2"
+            "cd $bin && " +
+            "export LD_LIBRARY_PATH=$bin && " +
+            "./sqlcipher '$PHONE_DB_PATH' \"$pws SELECT count(*) FROM message;SELECT coalesce(max(rowid),0) FROM message;\" 2>/dev/null | tail -2",
+            60_000
         )
         val dbLines = r.lines().filter { it.isNotBlank() && it.all { c -> c.isDigit() } }.takeLast(2)
         val msgCount = dbLines.getOrNull(0)?.toLongOrNull() ?: 0L
