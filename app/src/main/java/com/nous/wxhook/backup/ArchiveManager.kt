@@ -29,6 +29,8 @@ object ArchiveManager {
 
     /** 包元数据缓存：path -> (包 mtime, ArchiveInfo)，避免每次刷新都 JNI 扫包。 */
     private val pkgInfoCache = mutableMapOf<String, Pair<Long, ArchiveInfo>>()
+    /** 轻量 rowid 缓存：path -> (包 mtime, (from, to))，链构建只读 db_state.json。 */
+    private val rowIdCache = mutableMapOf<String, Pair<Long, Pair<Long, Long>>>()
 
     data class ArchiveInfo(
         val tag: String,
@@ -358,21 +360,38 @@ object ArchiveManager {
         val pkgs = pkgDir.listFiles()?.filter {
             it.name.endsWith(".tar.zst") || it.name.endsWith(".tar.gz")
         } ?: emptyList()
-        val metas = pkgs.mapNotNull { readPackageInfo(it) }
-        val chain = metas.filter { it.hash == target.hash || target.hash.isBlank() }
-        if (chain.isEmpty()) return ArchiveChain(0, 0L, 0L, false)
+        // 轻量：每个包只 JNI 读 db_state.json 拿 from/to（缓存命中则不读）
+        val metas = pkgs.mapNotNull { f ->
+            val cached = rowIdCache[f.absolutePath]
+            val ids = if (cached != null && cached.first == f.lastModified()) cached.second else {
+                readPackageRowIds(f)?.also { rowIdCache[f.absolutePath] = f.lastModified() to it }
+            }
+            ids?.let { Triple(f.name, it.first, it.second) }
+        }
+        if (metas.isEmpty()) return ArchiveChain(0, 0L, 0L, false)
 
-        val sorted = chain.sortedBy { it.messageRowId }
-        val from = sorted.map { it.messageRowIdFrom }.filter { it > 0 }.minOrNull() ?: 0L
-        val to = sorted.maxOf { it.messageRowId }
+        // 按 to 排序；from 取所有包的最小值（含全量包 0，不能过滤掉基线）
+        val sorted = metas.sortedBy { it.third }
+        val from = sorted.minOf { it.second }
+        val to = sorted.maxOf { it.third }
         // 连续性：增量包 from 应 <= 前一个包 to（允许同值，rowid 空洞不算缺口）
         var hasGap = false
         var prevTo = -1L
         for (p in sorted) {
-            if (prevTo >= 0 && p.messageRowIdFrom > 0 && p.messageRowIdFrom > prevTo + 1) hasGap = true
-            if (p.messageRowId > prevTo) prevTo = p.messageRowId
+            if (prevTo >= 0 && p.second > 0 && p.second > prevTo + 1) hasGap = true
+            if (p.third > prevTo) prevTo = p.third
         }
         return ArchiveChain(sorted.size, from, to, hasGap)
+    }
+
+    /** 轻量读包内 db_state.json 的 (from, to)，不读 db_config / file_manifest。 */
+    private fun readPackageRowIds(pkg: File): Pair<Long, Long>? {
+        return try {
+            val stateRaw = RootGateways.readFileFromTar(pkg.absolutePath, "$WX_USER_HASH/db_state.json")
+            if (stateRaw.isBlank()) return null
+            val state = JSONObject(stateRaw)
+            state.optLong("lastMessageRowIdFrom", 0) to state.optLong("lastMessageRowId", 0)
+        } catch (_: Exception) { null }
     }
 
     // ── Select current archive ──
