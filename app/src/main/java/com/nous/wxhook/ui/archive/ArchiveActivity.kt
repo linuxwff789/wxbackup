@@ -487,9 +487,7 @@ class ArchiveActivity : AppCompatActivity() {
                         put("phoneMsg", diff.phoneMsgCount)
                         put("phoneRowIdFrom", diff.phoneMsgRowIdFrom)
                         put("phoneRowId", diff.phoneMsgRowId)
-                        put("unionMsg", diff.unionMsg)
-                        put("onlyInArchive", diff.onlyInArchive)
-                        put("onlyInPhone", diff.onlyInPhone)
+                        put("rowIdGap", diff.rowIdGap)
                         put("phoneTotalAtt", diff.phoneTotalAttachments)
                         put("archiveTotalAtt", diff.archiveTotalAttachments)
                         put("attachments", org.json.JSONObject(diff.attachments.mapValues {

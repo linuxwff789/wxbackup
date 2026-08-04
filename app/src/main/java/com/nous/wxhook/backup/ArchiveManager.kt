@@ -24,6 +24,8 @@ object ArchiveManager {
     private const val SELECTED_FILE = "/data/local/tmp/wxhook_selected_archive.json"
     // 当前设备微信用户 hash（备份包内路径前缀），避免 listTar 全量扫包
     private const val WX_USER_HASH = "6d1f34a5edc49e8b6d238141b2d004f3"
+    /** 标准附件目录（手机侧与存档侧只对比这些，避免 manifest 里其他目录造成假缺失）。 */
+    private val ATTACHMENT_DIRS = listOf("image2", "voice2", "video", "avatar", "emoji", "cdn")
 
     /** 包元数据缓存：path -> (包 mtime, ArchiveInfo)，避免每次刷新都 JNI 扫包。 */
     private val pkgInfoCache = mutableMapOf<String, Pair<Long, ArchiveInfo>>()
@@ -53,9 +55,8 @@ object ArchiveManager {
         val phoneMsgCount: Long,
         val phoneMsgRowIdFrom: Long,
         val phoneMsgRowId: Long,
-        val unionMsg: Long,
-        val onlyInArchive: Long,
-        val onlyInPhone: Long,
+        /** 存档领先/落后手机的 rowid 差值（正=存档更新，负=手机更新）。 */
+        val rowIdGap: Long,
         val attachments: Map<String, AttachmentDiff>,
         val phoneTotalAttachments: Int,
         val archiveTotalAttachments: Int,
@@ -288,11 +289,12 @@ object ArchiveManager {
         val archiveMsgRowId = archive.messageRowId
         val phoneMsgRowIdFrom = getPhoneMsgRowIdFrom()
         val phoneMsgRowId = getPhoneMsgRowId()
-        val onlyInArchive = maxOf(0L, archiveMsgCount - phoneMsgCount)
-        val onlyInPhone = maxOf(0L, phoneMsgCount - archiveMsgCount)
-        val unionMsg = maxOf(archiveMsgCount, phoneMsgCount)
+        // 消息口径：存档侧是 rowid（lastMessageRowId），手机侧是 count(*)，两者不可直接相减。
+        // 差异用 rowid 判断（正=存档更新，负=手机更新），不再输出假的 count 差值和 union。
+        val rowIdGap = archiveMsgRowId - phoneMsgRowId
 
-        val allDirs = (phoneAttachments.keys + archive.attachmentCounts.keys).toSet()
+        // 附件只对比标准目录（避免 manifest 里 sfs/appbrand 等其他目录造成假缺失）
+        val allDirs = ATTACHMENT_DIRS.filter { it in phoneAttachments || it in archive.attachmentCounts }
         val attDiffs = mutableMapOf<String, AttachmentDiff>()
         var phoneTotal = 0
         var archiveTotal = 0
@@ -318,9 +320,7 @@ object ArchiveManager {
             phoneMsgCount = phoneMsgCount,
             phoneMsgRowIdFrom = phoneMsgRowIdFrom,
             phoneMsgRowId = phoneMsgRowId,
-            unionMsg = unionMsg,
-            onlyInArchive = onlyInArchive,
-            onlyInPhone = onlyInPhone,
+            rowIdGap = rowIdGap,
             attachments = attDiffs,
             phoneTotalAttachments = phoneTotal,
             archiveTotalAttachments = archiveTotal,
@@ -440,8 +440,7 @@ object ArchiveManager {
         val msgRowId = dbLines.getOrNull(2)?.toLongOrNull() ?: 0L
 
         // 附件统计：纯 Java 遍历（root 进程内 File.walkTopDown，不依赖 shell find）
-        val attDirs = listOf("image2", "voice2", "video", "avatar", "emoji", "cdn")
-        val counts = RootGateways.countFiles(attDirs.map { "$PHONE_ATTACH_DIR/$it" })
+        val counts = RootGateways.countFiles(ATTACHMENT_DIRS.map { "$PHONE_ATTACH_DIR/$it" })
             .mapKeys { File(it.key).name }
         val stats = PhoneStats(msgCount, msgRowIdFrom, msgRowId, counts)
         phoneStatsCache = stats
