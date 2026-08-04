@@ -27,17 +27,17 @@ jobs:
 
       - name: Compile zstd for Android
         run: |
+          # arm64 交叉编译（runner 是 x86-64，直接 gcc 会编出 x86-64 ELF，手机上无法执行）
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu
           cd /tmp
           curl -sL https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz | tar xz
           cd zstd-1.5.6
-          # NDK arm64 交叉编译（runner 是 x86-64，直接 gcc 会编出 x86-64 ELF，手机上无法执行）
-          curl -sL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
-          unzip -q ndk.zip
-          export NDK_TOOLCHAIN=/tmp/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin
+          # 静态链接：产物零依赖，Android 上直接可执行
           make zstd-release -j$(nproc) \
-            CC="$NDK_TOOLCHAIN/aarch64-linux-android21-clang" \
-            AR="$NDK_TOOLCHAIN/llvm-ar" \
-            RANLIB="$NDK_TOOLCHAIN/llvm-ranlib"
+            CC="aarch64-linux-gnu-gcc -O2 -static" \
+            AR="aarch64-linux-gnu-ar" \
+            RANLIB="aarch64-linux-gnu-ranlib"
           cp programs/zstd $GITHUB_WORKSPACE/dist/zstd
 
       - name: Upload Release
