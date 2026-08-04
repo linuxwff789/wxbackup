@@ -387,11 +387,11 @@ object ArchiveManager {
     private const val PHONE_STATS_TTL = 5_000L
 
     /** 一次 root 调用获取手机消息数 + rowid + 附件统计，5 秒内存缓存。 */
-    fun getPhoneStats(): PhoneStats {
+    fun getPhoneStats(password: String? = null): PhoneStats {
         val now = System.currentTimeMillis()
         val cached = phoneStatsCache
         if (cached != null && now - phoneStatsTime < PHONE_STATS_TTL) return cached
-        val pw = getSelectedArchive()?.password ?: "e9cd2ae"
+        val pw = password ?: getSelectedArchive()?.password ?: "e9cd2ae"
         val pws = "PRAGMA key='$pw';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;"
         val r = RootGateways.runQuiet(
             "cd /data/data/com.termux/files/home/wxbackup/tools && " +

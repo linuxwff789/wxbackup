@@ -39,6 +39,8 @@ class ArchiveActivity : AppCompatActivity() {
         }
     }
     private var rootLayout: LinearLayout? = null
+    /** 多选高亮的存档 tag 集合（内存态，单击切换，长按出详情操作）。 */
+    private val selectedTags = LinkedHashSet<String>()
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun cardBg() = LinearLayout(this).apply {
@@ -64,7 +66,6 @@ class ArchiveActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(16)) }
 
         // Selected archive status
-        val selected = ArchiveManager.getSelectedArchive()
         val statusCard = cardBg()
         statusCard.tag = "status"
         statusCard.addView(TextView(this).apply { text = "🗂️ 存档管理"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
@@ -79,25 +80,11 @@ class ArchiveActivity : AppCompatActivity() {
 
         // Action buttons
         val actionCard = cardBg()
-        actionCard.addView(TextView(this).apply { text = "📋 操作"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
+        actionCard.addView(TextView(this).apply { text = "📋 操作提示"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
         actionCard.addView(TextView(this).apply {
-            text = "选择一个存档后，可以对比手机当前数据或执行恢复。"
+            text = "点击存档可选中/取消（支持多选，高亮显示）；长按存档查看详情并进行对比、恢复、删除等操作。"
             textSize = 14f; setPadding(0, dp(8), 0, dp(12)); setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
         })
-        val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        btnRow.addView(MaterialButton(this).apply {
-            text = "📊 对比差异"; layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) }
-            insetTop = 0; insetBottom = 0
-            isEnabled = selected != null
-            setOnClickListener { showDiff() }
-        })
-        btnRow.addView(MaterialButton(this).apply {
-            text = "▶️ 恢复"; layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8) }
-            insetTop = 0; insetBottom = 0
-            isEnabled = selected != null
-            setOnClickListener { startRestore() }
-        })
-        actionCard.addView(btnRow)
         root.addView(actionCard)
 
         // Archive list (populated by refreshList)
@@ -136,17 +123,16 @@ class ArchiveActivity : AppCompatActivity() {
 
     override fun onSupportNavigateUp(): Boolean { finish(); return true }
 
-    /** 顶部状态卡的选中信息行（下载/选中后随刷新同步更新） */
-    private fun selectedStatusLine(): TextView {
-        val selected = ArchiveManager.getSelectedArchive()
-        return if (selected != null) {
+    /** 顶部状态卡的选中信息行（随刷新同步更新） */
+    private fun selectedStatusLine(): View {
+        return if (selectedTags.isNotEmpty()) {
             TextView(this).apply {
-                text = "已选中: ${selected.tag}"
+                text = "已选 ${selectedTags.size} 个存档（点击切换，长按查看详情操作）"
                 textSize = 14f; setPadding(0, dp(4), 0, 0); typeface = Typeface.DEFAULT_BOLD
             }
         } else {
             TextView(this).apply {
-                text = "未选中存档"
+                text = "未选中存档（点击选中，长按查看详情）"
                 textSize = 14f; setPadding(0, dp(4), 0, 0); setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
             }
         }
@@ -211,7 +197,6 @@ class ArchiveActivity : AppCompatActivity() {
                 source = "phone",
             ))
             allArchives.addAll((localArchives + cloudArchives).sortedByDescending { it.backupTime })
-            val selected = ArchiveManager.getSelectedArchive()
 
             runOnUiThread {
                 val oldCard = root.findViewWithTag<View>("archives") ?: return@runOnUiThread
@@ -236,81 +221,7 @@ class ArchiveActivity : AppCompatActivity() {
                     })
                 } else {
                     for (a in allArchives) {
-                        val isSelected = selected?.tag == a.tag && a.source != "phone"
-                        val marker = if (isSelected) "→ " else "  "
-                        val srcSuffix = when (a.source) {
-                            "cloud" -> " ☁️云端"
-                            "phone" -> " 📱"
-                            else -> " 📦本地"
-                        }
-                        val srcColor = when (a.source) {
-                            "cloud" -> M3.colorPrimary(this)
-                            "phone" -> M3.colorSecondary(this)
-                            else -> M3.onSurface(this)
-                        }
-                        card.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(6)) })
-
-                        val tf = if (isSelected) Typeface.DEFAULT_BOLD else if (a.source == "phone") Typeface.create(Typeface.DEFAULT, Typeface.ITALIC) else Typeface.DEFAULT
-                        val nameLine = TextView(this).apply {
-                            text = "$marker${a.tag}$srcSuffix"
-                            textSize = 14f; typeface = tf
-                            setTextColor(srcColor)
-                        }
-                        if (a.source != "phone") {
-                            nameLine.setOnLongClickListener {
-                                if (a.source != "local") return@setOnLongClickListener false
-                                android.app.AlertDialog.Builder(this@ArchiveActivity)
-                                    .setTitle("删除本地存档")
-                                    .setMessage("删除 ${a.tag}？此操作不可撤销。")
-                                    .setPositiveButton("删除") { _, _ ->
-                                        Thread {
-                                            val ok = ArchiveManager.deleteLocalArchive(a)
-                                            runOnUiThread {
-                                                android.widget.Toast.makeText(this@ArchiveActivity, if (ok) "已删除" else "删除失败", android.widget.Toast.LENGTH_SHORT).show()
-                                                refreshList(root)
-                                            }
-                                        }.start()
-                                    }
-                                    .setNegativeButton("取消", null)
-                                    .show()
-                                true
-                            }
-                            nameLine.setOnClickListener {
-                                if (a.source == "cloud") {
-                                    android.app.AlertDialog.Builder(this@ArchiveActivity)
-                                        .setTitle("☁️ 云端存档")
-                                        .setMessage("是否下载 ${a.tag} 到本地后再恢复？\\n\\n大小: ${ArchiveManager.formatSize(a.totalAttachmentSize)}")
-                                        .setPositiveButton("下载并选中") { _, _ ->
-                                            downloadAndSelect(a, root)
-                                        }
-                                        .setNegativeButton("取消", null)
-                                        .show()
-                                } else {
-                                    val tag = a.tag
-                                    android.widget.Toast.makeText(this@ArchiveActivity, "正在选中 $tag ...", android.widget.Toast.LENGTH_SHORT).show()
-                                    Thread {
-                                        val ok = ArchiveManager.selectArchive(tag)
-                                        runOnUiThread {
-                                            if (ok) {
-                                                refreshList(root)
-                                            } else {
-                                                android.widget.Toast.makeText(this@ArchiveActivity, "选中失败：未找到该存档", android.widget.Toast.LENGTH_LONG).show()
-                                            }
-                                        }
-                                    }.start()
-                                }
-                            }
-                        }
-                        card.addView(nameLine)
-                        card.addView(TextView(this).apply {
-                            val detail = when (a.source) {
-                                "phone" -> "  ${phoneMsgCount}条消息 · ${phoneAttTotal}个附件"
-                                "cloud" -> "  ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
-                                else -> "  ${a.backupTimeStr} · rowid ${a.messageRowId} · ${a.totalAttachmentFiles}个附件 · ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
-                            }
-                            text = "  $detail"
-                            textSize = 12f; setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
-                        })
+                        card.addView(archiveRow(this, a, root, phoneMsgCount, phoneAttTotal))
                     }
 
                     // Download all cloud archives button
@@ -358,6 +269,128 @@ class ArchiveActivity : AppCompatActivity() {
         } catch (_: Exception) { emptyList() }
     }
 
+    /** 单行存档：单击切换高亮多选（不做处理），长按显示详情对话框。 */
+    private fun archiveRow(
+        ctx: android.content.Context,
+        a: ArchiveInfo,
+        root: LinearLayout,
+        phoneMsgCount: Long,
+        phoneAttTotal: Int,
+    ): View {
+        val isPhone = a.source == "phone"
+        val srcSuffix = when (a.source) {
+            "cloud" -> " ☁️云端"
+            "phone" -> " 📱"
+            else -> " 📦本地"
+        }
+        val srcColor = when (a.source) {
+            "cloud" -> M3.colorPrimary(ctx)
+            "phone" -> M3.colorSecondary(ctx)
+            else -> M3.onSurface(ctx)
+        }
+        val hlBg = M3.colorPrimaryContainer(ctx)
+        val hlFg = M3.onPrimaryContainer(ctx)
+
+        val nameLine = TextView(ctx).apply {
+            text = "${a.tag}$srcSuffix"
+            textSize = 14f
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            if (!isPhone && selectedTags.contains(a.tag)) {
+                setBackgroundColor(hlBg)
+                setTextColor(hlFg)
+                typeface = Typeface.DEFAULT_BOLD
+            } else {
+                setTextColor(srcColor)
+                typeface = if (isPhone) Typeface.create(Typeface.DEFAULT, Typeface.ITALIC) else Typeface.DEFAULT
+            }
+        }
+        if (!isPhone) {
+            // 单击：仅切换高亮选中，不做任何处理
+            nameLine.setOnClickListener {
+                val sel = !selectedTags.remove(a.tag)
+                if (sel) selectedTags.add(a.tag)
+                nameLine.setBackgroundColor(if (sel) hlBg else android.graphics.Color.TRANSPARENT)
+                nameLine.setTextColor(if (sel) hlFg else srcColor)
+                nameLine.typeface = if (sel) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                refreshStatusCard(root)
+            }
+            // 长按：显示详情，操作（对比/恢复/删除/下载）都在详情里
+            nameLine.setOnLongClickListener {
+                showArchiveDetail(a, root)
+                true
+            }
+        }
+
+        val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(View(ctx).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(6)) })
+        col.addView(nameLine)
+        col.addView(TextView(ctx).apply {
+            val detail = when (a.source) {
+                "phone" -> "  ${phoneMsgCount}条消息 · ${phoneAttTotal}个附件"
+                "cloud" -> "  ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
+                else -> "  ${a.backupTimeStr} · rowid ${a.messageRowId} · ${a.totalAttachmentFiles}个附件 · ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
+            }
+            text = "  $detail"
+            textSize = 12f; setTextColor(M3.onSurfaceVariant(ctx))
+        })
+        return col
+    }
+
+    /** 长按详情对话框：展示存档信息，操作按钮都在这里触发。 */
+    private fun showArchiveDetail(a: ArchiveInfo, root: LinearLayout) {
+        val info = when (a.source) {
+            "cloud" -> "云端存档 ☁️\n时间: ${a.backupTimeStr}\n大小: ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
+            else -> "本地存档 📦\n时间: ${a.backupTimeStr}\nrowid: ${a.messageRowId}\n消息数: ${a.messageCount}\n附件数: ${a.totalAttachmentFiles}\n大小: ${ArchiveManager.formatSize(a.totalAttachmentSize)}"
+        }
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("📋 ${a.tag}")
+            .setMessage(info)
+            .setNegativeButton("关闭", null)
+            .create()
+        val btnCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), 0, dp(24), dp(8)) }
+        if (a.source == "cloud") {
+            btnCol.addView(MaterialButton(this).apply {
+                text = "⬇️ 下载并选中"; insetTop = 0; insetBottom = 0
+                setOnClickListener { dialog.dismiss(); downloadAndSelect(a, root) }
+            })
+        } else {
+            btnCol.addView(MaterialButton(this).apply {
+                text = "📊 对比差异"; insetTop = 0; insetBottom = 0
+                setOnClickListener { dialog.dismiss(); showDiff(a) }
+            })
+            btnCol.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
+            btnCol.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                text = "▶️ 恢复"; insetTop = 0; insetBottom = 0
+                setOnClickListener { dialog.dismiss(); startRestore(a) }
+            })
+            btnCol.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
+            btnCol.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                text = "🗑️ 删除本地存档"; insetTop = 0; insetBottom = 0
+                setTextColor(M3.colorError(this@ArchiveActivity))
+                setOnClickListener {
+                    dialog.dismiss()
+                    android.app.AlertDialog.Builder(this@ArchiveActivity)
+                        .setTitle("删除本地存档")
+                        .setMessage("删除 ${a.tag}？此操作不可撤销。")
+                        .setPositiveButton("删除") { _, _ ->
+                            Thread {
+                                val ok = ArchiveManager.deleteLocalArchive(a)
+                                runOnUiThread {
+                                    android.widget.Toast.makeText(this@ArchiveActivity, if (ok) "已删除" else "删除失败", android.widget.Toast.LENGTH_SHORT).show()
+                                    if (ok) selectedTags.remove(a.tag)
+                                    refreshList(root)
+                                }
+                            }.start()
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                }
+            })
+        }
+        dialog.setView(btnCol, dp(0), dp(0), dp(0), dp(0))
+        dialog.show()
+    }
+
     private fun downloadAndSelect(archive: ArchiveInfo, root: LinearLayout) {
         val localName = File(archive.path).name
         val localPath = File(com.nous.wxhook.backup.BackupEnv.backupDataDir, localName)
@@ -392,20 +425,19 @@ class ArchiveActivity : AppCompatActivity() {
         android.widget.Toast.makeText(this, "开始下载 ${jobs.size} 个新增或变更存档（通知栏查看进度）", android.widget.Toast.LENGTH_LONG).show()
     }
 
-    private fun showDiff() {
-        val selected = ArchiveManager.getSelectedArchive() ?: return
-        if (selected.source == "cloud") {
+    private fun showDiff(archive: ArchiveInfo) {
+        if (archive.source == "cloud") {
             android.widget.Toast.makeText(this, "云端存档请先下载到本地后再对比", android.widget.Toast.LENGTH_LONG).show()
             return
         }
         Thread {
             val phoneMsg = ArchiveManager.getPhoneMsgCount()
             val phoneAtt = ArchiveManager.getPhoneAttachmentCounts()
-            val diff = ArchiveManager.diffArchive(selected, phoneMsg, phoneAtt)
+            val diff = ArchiveManager.diffArchive(archive, phoneMsg, phoneAtt)
             runOnUiThread {
                 startActivity(android.content.Intent(this, ArchiveDiffActivity::class.java).apply {
                     putExtra("diff_json", org.json.JSONObject().apply {
-                        put("archiveTag", selected.tag)
+                        put("archiveTag", archive.tag)
                         put("archiveMsg", diff.archiveMsgCount)
                         put("archiveRowId", diff.archiveMsgRowId)
                         put("phoneMsg", diff.phoneMsgCount)
@@ -430,16 +462,15 @@ class ArchiveActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun startRestore() {
-        val selected = ArchiveManager.getSelectedArchive() ?: return
-        if (selected.source == "cloud") {
+    private fun startRestore(archive: ArchiveInfo) {
+        if (archive.source == "cloud") {
             android.widget.Toast.makeText(this, "云端存档请先下载到本地后再恢复", android.widget.Toast.LENGTH_LONG).show()
             return
         }
-        Log.i(TAG, "startRestore: ${selected.tag}")
+        Log.i(TAG, "startRestore: ${archive.tag}")
         android.app.AlertDialog.Builder(this)
             .setTitle("🗂️ 恢复存档")
-            .setMessage("即将恢复存档 ${selected.tag}\n\n" +
+            .setMessage("即将恢复存档 ${archive.tag}\n\n" +
                 "操作步骤:\n" +
                 "1. 停止微信\n" +
                 "2. 合并数据库\n" +
@@ -447,7 +478,7 @@ class ArchiveActivity : AppCompatActivity() {
                 "4. 复制附件文件\n" +
                 "5. 清理校验文件\n\n" +
                 "继续？")
-            .setPositiveButton("开始恢复") { _, _ -> doRestore(selected) }
+            .setPositiveButton("开始恢复") { _, _ -> doRestore(archive) }
             .setNegativeButton("取消", null)
             .show()
     }
