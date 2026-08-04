@@ -100,6 +100,24 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
         }
     }
 
+    override suspend fun countFiles(dirs: List<String>): Map<String, Int> = withContext(Dispatchers.IO) {
+        if (useLibsu) {
+            com.nous.wxhook.root.libsu.RootManager.countFiles(dirs)
+        } else {
+            // 降级路径（RootService 未就绪）：用一条 shell find 兜底，保证功能可用
+            val script = dirs.joinToString(" ") { d ->
+                "p='$d'; if [ -d \"\\$p\" ]; then echo \"$d \\$(find \\\"\\$p\\\" -type f 2>/dev/null | wc -l)\"; fi"
+            }
+            run(script, 60_000).let { r ->
+                if (!r.isSuccess) return@withContext emptyMap()
+                r.stdout.lines().mapNotNull { line ->
+                    val parts = line.trim().split(" ")
+                    if (parts.size >= 2) (parts[0] to (parts[1].toIntOrNull() ?: 0)) else null
+                }.toMap()
+            }
+        }
+    }
+
     override suspend fun writeTarZstd(outputPath: String, pairsPath: String, useZstd: Boolean): Int =
         withContext(Dispatchers.IO) {
             val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder()

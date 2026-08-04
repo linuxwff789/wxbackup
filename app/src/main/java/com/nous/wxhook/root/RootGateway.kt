@@ -45,6 +45,8 @@ interface RootGateway {
     suspend fun writeFile(path: String, content: String): Boolean
     suspend fun readFile(path: String): String
     suspend fun fileSize(path: String): Long
+    /** 纯 Java 统计目录文件数（root 进程内，替代 shell find）。 */
+    suspend fun countFiles(dirs: List<String>): Map<String, Int>
 
     // WebDAV upload in root process (no external binary dependency)
     suspend fun webdavUpload(url: String, user: String, pass: String, filePath: String): Boolean

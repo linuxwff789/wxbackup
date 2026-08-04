@@ -136,6 +136,12 @@ object RootManager {
         try { WxRootBinder.delete(binder, path) == 0 } catch (_: Exception) { false }
     }
 
+    /** 纯 Java 统计目录文件数（root 进程内，替代 shell find）。 */
+    suspend fun countFiles(dirs: List<String>): Map<String, Int> = withContext(Dispatchers.IO) {
+        val binder = service ?: return@withContext emptyMap()
+        try { WxRootBinder.countFiles(binder, dirs) } catch (_: Exception) { emptyMap() }
+    }
+
     fun disconnect(context: Context) {
         if (bound) RootService.unbind(connection)
         bound = false

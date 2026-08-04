@@ -13,7 +13,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
     override fun asBinder(): android.os.IBinder = this
 
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-        if (code in TRANSACTION_EXEC..TRANSACTION_POLL_FULL_ARCHIVE_ROWID) {
+        if (code in TRANSACTION_EXEC..TRANSACTION_COUNT_FILES) {
             data.enforceInterface(DESCRIPTOR)
         }
         return when (code) {
@@ -216,6 +216,29 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 reply?.writeLong(result)
                 true
             }
+            TRANSACTION_COUNT_FILES -> {
+                // 纯 Java 遍历目录统计文件数（root 进程内，不依赖 shell find）
+                val dirs = mutableListOf<String>()
+                val n = data.readInt()
+                for (i in 0 until n) dirs.add(data.readString() ?: "")
+                val counts = mutableMapOf<String, Int>()
+                for (d in dirs) {
+                    counts[d] = try {
+                        val f = File(d)
+                        if (f.isDirectory) f.walkTopDown().count { it.isFile } else 0
+                    } catch (e: Exception) {
+                        Log.w("wxhook:Root", "countFiles failed for $d: ${e.message}")
+                        0
+                    }
+                }
+                reply?.writeNoException()
+                reply?.writeInt(counts.size)
+                for ((d, c) in counts) {
+                    reply?.writeString(d)
+                    reply?.writeInt(c)
+                }
+                true
+            }
             TRANSACTION_WEBDAV_UPLOAD -> {
                 val url = data.readString()
                 val user = data.readString()
@@ -267,6 +290,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
         const val TRANSACTION_GET_TAR_SQL_MAX_ROWID = android.os.IBinder.FIRST_CALL_TRANSACTION + 15
         const val TRANSACTION_GET_FULL_ARCHIVE_ROWID = android.os.IBinder.FIRST_CALL_TRANSACTION + 16
         const val TRANSACTION_POLL_FULL_ARCHIVE_ROWID = android.os.IBinder.FIRST_CALL_TRANSACTION + 17
+        const val TRANSACTION_COUNT_FILES = android.os.IBinder.FIRST_CALL_TRANSACTION + 18
         private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
 
         fun exec(shell: android.os.IBinder, command: String): ExecResult {
@@ -442,6 +466,29 @@ class WxRootBinder : android.os.Binder(), IInterface {
             shell,
             TRANSACTION_POLL_FULL_ARCHIVE_ROWID,
         ) { data -> data.writeString(hash) }
+
+        /** 纯 Java 统计目录文件数（root 进程内，替代 shell find）。 */
+        fun countFiles(shell: android.os.IBinder, dirs: List<String>): Map<String, Int> {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                data.writeInt(dirs.size)
+                for (d in dirs) data.writeString(d)
+                shell.transact(TRANSACTION_COUNT_FILES, data, reply, 0)
+                reply.readException()
+                val n = reply.readInt()
+                val result = mutableMapOf<String, Int>()
+                for (i in 0 until n) {
+                    val d = reply.readString() ?: continue
+                    result[d] = reply.readInt()
+                }
+                return result
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
 
         private fun transactInt(
             shell: android.os.IBinder,

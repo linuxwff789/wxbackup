@@ -439,17 +439,10 @@ object ArchiveManager {
         val msgRowIdFrom = dbLines.getOrNull(1)?.toLongOrNull() ?: 0L
         val msgRowId = dbLines.getOrNull(2)?.toLongOrNull() ?: 0L
 
-        // 附件统计：一次 root 调用遍历全部目录
+        // 附件统计：纯 Java 遍历（root 进程内 File.walkTopDown，不依赖 shell find）
         val attDirs = listOf("image2", "voice2", "video", "avatar", "emoji", "cdn")
-        val statScript = attDirs.joinToString(" ") { d ->
-            "p='$PHONE_ATTACH_DIR/$d'; if [ -d \"\$p\" ]; then echo \"$d \$(find \"\$p\" -type f 2>/dev/null | wc -l)\"; fi"
-        }
-        val statOut = RootGateways.runQuiet(statScript, 60_000)
-        val counts = mutableMapOf<String, Int>()
-        for (line in statOut.lines()) {
-            val parts = line.trim().split(" ")
-            if (parts.size >= 2) counts[parts[0]] = parts[1].toIntOrNull() ?: 0
-        }
+        val counts = RootGateways.countFiles(attDirs.map { "$PHONE_ATTACH_DIR/$it" })
+            .mapKeys { File(it.key).name }
         val stats = PhoneStats(msgCount, msgRowIdFrom, msgRowId, counts)
         phoneStatsCache = stats
         phoneStatsTime = now

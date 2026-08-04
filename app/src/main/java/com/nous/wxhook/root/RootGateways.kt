@@ -13,6 +13,7 @@ object RootGateways {
     fun stat(path: String): FileMetadata? = runBlocking { gateway.stat(path) }
     fun writeFile(path: String, content: String): Boolean = runBlocking { gateway.writeFile(path, content) }
     fun readFile(path: String): String = runBlocking { gateway.readFile(path) }
+    fun countFiles(dirs: List<String>): Map<String, Int> = runBlocking { gateway.countFiles(dirs) }
     fun mkdirs(path: String): Boolean = runBlocking { gateway.mkdirs(path) }
     fun fileSize(path: String): Long = runBlocking { gateway.fileSize(path) }
     fun copy(src: String, dst: String): Boolean = runBlocking { gateway.copy(src, dst) }
