@@ -39,6 +39,8 @@ class ArchiveDiffActivity : AppCompatActivity() {
         infoCard.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4)) })
         infoCard.addView(row("📝 消息", "存档", formatNum(j.optLong("archiveMsg", 0))))
         infoCard.addView(row("", "手机", formatNum(j.optLong("phoneMsg", 0))))
+        infoCard.addView(row("🗂️ rowid", "存档", formatNum(j.optLong("archiveRowId", 0))))
+        infoCard.addView(row("", "手机", formatNum(j.optLong("phoneRowId", 0))))
         infoCard.addView(row("", "仅存档有", formatNum(j.optLong("onlyInArchive", 0)), M3.colorPrimary(this)))
         infoCard.addView(row("", "仅手机有", formatNum(j.optLong("onlyInPhone", 0)), M3.colorPrimary(this)))
         infoCard.addView(row("", "合并后", formatNum(j.optLong("unionMsg", 0)), M3.colorPrimary(this)))

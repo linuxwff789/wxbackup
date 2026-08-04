@@ -36,12 +36,15 @@ object BackupEnv {
 
     fun isArchiveFile(name: String): Boolean = name.endsWith(".tar.zst") || name.endsWith(".tar.gz")
 
-    fun tarExtractCommand(archivePath: String, outputDir: String): String =
-        if (archivePath.endsWith(".tar.gz")) {
+    fun tarExtractCommand(archivePath: String, outputDir: String): String {
+        val zstdPath = "$binDir/zstd"
+        return if (archivePath.endsWith(".tar.gz")) {
             "tar -xzf \"$archivePath\" -C \"$outputDir\""
         } else {
-            "tar -I zstd -xf \"$archivePath\" -C \"$outputDir\""
+            // toybox tar 无法在 PATH 中找到 zstd，必须用绝对路径
+            "tar -I '$zstdPath' -xf \"$archivePath\" -C \"$outputDir\""
         }
+    }
 
     // ── Root 操作 ──
 

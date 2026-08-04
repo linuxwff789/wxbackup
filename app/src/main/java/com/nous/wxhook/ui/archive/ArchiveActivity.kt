@@ -373,7 +373,9 @@ class ArchiveActivity : AppCompatActivity() {
                     putExtra("diff_json", org.json.JSONObject().apply {
                         put("archiveTag", selected.tag)
                         put("archiveMsg", diff.archiveMsgCount)
+                        put("archiveRowId", diff.archiveMsgRowId)
                         put("phoneMsg", diff.phoneMsgCount)
+                        put("phoneRowId", diff.phoneMsgRowId)
                         put("unionMsg", diff.unionMsg)
                         put("onlyInArchive", diff.onlyInArchive)
                         put("onlyInPhone", diff.onlyInPhone)

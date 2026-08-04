@@ -28,6 +28,7 @@ object ArchiveManager {
         val backupTime: Long = 0,
         val backupTimeStr: String = "",
         val messageCount: Long = 0,
+        val messageRowId: Long = 0,
         val totalAttachmentFiles: Int = 0,
         val totalAttachmentSize: Long = 0,
         val password: String = "e9cd2ae",
@@ -40,7 +41,9 @@ object ArchiveManager {
 
     data class DiffResult(
         val archiveMsgCount: Long,
+        val archiveMsgRowId: Long,
         val phoneMsgCount: Long,
+        val phoneMsgRowId: Long,
         val unionMsg: Long,
         val onlyInArchive: Long,
         val onlyInPhone: Long,
@@ -174,6 +177,7 @@ object ArchiveManager {
             backupTime = backupTime,
             backupTimeStr = formatTime(backupTime),
             messageCount = sqlMsgCount,
+            messageRowId = msgCount,
             totalAttachmentFiles = totalFiles,
             totalAttachmentSize = totalSize,
             password = config.optString("password", "e9cd2ae"),
@@ -189,6 +193,8 @@ object ArchiveManager {
     fun diffArchive(archive: ArchiveInfo, phoneMsgCount: Long, phoneAttachments: Map<String, Int>): DiffResult {
         Log.d(TAG, "diffArchive: arch=${archive.tag} archMsg=${archive.messageCount} phoneMsg=$phoneMsgCount")
         val archiveMsgCount = archive.messageCount
+        val archiveMsgRowId = archive.messageRowId
+        val phoneMsgRowId = getPhoneMsgRowId()
         val onlyInArchive = maxOf(0L, archiveMsgCount - phoneMsgCount)
         val onlyInPhone = maxOf(0L, phoneMsgCount - archiveMsgCount)
         val unionMsg = maxOf(archiveMsgCount, phoneMsgCount)
@@ -214,7 +220,9 @@ object ArchiveManager {
 
         return DiffResult(
             archiveMsgCount = archiveMsgCount,
+            archiveMsgRowId = archiveMsgRowId,
             phoneMsgCount = phoneMsgCount,
+            phoneMsgRowId = phoneMsgRowId,
             unionMsg = unionMsg,
             onlyInArchive = onlyInArchive,
             onlyInPhone = onlyInPhone,
@@ -245,6 +253,7 @@ object ArchiveManager {
             put("backupTime", usable.backupTime)
             put("backupTimeStr", usable.backupTimeStr)
             put("messageCount", usable.messageCount)
+            put("messageRowId", usable.messageRowId)
             put("password", usable.password)
             put("path", usable.path)
             put("source", usable.source)
@@ -261,7 +270,9 @@ object ArchiveManager {
             return archive.takeIf { File(it.path).isDirectory }
         }
         val target = File(BackupEnv.backupDataDir, "extracted_${archive.tag}")
-        if (!target.exists() || target.listFiles()?.none { it.isDirectory && File(it, "db_state.json").exists() } == true) {
+        val dirs = target.listFiles() ?: emptyArray()
+        val existing = dirs.firstOrNull { it.isDirectory && File(it, "db_state.json").exists() }
+        if (existing == null) {
             RootGateways.run("rm -rf '${target.absolutePath}' && mkdir -p '${target.absolutePath}'", 30_000)
             val result = RootGateways.run(BackupEnv.tarExtractCommand(archive.path, target.absolutePath), 600_000)
             if (!result.isSuccess) {
@@ -295,6 +306,7 @@ object ArchiveManager {
                 backupTime = j.optLong("backupTime", 0),
                 backupTimeStr = j.optString("backupTimeStr", formatTime(j.optLong("backupTime", 0))),
                 messageCount = j.optLong("messageCount", 0),
+                messageRowId = j.optLong("messageRowId", 0),
                 password = j.optString("password", "e9cd2ae"),
                 path = j.optString("path", ""),
                 source = j.optString("source", "local"),
@@ -330,6 +342,19 @@ object ArchiveManager {
         }
         Log.i(TAG, "getPhoneAttachmentCounts: total ${counts.values.sum()}")
         return counts
+    }
+
+    fun getPhoneMsgRowId(): Long {
+        val pw = getSelectedArchive()?.password ?: "e9cd2ae"
+        val pws = "PRAGMA key='$pw';PRAGMA cipher_compatibility=3;PRAGMA cipher_page_size=1024;PRAGMA kdf_iter=4000;PRAGMA cipher_use_hmac=OFF;"
+        val r = RootGateways.runQuiet(
+            "cd /data/data/com.termux/files/home/wxbackup/tools && " +
+            "export LD_LIBRARY_PATH=/data/data/com.termux/files/home/wxbackup/tools && " +
+            "./sqlcipher '$PHONE_DB_PATH' \"$pws SELECT coalesce(max(rowid),0) FROM message;\" 2>/dev/null | tail -1"
+        )
+        val rowId = r.trim().toLongOrNull() ?: 0L
+        Log.d(TAG, "getPhoneMsgRowId: $rowId (raw: ${r.trim()})")
+        return rowId
     }
 
     // ── Helpers ──
