@@ -72,6 +72,7 @@ class ArchiveActivity : AppCompatActivity() {
         statusCard.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
         statusCard.addView(MaterialButton(this).apply {
             text = "🔄 刷新存档列表"
+            tag = "refreshBtn"
             insetTop = 0; insetBottom = 0; setOnClickListener { refreshList(root) }
         })
         root.addView(statusCard)
@@ -161,30 +162,44 @@ class ArchiveActivity : AppCompatActivity() {
         card.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)) })
         card.addView(MaterialButton(this).apply {
             text = "🔄 刷新存档列表"
+            tag = "refreshBtn"
             insetTop = 0; insetBottom = 0; setOnClickListener { refreshList(root) }
         })
         root.addView(card, idx)
     }
 
     private fun refreshList(root: LinearLayout) {
+        // 刷新按钮转圈提示，防止重复点击
+        val refreshBtn = root.findViewWithTag<View>("refreshBtn")
+        refreshBtn?.isEnabled = false
+        refreshBtn?.alpha = 0.5f
+        android.widget.Toast.makeText(this, "正在刷新存档列表...", android.widget.Toast.LENGTH_SHORT).show()
         Thread {
-            // 本地扫描 / 云端列表 / 手机统计 三路并行，全部完成后一次性渲染
-            val executor = java.util.concurrent.Executors.newFixedThreadPool(3)
             val localArchives: List<ArchiveInfo>
             val cloudArchives: List<ArchiveInfo>
             val phoneMsgCount: Long
             val phoneAttTotal: Int
             try {
-                val localFuture = executor.submit(java.util.concurrent.Callable { ArchiveManager.scanLocalArchives() })
-                val cloudFuture = executor.submit(java.util.concurrent.Callable { fetchCloudArchives() })
-                val phoneFuture = executor.submit(java.util.concurrent.Callable { ArchiveManager.getPhoneStats() })
-                localArchives = localFuture.get()
-                cloudArchives = cloudFuture.get()
-                val phone = phoneFuture.get()
-                phoneMsgCount = phone.msgCount
-                phoneAttTotal = phone.totalAttachments
-            } finally {
-                executor.shutdown()
+                // 本地扫描 / 云端列表 / 手机统计 三路并行，任一失败回退默认值，不阻塞整体
+                val executor = java.util.concurrent.Executors.newFixedThreadPool(3)
+                try {
+                    val localFuture = executor.submit(java.util.concurrent.Callable {
+                        runCatching { ArchiveManager.scanLocalArchives() }.getOrDefault(emptyList())
+                    })
+                    val cloudFuture = executor.submit(java.util.concurrent.Callable {
+                        runCatching { fetchCloudArchives() }.getOrDefault(emptyList())
+                    })
+                    val phoneFuture = executor.submit(java.util.concurrent.Callable {
+                        runCatching { ArchiveManager.getPhoneStats() }.getOrNull()
+                    })
+                    localArchives = try { localFuture.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) { emptyList() }
+                    cloudArchives = try { cloudFuture.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) { emptyList() }
+                    val phone = try { phoneFuture.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) { null }
+                    phoneMsgCount = phone?.msgCount ?: 0L
+                    phoneAttTotal = phone?.totalAttachments ?: 0
+                } finally {
+                    executor.shutdownNow()
+                }
             }
 
             val allArchives = mutableListOf<ArchiveInfo>()
@@ -274,8 +289,17 @@ class ArchiveActivity : AppCompatActivity() {
                                         .show()
                                 } else {
                                     val tag = a.tag
-                                    ArchiveManager.selectArchive(tag)
-                                    refreshList(root)
+                                    android.widget.Toast.makeText(this@ArchiveActivity, "正在选中 $tag ...", android.widget.Toast.LENGTH_SHORT).show()
+                                    Thread {
+                                        val ok = ArchiveManager.selectArchive(tag)
+                                        runOnUiThread {
+                                            if (ok) {
+                                                refreshList(root)
+                                            } else {
+                                                android.widget.Toast.makeText(this@ArchiveActivity, "选中失败：未找到该存档", android.widget.Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }.start()
                                 }
                             }
                         }
