@@ -361,12 +361,13 @@ object ArchiveManager {
             it.name.endsWith(".tar.zst") || it.name.endsWith(".tar.gz")
         } ?: emptyList()
         // 轻量：每个包只 JNI 读 db_state.json 拿 from/to（缓存命中则不读）
+        var readFailures = 0
         val metas = pkgs.mapNotNull { f ->
             val cached = rowIdCache[f.absolutePath]
             val ids = if (cached != null && cached.first == f.lastModified()) cached.second else {
                 readPackageRowIds(f)?.also { rowIdCache[f.absolutePath] = f.lastModified() to it }
             }
-            ids?.let { Triple(f.name, it.first, it.second) }
+            if (ids == null) { readFailures++; null } else Triple(f.name, it.first, it.second)
         }
         if (metas.isEmpty()) return ArchiveChain(0, 0L, 0L, false)
 
@@ -381,7 +382,8 @@ object ArchiveManager {
             if (prevTo >= 0 && p.second > 0 && p.second > prevTo + 1) hasGap = true
             if (p.third > prevTo) prevTo = p.third
         }
-        return ArchiveChain(sorted.size, from, to, hasGap)
+        // 有包读取失败时也标记不完整，避免链被静默截断
+        return ArchiveChain(sorted.size, from, to, hasGap || readFailures > 0)
     }
 
     /** 轻量读包内 db_state.json 的 (from, to)，不读 db_config / file_manifest。 */

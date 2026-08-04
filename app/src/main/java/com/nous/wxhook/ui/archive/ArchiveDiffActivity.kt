@@ -47,7 +47,12 @@ class ArchiveDiffActivity : AppCompatActivity() {
         val chainHasGap = j.optBoolean("chainHasGap", false)
         infoCard.addView(row("📝 消息", "手机当前", "${group(j.optLong("phoneMsg", 0))} 条"))
         val chainLabel = if (chainCount > 1) "存档链(${chainCount}包)" else "存档"
-        val chainRange = rowIdRange(if (chainFrom > 0) chainFrom else j.optLong("archiveRowIdFrom", 0), if (chainTo > 0) chainTo else archTo)
+        // 注意：chainFrom 合法值可以是 0（全量基线起点），不能拿 chainFrom>0 判断是否走链
+        val chainRange = if (chainCount > 1) {
+            rowIdRange(chainFrom, chainTo)
+        } else {
+            rowIdRange(j.optLong("archiveRowIdFrom", 0), archTo)
+        }
         infoCard.addView(row("🗂️ rowid", chainLabel, chainRange))
         infoCard.addView(row("", "手机", rowIdRange(j.optLong("phoneRowIdFrom", 0), phoneTo)))
         val gapText = when {
