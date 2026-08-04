@@ -179,27 +179,25 @@ class ArchiveActivity : AppCompatActivity() {
             val cloudArchives: List<ArchiveInfo>
             val phoneMsgCount: Long
             val phoneAttTotal: Int
+            val executor = java.util.concurrent.Executors.newFixedThreadPool(3)
             try {
                 // 本地扫描 / 云端列表 / 手机统计 三路并行，任一失败回退默认值，不阻塞整体
-                val executor = java.util.concurrent.Executors.newFixedThreadPool(3)
-                try {
-                    val localFuture = executor.submit(java.util.concurrent.Callable {
-                        runCatching { ArchiveManager.scanLocalArchives() }.getOrDefault(emptyList())
-                    })
-                    val cloudFuture = executor.submit(java.util.concurrent.Callable {
-                        runCatching { fetchCloudArchives() }.getOrDefault(emptyList())
-                    })
-                    val phoneFuture = executor.submit(java.util.concurrent.Callable {
-                        runCatching { ArchiveManager.getPhoneStats() }.getOrNull()
-                    })
-                    localArchives = try { localFuture.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) { emptyList() }
-                    cloudArchives = try { cloudFuture.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) { emptyList() }
-                    val phone = try { phoneFuture.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) { null }
-                    phoneMsgCount = phone?.msgCount ?: 0L
-                    phoneAttTotal = phone?.totalAttachments ?: 0
-                } finally {
-                    executor.shutdownNow()
-                }
+                val localFuture = executor.submit(java.util.concurrent.Callable {
+                    runCatching { ArchiveManager.scanLocalArchives() }.getOrDefault(emptyList())
+                })
+                val cloudFuture = executor.submit(java.util.concurrent.Callable {
+                    runCatching { fetchCloudArchives() }.getOrDefault(emptyList())
+                })
+                val phoneFuture = executor.submit(java.util.concurrent.Callable {
+                    runCatching { ArchiveManager.getPhoneStats() }.getOrNull()
+                })
+                localArchives = try { localFuture.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) { emptyList() }
+                cloudArchives = try { cloudFuture.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) { emptyList() }
+                val phone = try { phoneFuture.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) { null }
+                phoneMsgCount = phone?.msgCount ?: 0L
+                phoneAttTotal = phone?.totalAttachments ?: 0
+            } finally {
+                executor.shutdownNow()
             }
 
             val allArchives = mutableListOf<ArchiveInfo>()
