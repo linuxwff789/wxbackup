@@ -305,15 +305,17 @@ object ArchiveManager {
         // 差异用 rowid 判断（正=存档更新，负=手机更新），不再输出假的 count 差值和 union。
         val rowIdGap = chainTo - phoneMsgRowId
 
-        // 附件只对比标准目录（避免 manifest 里 sfs/appbrand 等其他目录造成假缺失）
-        val allDirs = ATTACHMENT_DIRS.filter { it in phoneAttachments || it in archive.attachmentCounts }
+        // 附件对比：与消息 rowid 一致，使用存档链（基线+全部增量包）的总覆盖口径。
+        // 单个增量包的 file_manifest.json 只含该包新增附件，必须把同 hash 全部包合并。
+        val chainAtts = if (chain.packageCount > 1) buildArchiveChainAttachments() else archive.attachmentCounts
+        val allDirs = ATTACHMENT_DIRS.filter { it in phoneAttachments || it in chainAtts }
         val attDiffs = mutableMapOf<String, AttachmentDiff>()
         var phoneTotal = 0
         var archiveTotal = 0
 
         for (d in allDirs.sorted()) {
             val phoneN = phoneAttachments[d] ?: 0
-            val archN = archive.attachmentCounts[d] ?: 0
+            val archN = chainAtts[d] ?: 0
             phoneTotal += phoneN
             archiveTotal += archN
             attDiffs[d] = AttachmentDiff(
@@ -396,6 +398,31 @@ object ArchiveManager {
             val state = JSONObject(stateRaw)
             state.optLong("lastMessageRowIdFrom", 0) to state.optLong("lastMessageRowId", 0)
         } catch (_: Exception) { null }
+    }
+
+    /**
+     * 链附件统计：扫描 backupdata 下所有包，JNI 读各包 file_manifest.json，
+     * 合并同 hash（当前用户）的基线+增量包的附件计数。
+     * 单包场景不调用（直接用选中包的 attachmentCounts），避免无谓扫盘。
+     */
+    private fun buildArchiveChainAttachments(): Map<String, Int> {
+        val pkgDir = File(File(BACKUP_DIR), "backupdata")
+        val pkgs = pkgDir.listFiles()?.filter {
+            it.name.endsWith(".tar.zst") || it.name.endsWith(".tar.gz")
+        } ?: emptyList()
+        val counts = mutableMapOf<String, Int>()
+        for (f in pkgs) {
+            val cached = pkgInfoCache[f.absolutePath]
+            val info = if (cached != null && cached.first == f.lastModified()) {
+                cached.second
+            } else {
+                readPackageInfo(f)?.also { pkgInfoCache[f.absolutePath] = f.lastModified() to it }
+            }
+            info?.attachmentCounts?.forEach { (dir, n) ->
+                counts[dir] = (counts[dir] ?: 0) + n
+            }
+        }
+        return counts
     }
 
     // ── Select current archive ──

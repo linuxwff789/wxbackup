@@ -130,9 +130,14 @@ class ArchiveDiffActivity : AppCompatActivity() {
 
     private fun formatNum(n: Long) = if (n >= 10000) "${n / 1000}K" else "$n"
 
-    /** rowid 范围显示：from ~ to（完整数字，不缩写；from=0 时只显示 to）。 */
-    private fun rowIdRange(from: Long, to: Long): String =
-        if (from > 0 && to >= from) "${group(from)} ~ ${group(to)}" else group(to)
+    /** rowid 范围显示：from ~ to（完整数字，不缩写）。
+     *  from=0 是合法起点（全量基线包从 0 开始），也必须显示区间；
+     *  仅在无数据（to<=0）时回退为 0。 */
+    private fun rowIdRange(from: Long, to: Long): String = when {
+        to <= 0 -> "0"
+        from <= to -> "${group(from)} ~ ${group(to)}"
+        else -> group(to)
+    }
 
     /** 千分位分组，rowid 需要精确值，不能用 K 缩写。 */
     private fun group(n: Long): String {

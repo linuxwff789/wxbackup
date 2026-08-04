@@ -54,11 +54,11 @@ object BackupOrchestrator {
                 databaseSources += NativeArchivePlan.Source(dumpPath, "$userHash/${FullBackupLayout.databaseDumpName()}")
 
                 // Save DB state
-                val maxRowId = runCatching {
+                val rowIdRange = runCatching {
                     val pwd = ArchiveService.getDbPassword()
                     val decDb = "/data/local/tmp/wxhook_backup/wxhook_dec.db"
                     val exists = RootGateways.runQuiet("test -e \"$decDb\" && echo 1").trim() == "1"
-                    if (!exists || pwd.isEmpty()) return@runCatching 0L
+                    if (!exists || pwd.isEmpty()) return@runCatching 0L to 0L
                     val sqlScript = "/data/local/tmp/wxhook_backup/rowid_query.sql"
                     RootGateways.run("mkdir -p /data/local/tmp/wxhook_backup", 5_000)
                     val scriptContent = ".output /dev/null\n" +
@@ -68,14 +68,20 @@ object BackupOrchestrator {
                         "PRAGMA kdf_iter = 4000;\n" +
                         "PRAGMA cipher_use_hmac = OFF;\n" +
                         ".output stdout\n" +
+                        "SELECT coalesce(min(rowid), 0) FROM message;\n" +
                         "SELECT coalesce(max(rowid), 0) FROM message;\n"
                     RootGateways.runQuiet("printf '%s' '${scriptContent.replace("'", "'\\'\'")}'> $sqlScript")
                     val ld = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
                     val result = RootGateways.run("$ld ${BackupEnv.binDir}/sqlcipher \"$decDb\" < $sqlScript 2>/dev/null", 30_000)
                     RootGateways.run("rm -f $sqlScript", 5_000)
-                    result.stdout.lines().lastOrNull { it.all { c -> c.isDigit() } }?.toLong() ?: 0L
-                }.getOrDefault(0L)
-                fullDbStates += Triple(userHash, 0L, maxRowId)
+                    // 输出顺序：min, max；取最后两个纯数字行
+                    val digits = result.stdout.lines().filter { it.all { c -> c.isDigit() } }
+                    val minRowId = digits.getOrNull(digits.size - 2)?.toLongOrNull() ?: 0L
+                    val maxRowId = digits.lastOrNull()?.toLongOrNull() ?: 0L
+                    minRowId to maxRowId
+                }.getOrDefault(0L to 0L)
+                // 基线包记录真实起始 rowid（之前写死 0，导致对比界面只显示最大 rowid）
+                fullDbStates += Triple(userHash, rowIdRange.first, rowIdRange.second)
             }
 
             // 3. Scan source files for manifest
