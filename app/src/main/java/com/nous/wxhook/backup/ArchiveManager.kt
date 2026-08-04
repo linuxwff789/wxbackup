@@ -364,10 +364,12 @@ object ArchiveManager {
         var readFailures = 0
         val metas = pkgs.mapNotNull { f ->
             val cached = rowIdCache[f.absolutePath]
-            val ids = if (cached != null && cached.first == f.lastModified()) cached.second else {
+            val ids: Pair<Long, Long>? = if (cached != null && cached.first == f.lastModified()) {
+                cached.second
+            } else {
                 readPackageRowIds(f)?.also { rowIdCache[f.absolutePath] = f.lastModified() to it }
             }
-            if (ids == null) { readFailures++; null } else Triple(f.name, it.first, it.second)
+            if (ids == null) { readFailures++; null } else Triple(f.name, ids.first, ids.second)
         }
         if (metas.isEmpty()) return ArchiveChain(0, 0L, 0L, false)
 
