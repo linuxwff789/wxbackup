@@ -238,10 +238,10 @@ class ArchiveActivity : AppCompatActivity() {
                     for (a in allArchives) {
                         val isSelected = selected?.tag == a.tag && a.source != "phone"
                         val marker = if (isSelected) "→ " else "  "
-                        val srcIcon = when (a.source) {
-                            "cloud" -> "☁️云端 "
-                            "phone" -> "📱"
-                            else -> "📦本地 "
+                        val srcSuffix = when (a.source) {
+                            "cloud" -> " ☁️云端"
+                            "phone" -> " 📱"
+                            else -> " 📦本地"
                         }
                         val srcColor = when (a.source) {
                             "cloud" -> M3.colorPrimary(this)
@@ -252,7 +252,7 @@ class ArchiveActivity : AppCompatActivity() {
 
                         val tf = if (isSelected) Typeface.DEFAULT_BOLD else if (a.source == "phone") Typeface.create(Typeface.DEFAULT, Typeface.ITALIC) else Typeface.DEFAULT
                         val nameLine = TextView(this).apply {
-                            text = "$marker$srcIcon${a.tag}"
+                            text = "$marker${a.tag}$srcSuffix"
                             textSize = 14f; typeface = tf
                             setTextColor(srcColor)
                         }

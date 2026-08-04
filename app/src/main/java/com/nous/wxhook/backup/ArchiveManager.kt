@@ -115,14 +115,20 @@ object ArchiveManager {
             val info = if (cached != null && cached.first == f.lastModified()) {
                 cached.second
             } else {
-                readPackageInfo(f)?.also {
+                // JNI 读元数据失败时也显示（仅大小/时间），不能整个存档消失
+                readPackageInfo(f) ?: ArchiveInfo(
+                    tag = f.nameWithoutExtension.removeSuffix(".tar").removeSuffix(".zst").removeSuffix(".gz"),
+                    backupTime = f.lastModified(),
+                    backupTimeStr = formatTime(f.lastModified()),
+                    totalAttachmentSize = f.length(),
+                    path = f.absolutePath,
+                    source = "local",
+                ).also {
                     pkgInfoCache[f.absolutePath] = f.lastModified() to it
                 }
             }
-            if (info != null) {
-                Log.i(TAG, "scanLocalArchives: found package [${info.tag}] msgs=${info.messageCount} rowid=${info.messageRowId} size=${formatSize(f.length())}")
-                archives.add(info)
-            }
+            Log.i(TAG, "scanLocalArchives: found package [${info.tag}] msgs=${info.messageCount} rowid=${info.messageRowId} size=${formatSize(f.length())}")
+            archives.add(info)
         }
 
         Log.i(TAG, "scanLocalArchives: total ${archives.size} archives found")
@@ -319,9 +325,11 @@ object ArchiveManager {
             Log.w(TAG, "selectArchive: archive not found: $tag")
             return false
         }
-        // 包元数据已由 scanLocalArchives 通过 JNI 读取（hash/rowid/password/附件统计），
-        // 不再整包解压；真正需要文件内容时（恢复）再 ensureExtracted。
-        val usable = match
+        // 包元数据已由 scanLocalArchives 通过 JNI 读取；若读取失败（rowid=0 且是包），
+        // 选中时再补一次 JNI 读取，仍失败则回退基础信息。
+        val usable = if (match.path.endsWith(".tar.zst") || match.path.endsWith(".tar.gz")) {
+            if (match.messageRowId > 0) match else readPackageInfo(File(match.path)) ?: match
+        } else match
         Log.i(TAG, "selectArchive: selected ${usable.tag} (msgs=${usable.messageCount})")
         val json = JSONObject().apply {
             put("tag", usable.tag)
