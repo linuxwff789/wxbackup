@@ -175,9 +175,9 @@ class ArchiveActivity : AppCompatActivity() {
             val phoneMsgCount: Long
             val phoneAttTotal: Int
             try {
-                val localFuture = executor.submit<java.util.List<ArchiveInfo>> { ArchiveManager.scanLocalArchives() }
-                val cloudFuture = executor.submit<java.util.List<ArchiveInfo>> { fetchCloudArchives() }
-                val phoneFuture = executor.submit<ArchiveManager.PhoneStats> { ArchiveManager.getPhoneStats() }
+                val localFuture = executor.submit(java.util.concurrent.Callable { ArchiveManager.scanLocalArchives() })
+                val cloudFuture = executor.submit(java.util.concurrent.Callable { fetchCloudArchives() })
+                val phoneFuture = executor.submit(java.util.concurrent.Callable { ArchiveManager.getPhoneStats() })
                 localArchives = localFuture.get()
                 cloudArchives = cloudFuture.get()
                 val phone = phoneFuture.get()
