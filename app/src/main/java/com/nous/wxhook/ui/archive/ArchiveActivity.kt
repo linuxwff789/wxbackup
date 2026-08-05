@@ -473,12 +473,40 @@ class ArchiveActivity : AppCompatActivity() {
             android.widget.Toast.makeText(this, "云端存档请先下载到本地后再对比", android.widget.Toast.LENGTH_LONG).show()
             return
         }
+        // 对比需 JNI 扫包读 manifest，耗时较长，弹进度对话框给用户反馈
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(24), dp(8), dp(24), dp(8))
+        }
+        val spinner = android.widget.ProgressBar(this)
+        val progressLabel = TextView(this).apply {
+            text = "准备对比..."
+            textSize = 14f
+            setTextColor(M3.onSurfaceVariant(this@ArchiveActivity))
+            setPadding(dp(12), 0, 0, 0)
+        }
+        content.addView(spinner)
+        content.addView(progressLabel)
+        val pd = android.app.AlertDialog.Builder(this)
+            .setTitle("📊 对比存档")
+            .setView(content)
+            .setCancelable(false)
+            .create()
+        pd.show()
         Thread {
-            val phoneMsg = ArchiveManager.getPhoneMsgCount()
-            val phoneAtt = ArchiveManager.getPhoneAttachmentCounts()
-            val diff = ArchiveManager.diffArchive(archive, phoneMsg, phoneAtt)
-            runOnUiThread {
-                startActivity(android.content.Intent(this, ArchiveDiffActivity::class.java).apply {
+            try {
+                val phoneStats = ArchiveManager.getPhoneStats()
+                val diff = ArchiveManager.diffArchive(
+                    archive,
+                    phoneStats.msgCount,
+                    phoneStats.attachmentCounts,
+                ) { msg ->
+                    runOnUiThread { progressLabel.text = msg }
+                }
+                runOnUiThread {
+                    pd.dismiss()
+                    startActivity(android.content.Intent(this, ArchiveDiffActivity::class.java).apply {
                     putExtra("diff_json", org.json.JSONObject().apply {
                         put("archiveTag", archive.tag)
                         put("archiveMsg", diff.archiveMsgCount)
@@ -505,6 +533,13 @@ class ArchiveActivity : AppCompatActivity() {
                         }).toString())
                     }.toString())
                 })
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "showDiff failed: ${e.message}", e)
+                runOnUiThread {
+                    pd.dismiss()
+                    android.widget.Toast.makeText(this, "对比失败: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                }
             }
         }.start()
     }

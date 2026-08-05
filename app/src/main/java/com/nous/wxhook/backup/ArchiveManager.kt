@@ -29,8 +29,6 @@ object ArchiveManager {
 
     /** 包元数据缓存：path -> (包 mtime, ArchiveInfo)，避免每次刷新都 JNI 扫包。 */
     private val pkgInfoCache = mutableMapOf<String, Pair<Long, ArchiveInfo>>()
-    /** 轻量 rowid 缓存：path -> (包 mtime, (from, to))，链构建只读 db_state.json。 */
-    private val rowIdCache = mutableMapOf<String, Pair<Long, Pair<Long, Long>>>()
 
     data class ArchiveInfo(
         val tag: String,
@@ -289,16 +287,24 @@ object ArchiveManager {
 
     // ── Diff ──
 
-    fun diffArchive(archive: ArchiveInfo, phoneMsgCount: Long, phoneAttachments: Map<String, Int>): DiffResult {
+    fun diffArchive(
+        archive: ArchiveInfo,
+        phoneMsgCount: Long,
+        phoneAttachments: Map<String, Int>,
+        onProgress: DiffProgress? = null,
+    ): DiffResult {
         Log.d(TAG, "diffArchive: arch=${archive.tag} archMsg=${archive.messageCount} phoneMsg=$phoneMsgCount")
         val archiveMsgCount = archive.messageCount
         val archiveMsgRowIdFrom = archive.messageRowIdFrom
         val archiveMsgRowId = archive.messageRowId
+        onProgress?.onProgress("查询手机端消息/附件统计...")
         val phoneMsgRowIdFrom = getPhoneMsgRowIdFrom()
         val phoneMsgRowId = getPhoneMsgRowId()
         // 增量备份：单独一个增量包的 rowid 区间只是全链的一段，必须把同 hash 的
         // 基线+全部增量包串成存档链，用链的总覆盖范围与手机对比。
-        val chain = buildArchiveChain(archive)
+        // 一次扫描全部包：同时拿 rowid 区间与附件汇总，避免两次独立 JNI 扫包。
+        val scan = scanChainPackages(onProgress)
+        val chain = scan.chain
         val chainFrom = chain.from
         val chainTo = chain.to
         // 消息口径：存档侧是 rowid（链覆盖到 max rowid），手机侧是 count(*)，不可直接相减。
@@ -307,7 +313,7 @@ object ArchiveManager {
 
         // 附件对比：与消息 rowid 一致，使用存档链（基线+全部增量包）的总覆盖口径。
         // 单个增量包的 file_manifest.json 只含该包新增附件，必须把同 hash 全部包合并。
-        val chainAtts = if (chain.packageCount > 1) buildArchiveChainAttachments() else archive.attachmentCounts
+        val chainAtts = if (chain.packageCount > 1) scan.attachments else archive.attachmentCounts
         val allDirs = ATTACHMENT_DIRS.filter { it in phoneAttachments || it in chainAtts }
         val attDiffs = mutableMapOf<String, AttachmentDiff>()
         var phoneTotal = 0
@@ -357,23 +363,39 @@ object ArchiveManager {
      * 构建存档链：扫描 backupdata 下所有包，JNI 读各包 db_state.json，
      * 取与目标存档同 hash 的包，按 rowid 排序后合并覆盖范围。
      */
-    fun buildArchiveChain(target: ArchiveInfo): ArchiveChain {
+    fun buildArchiveChain(target: ArchiveInfo): ArchiveChain =
+        scanChainPackages(null).chain
+
+    /**
+     * 一次扫描 backupdata 下所有包，同时收集：
+     *  - 链 rowid 区间（db_state.json 的 from/to）
+     *  - 链附件统计（file_manifest.json 合并，基线+全部增量包）
+     * 每包只 JNI 读一次（3 个 JSON，命中缓存不读），相比分开两次扫描省一半开销。
+     */
+    private fun scanChainPackages(onProgress: DiffProgress?): ChainScan {
         val pkgDir = File(File(BACKUP_DIR), "backupdata")
         val pkgs = pkgDir.listFiles()?.filter {
             it.name.endsWith(".tar.zst") || it.name.endsWith(".tar.gz")
         } ?: emptyList()
-        // 轻量：每个包只 JNI 读 db_state.json 拿 from/to（缓存命中则不读）
         var readFailures = 0
-        val metas = pkgs.mapNotNull { f ->
-            val cached = rowIdCache[f.absolutePath]
-            val ids: Pair<Long, Long>? = if (cached != null && cached.first == f.lastModified()) {
+        val metas = mutableListOf<Triple<String, Long, Long>>()
+        val attCounts = mutableMapOf<String, Int>()
+        val total = pkgs.size
+        pkgs.forEachIndexed { idx, f ->
+            onProgress?.onProgress(
+                if (total > 1) "读取存档包 ${idx + 1}/$total（${f.name}）..." else "读取存档包 ${f.name}..."
+            )
+            val cached = pkgInfoCache[f.absolutePath]
+            val info = if (cached != null && cached.first == f.lastModified()) {
                 cached.second
             } else {
-                readPackageRowIds(f)?.also { rowIdCache[f.absolutePath] = f.lastModified() to it }
+                readPackageInfo(f)?.also { pkgInfoCache[f.absolutePath] = f.lastModified() to it }
             }
-            if (ids == null) { readFailures++; null } else Triple(f.name, ids.first, ids.second)
+            if (info == null) { readFailures++; return@forEachIndexed }
+            metas += Triple(f.name, info.messageRowIdFrom, info.messageRowId)
+            info.attachmentCounts.forEach { (dir, n) -> attCounts[dir] = (attCounts[dir] ?: 0) + n }
         }
-        if (metas.isEmpty()) return ArchiveChain(0, 0L, 0L, false)
+        if (metas.isEmpty()) return ChainScan(ArchiveChain(0, 0L, 0L, false), attCounts)
 
         // 按 to 排序；from 取所有包的最小值（含全量包 0，不能过滤掉基线）
         val sorted = metas.sortedBy { it.third }
@@ -387,42 +409,18 @@ object ArchiveManager {
             if (p.third > prevTo) prevTo = p.third
         }
         // 有包读取失败时也标记不完整，避免链被静默截断
-        return ArchiveChain(sorted.size, from, to, hasGap || readFailures > 0)
+        return ChainScan(ArchiveChain(sorted.size, from, to, hasGap || readFailures > 0), attCounts)
     }
 
-    /** 轻量读包内 db_state.json 的 (from, to)，不读 db_config / file_manifest。 */
-    private fun readPackageRowIds(pkg: File): Pair<Long, Long>? {
-        return try {
-            val stateRaw = RootGateways.readFileFromTar(pkg.absolutePath, "$WX_USER_HASH/db_state.json")
-            if (stateRaw.isBlank()) return null
-            val state = JSONObject(stateRaw)
-            state.optLong("lastMessageRowIdFrom", 0) to state.optLong("lastMessageRowId", 0)
-        } catch (_: Exception) { null }
-    }
+    /** 链扫描结果：rowid 覆盖区间 + 链内全部包附件汇总。 */
+    private data class ChainScan(
+        val chain: ArchiveChain,
+        val attachments: Map<String, Int>,
+    )
 
-    /**
-     * 链附件统计：扫描 backupdata 下所有包，JNI 读各包 file_manifest.json，
-     * 合并同 hash（当前用户）的基线+增量包的附件计数。
-     * 单包场景不调用（直接用选中包的 attachmentCounts），避免无谓扫盘。
-     */
-    private fun buildArchiveChainAttachments(): Map<String, Int> {
-        val pkgDir = File(File(BACKUP_DIR), "backupdata")
-        val pkgs = pkgDir.listFiles()?.filter {
-            it.name.endsWith(".tar.zst") || it.name.endsWith(".tar.gz")
-        } ?: emptyList()
-        val counts = mutableMapOf<String, Int>()
-        for (f in pkgs) {
-            val cached = pkgInfoCache[f.absolutePath]
-            val info = if (cached != null && cached.first == f.lastModified()) {
-                cached.second
-            } else {
-                readPackageInfo(f)?.also { pkgInfoCache[f.absolutePath] = f.lastModified() to it }
-            }
-            info?.attachmentCounts?.forEach { (dir, n) ->
-                counts[dir] = (counts[dir] ?: 0) + n
-            }
-        }
-        return counts
+    /** 对比进度回调（后台线程调用，返回给 UI 展示阶段）。 */
+    fun interface DiffProgress {
+        fun onProgress(message: String)
     }
 
     // ── Select current archive ──
