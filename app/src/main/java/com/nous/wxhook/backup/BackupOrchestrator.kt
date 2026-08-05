@@ -159,9 +159,18 @@ object BackupOrchestrator {
             totalSize += pkgSize
 
             // Commit cursors and visible backup state only after a verified archive.
-            FileManifest.save(dir, manifest)
-            for ((userDir, userManifest) in pendingFullUserManifests) {
-                FileManifest.save(userDir, userManifest)
+            // 保护：附件扫描全空但 DB 正常时，多半是扫描失败（微信目录暂不可读），
+            // 不覆盖已有清单，避免把历史备份清单清空。
+            if (sourceFiles.isNotEmpty()) {
+                FileManifest.save(dir, manifest)
+                for ((userDir, userManifest) in pendingFullUserManifests) {
+                    if (userManifest.optJSONArray("files")?.length() ?: 0 > 0) {
+                        FileManifest.save(userDir, userManifest)
+                    }
+                }
+            } else {
+                android.util.Log.e("wxhook:Backup", "全量备份附件扫描为空，跳过清单提交（DB 备份已生成）")
+                callback?.onProgress("⚠️ 附件扫描为空，跳过清单提交", totalFiles, totalSize)
             }
             for ((userHash, fromRowId, maxRowId) in fullDbStates) {
                 if (!BackupManifest.saveDbState(userHash, tag, fromRowId, maxRowId)) {
@@ -291,7 +300,18 @@ object BackupOrchestrator {
                 allCurrentFiles.addAll(userCurrentFiles)
 
                 val userOldManifest = FileManifest.load(userDir)
+                val oldCount = (userOldManifest.optJSONArray("files") ?: JSONArray()).length()
                 val userDiff = FileManifest.diff(userOldManifest, userCurrentFiles)
+                // 保护：扫描结果为空且旧清单非空（全部判删、无新增/修改），几乎可以断定附件
+                // 扫描失败（目录可读但 find 无输出）。此时提交空清单会把历史备份清单清空，
+                // 必须跳过并告警，等下次扫描正常再更新。
+                if (userCurrentFiles.isEmpty() && oldCount > 0 &&
+                    userDiff.added.isEmpty() && userDiff.modified.isEmpty() && userDiff.deleted.size >= oldCount
+                ) {
+                    android.util.Log.e("wxhook:Backup", "[${hash}] 附件扫描为空但旧清单有 $oldCount 条，疑似扫描失败，跳过清空清单")
+                    callback?.onProgress("[${hash}] ⚠️ 附件扫描为空（旧清单 $oldCount 条），跳过清单更新", totalFiles, totalSize)
+                    continue
+                }
                 if (userDiff.added.isNotEmpty() || userDiff.modified.isNotEmpty() || userDiff.deleted.isNotEmpty()) {
                     val userUpdatedManifest = FileManifest.toManifest(userCurrentFiles, tag)
                     userUpdatedManifest.put("incrFrom", incrFrom)
@@ -313,6 +333,21 @@ object BackupOrchestrator {
             }
 
             val globalManifest = FileManifest.toManifest(allCurrentFiles, tag)
+            // 保护：全目录扫描全空时，不覆盖已有的全局清单（可能是附件扫描失败，
+            // 而不是附件真的被清空）。扫描正常（至少一个有文件）时才写。
+            if (allCurrentFiles.isEmpty()) {
+                val oldGlobal = File(BackupEnv.backupDataDir, "file_manifest.json")
+                val oldGlobalCount = try {
+                    JSONObject(RootGateways.runQuiet("cat '${oldGlobal.absolutePath}' 2>/dev/null")).optJSONArray("files")?.length() ?: 0
+                } catch (_: Exception) { 0 }
+                if (oldGlobalCount > 0) {
+                    android.util.Log.e("wxhook:Backup", "全目录扫描为空但全局清单有 $oldGlobalCount 条，跳过写空全局清单")
+                } else {
+                    FileManifest.save(dir, globalManifest)
+                }
+            } else {
+                FileManifest.save(dir, globalManifest)
+            }
 
             // 3b. Package incremental changes via JNI
             for (wxBasePath in wxPaths) {

@@ -53,6 +53,11 @@ object FileManifest {
             val output = RootGateways.runQuiet(
                 "find \"$sourceDir\" -type f -exec stat -c '%s %Y %n' {} + 2>/dev/null"
             )
+            if (output.isBlank()) {
+                // 目录存在但 find 无输出 = 异常（正常应至少能列出文件），记日志便于定位
+                val dirExists = RootGateways.runQuiet("test -d \"$sourceDir\" && echo 1 || echo 0", 10_000).trim() == "1"
+                android.util.Log.w("wxhook:scan", "$dir: find 输出为空 (目录存在=$dirExists, base=$wxBasePath)")
+            }
             output.lineSequence().filter { it.isNotBlank() }.forEach { line ->
                 val parts = line.split(' ', limit = 3)
                 if (parts.size != 3) return@forEach
@@ -63,6 +68,7 @@ object FileManifest {
                     mtime = parts[1].toLongOrNull() ?: return@forEach,
                 ))
             }
+            android.util.Log.i("wxhook:scan", "$dir: ${entries.count { it.path.startsWith("$userHash/$dir/") }} 条")
         }
         return entries
     }
