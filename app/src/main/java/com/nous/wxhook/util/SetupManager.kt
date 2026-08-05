@@ -10,14 +10,26 @@ object SetupManager {
 
     private val BINS = listOf("zstd", "sqlcipher",
         "libz.so.1", "libcrypto.so.3", "libedit.so", "libncursesw.so.6")
-    private val EXEC = listOf("sqlcipher")
+    private val EXEC = listOf("sqlcipher", "zstd")
     private val executor = Executors.newSingleThreadExecutor()
 
     fun setup(ctx: Context) {
         val dir = File(ctx.filesDir, "bin")
         if (!dir.exists()) dir.mkdirs()
         val marker = File(dir, ".setup_done")
-        if (marker.exists()) return
+        // 即使已部署过（marker 存在），也校验 zstd 可执行：
+        // 历史上 assets/bin/zstd 曾被错误架构（x86-64）替换，导致恢复解压失败
+        // 且 marker 缓存让坏版本永不被重新部署。root 不可用时保持原行为。
+        if (marker.exists()) {
+            try {
+                val ok = RootGateways.run("/data/local/tmp/wxhook_bin/zstd --version 2>&1 | head -1", 10_000).isSuccess
+                if (ok) return
+                android.util.Log.e("wxhook:Setup", "zstd 校验失败，重新部署")
+                marker.delete()
+            } catch (_: Exception) {
+                return
+            }
+        }
         executor.submit {
             // Extract from APK assets to filesDir/bin (cache)
             for (name in BINS) {
