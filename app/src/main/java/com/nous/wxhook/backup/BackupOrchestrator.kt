@@ -279,6 +279,9 @@ object BackupOrchestrator {
                             val cpResult = BackupEnv.su("cp \"$srcFile\" \"${dstFile.absolutePath}\" && chmod 644 \"${dstFile.absolutePath}\"")
                             if (cpResult.isSuccess && BackupEnv.backupExists(dstFile.absolutePath) && BackupEnv.backupSize(dstFile.absolutePath) > 0) {
                                 totalFiles++; totalSize += BackupEnv.backupSize(dstFile.absolutePath); newFiles++
+                                // 直接记录到内存 sources（不再依赖打包时 find tmpDir——
+                                // find 输出大时超过 Binder 事务限制会静默丢附件）
+                                incrSources += NativeArchivePlan.Source(dstFile.absolutePath, "$userHash/$rel")
                             }
                         }
                     } catch (e: Exception) {
@@ -291,6 +294,8 @@ object BackupOrchestrator {
             // is verified; otherwise a failed archive would make files look backed up.
             val allCurrentFiles = mutableListOf<FileEntry>()
             val pendingUserManifests = mutableListOf<Pair<File, JSONObject>>()
+            // 增量 file_manifest 路径（userHash -> tmp 路径），打包时用内存记录，避免 exists 检查受 FUSE 缓存影响
+            val incrManifestPaths = mutableMapOf<String, String>()
             for (wxBasePath in wxPaths) {
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val userDir = File(BackupEnv.backupDataDir, hash)
@@ -325,7 +330,12 @@ object BackupOrchestrator {
                         incrOnlyManifest.put("incrTo", incrTo)
                         val tmpManifestDir = "${BackupEnv.backupDataDir}/tmp/${tag}_${hash}"
                         RootGateways.mkdirs(tmpManifestDir)
-                        RootGateways.writeFile("$tmpManifestDir/file_manifest.json", incrOnlyManifest.toString())
+                        val incrManifestPath = "$tmpManifestDir/file_manifest.json"
+                        if (RootGateways.writeFile(incrManifestPath, incrOnlyManifest.toString())) {
+                            incrManifestPaths[hash] = incrManifestPath
+                        } else {
+                            android.util.Log.e("wxhook:Backup", "[${hash}] 写入增量清单失败，打包时回退 userDir 全量清单")
+                        }
                     }
 
                     callback?.onProgress("[${hash}] 清单已更新: +${userDiff.added.size} ~${userDiff.modified.size} -${userDiff.deleted.size}", totalFiles, totalSize)
@@ -366,21 +376,19 @@ object BackupOrchestrator {
                 }
                 incrSources += NativeArchivePlan.Source(stateSource, "$userHash/db_state.json")
                 incrSources += NativeArchivePlan.Source(File(BackupEnv.backupDir, "db_config.json").absolutePath, "$userHash/db_config.json")
-                val incrManifestPath = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/file_manifest.json"
-                if (RootGateways.exists(incrManifestPath)) {
-                    incrSources += NativeArchivePlan.Source(incrManifestPath, "$userHash/file_manifest.json")
-                } else {
-                    incrSources += NativeArchivePlan.Source(File(BackupEnv.backupDataDir, "${userHash}/file_manifest.json").absolutePath, "$userHash/file_manifest.json")
-                }
+                // 有增量文件时用增量清单，否则回退 userDir 全量清单
+                val incrManifestPath = incrManifestPaths[userHash]
+                    ?: File(BackupEnv.backupDataDir, "${userHash}/file_manifest.json").absolutePath
+                incrSources += NativeArchivePlan.Source(incrManifestPath, "$userHash/file_manifest.json")
             }
+            // 附件已在上面的复制循环里直接加入 incrSources（内存），不再 find tmpDir——
+            // find 输出大时超过 Binder 事务限制会静默丢失全部附件（历史 bug 根因）。
+            // 这里只统计 tmp 残留用于诊断日志。
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val tmpDir = "${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}"
-                val files = RootGateways.runQuiet("find \"$tmpDir\" -type f 2>/dev/null").lines().filter { it.isNotBlank() }
-                for (f in files) {
-                    val arcPath = f.removePrefix("${BackupEnv.backupDataDir}/tmp/${tag}_${userHash}/")
-                    incrSources += NativeArchivePlan.Source(f, "$userHash/$arcPath")
-                }
+                val leftover = RootGateways.runQuiet("find \"$tmpDir\" -type f 2>/dev/null | wc -l").trim()
+                android.util.Log.i("wxhook:Backup", "tmp残留: $tmpDir -> $leftover 文件")
             }
             if (incrSources.isNotEmpty()) {
                 val incrArchive = File(dir, "incr_attachments_${tag}${BackupEnv.archiveExtension()}")
