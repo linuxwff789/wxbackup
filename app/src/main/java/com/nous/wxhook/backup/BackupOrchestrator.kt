@@ -255,18 +255,43 @@ object BackupOrchestrator {
                 }
             }
 
+            // 2.0 预扫描 + 基准健康检测：一次性全目录扫描，供复制/清单两阶段复用
+            // （原逻辑复制阶段逐目录扫、清单阶段再全扫一次，共 9 次 find；这里合并为 1 次）
+            val preScanned = mutableMapOf<String, List<FileEntry>>()
+            val staleBaseline = mutableMapOf<String, Boolean>()
+            for (wxBasePath in wxPaths) {
+                val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                val userDir = File(BackupEnv.backupDataDir, userHash)
+                callback?.onProgress("[${userHash}] 扫描附件清单...", totalFiles, totalSize)
+                val currentFiles = FileManifest.scanWeChatAttachments(wxBasePath, userHash, ATT_DIRS)
+                preScanned[userHash] = currentFiles
+                val userOldManifest = FileManifest.load(userDir)
+                val oldCount = (userOldManifest.optJSONArray("files") ?: JSONArray()).length()
+                val d = FileManifest.diff(userOldManifest, currentFiles)
+                // modified 占比 >50%：清单基准疑似过期（微信恢复/迁移导致 mtime 全变，
+                // 或 rebuild 后首次扫描）。告警 + 降级为 size-only 判断，避免重复备份。
+                val stale = oldCount > 0 && d.modified.size > oldCount / 2
+                staleBaseline[userHash] = stale
+                if (stale) {
+                    android.util.Log.w("wxhook:Backup", "[$userHash] 清单基准疑似过期：modified ${d.modified.size}/${oldCount}，降级 size-only 判断")
+                    callback?.onProgress("[${userHash}] ⚠️ 检测到附件 mtime 大规模变化（疑似恢复/迁移），本次仅备份大小变化的文件", totalFiles, totalSize)
+                }
+            }
+
             // 2. Attachments incremental via per-user manifest diff
             for (wxBasePath in wxPaths) {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val userDir = File(BackupEnv.backupDataDir, userHash)
                 val userOldManifest = FileManifest.load(userDir)
+                val sizeOnly = staleBaseline[userHash] == true
+                val allCurrent = preScanned[userHash] ?: emptyList()
                 for (attDir in ATT_DIRS) {
                     val src = "$wxBasePath/$attDir"
                     try {
-                        val currentFiles = FileManifest.scanWeChatAttachments(wxBasePath, userHash, listOf(attDir))
+                        val currentFiles = allCurrent.filter { it.path.startsWith("$userHash/$attDir/") }
                         val toCopy = currentFiles.filter { entry ->
                             val oldEntry = FileManifest.findEntry(userOldManifest, entry.path)
-                            oldEntry == null || oldEntry.size != entry.size || oldEntry.mtime != entry.mtime
+                            oldEntry == null || oldEntry.size != entry.size || (!sizeOnly && oldEntry.mtime != entry.mtime)
                         }
                         if (toCopy.isEmpty()) continue
 
@@ -301,12 +326,13 @@ object BackupOrchestrator {
                 val userDir = File(BackupEnv.backupDataDir, hash)
                 RootGateways.mkdirs(userDir.absolutePath)
 
-                val userCurrentFiles = FileManifest.scanWeChatAttachments(wxBasePath, hash, ATT_DIRS)
+                val userCurrentFiles = preScanned[hash] ?: FileManifest.scanWeChatAttachments(wxBasePath, hash, ATT_DIRS)
                 allCurrentFiles.addAll(userCurrentFiles)
 
                 val userOldManifest = FileManifest.load(userDir)
                 val oldCount = (userOldManifest.optJSONArray("files") ?: JSONArray()).length()
-                val userDiff = FileManifest.diff(userOldManifest, userCurrentFiles)
+                val sizeOnly = staleBaseline[hash] == true
+                val userDiff = FileManifest.diff(userOldManifest, userCurrentFiles, sizeOnly)
                 // 保护：扫描结果为空且旧清单非空（全部判删、无新增/修改），几乎可以断定附件
                 // 扫描失败（目录可读但 find 无输出）。此时提交空清单会把历史备份清单清空，
                 // 必须跳过并告警，等下次扫描正常再更新。

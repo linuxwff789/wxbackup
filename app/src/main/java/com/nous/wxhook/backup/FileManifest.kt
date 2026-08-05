@@ -88,7 +88,12 @@ object FileManifest {
         return null
     }
 
-    fun diff(oldManifest: JSONObject, newFiles: List<FileEntry>): FileDiff {
+    /**
+     * 计算旧清单与当前文件的差异。
+     * @param sizeOnly true 时忽略 mtime 差异（只按 size 判断 modified）——用于微信恢复/迁移后
+     *  mtime 大规模变化但内容未变的场景，避免把同名文件全部误判为修改而重复备份。
+     */
+    fun diff(oldManifest: JSONObject, newFiles: List<FileEntry>, sizeOnly: Boolean = false): FileDiff {
         val oldEntries = mutableMapOf<String, FileEntry>()
         val oldArr = oldManifest.optJSONArray("files") ?: JSONArray()
         for (i in 0 until oldArr.length()) {
@@ -109,7 +114,7 @@ object FileManifest {
             val old = oldEntries[entry.path]
             if (old == null) {
                 added.add(entry)
-            } else if (old.size != entry.size || old.mtime != entry.mtime) {
+            } else if (old.size != entry.size || (!sizeOnly && old.mtime != entry.mtime)) {
                 modified.add(entry)
             }
         }
