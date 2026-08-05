@@ -483,6 +483,8 @@ object BackupOrchestrator {
     fun rebuildDbState(callback: BackupHookLocal.ProgressCallback? = null): String {
         val results = mutableListOf<String>()
         val rebuiltRecords = JSONArray()
+        // 所有用户去重后的附件并集，最后写入根目录全局清单（与备份时 globalManifest 语义一致）
+        val globalMergedFiles = mutableListOf<JSONObject>()
         if (!hasStoragePermission()) {
             Log.e("wxhook:rebuild", "MANAGE_EXTERNAL_STORAGE not granted, requesting...")
             requestStoragePermission()
@@ -562,7 +564,9 @@ object BackupOrchestrator {
                 callback?.onProgress("[${hash}] 提取附件清单...", 0, 0)
                 val userDir = File(BackupEnv.backupDataDir, hash)
                 RootGateways.mkdirs(userDir.absolutePath)
-                val mergedFiles = mutableListOf<JSONObject>()
+                // 按 path 去重：同一文件可能同时出现在基线（modified 前）和增量包（modified 后）清单里，
+                // 保留 mtime 较新的条目（增量包里的条目是修改后的最新状态）。
+                val mergedByPath = mutableMapOf<String, JSONObject>()
                 for (cp in bestChain) {
                     val arcPath = File(BackupEnv.backupDataDir, cp.name).absolutePath
                     try {
@@ -571,10 +575,18 @@ object BackupOrchestrator {
                             val manifest = JSONObject(json)
                             val files = manifest.optJSONArray("files") ?: manifest.optJSONArray("entries")
                             if (files != null) {
+                                var added = 0
                                 for (i in 0 until files.length()) {
-                                    mergedFiles.add(files.getJSONObject(i))
+                                    val entry = files.getJSONObject(i)
+                                    val path = entry.optString("path", "")
+                                    if (path.isEmpty()) continue
+                                    val prev = mergedByPath[path]
+                                    if (prev == null || entry.optLong("mtime", 0) >= prev.optLong("mtime", 0)) {
+                                        mergedByPath[path] = entry
+                                        added++
+                                    }
                                 }
-                                Log.i("wxhook:rebuild", "manifest from ${cp.name}: +${files.length()} files")
+                                Log.i("wxhook:rebuild", "manifest from ${cp.name}: +${files.length()} files (去重后净增 $added)")
                             }
                         } else {
                             Log.e("wxhook:rebuild", "manifest shell pipe empty for ${cp.name}")
@@ -584,15 +596,16 @@ object BackupOrchestrator {
                     }
                 }
                 // Save merged manifest to disk
-                if (mergedFiles.isNotEmpty()) {
+                if (mergedByPath.isNotEmpty()) {
                     val mergedManifest = JSONObject().apply {
                         put("version", 1)
                         put("tag", "rebuild_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}")
-                        put("fileCount", mergedFiles.size)
-                        put("files", JSONArray(mergedFiles.toList()))
+                        put("fileCount", mergedByPath.size)
+                        put("files", JSONArray(mergedByPath.values.toList()))
                     }
                     FileManifest.save(userDir, mergedManifest)
-                    Log.i("wxhook:rebuild", "merged manifest saved: ${mergedFiles.size} files to $userDir")
+                    globalMergedFiles.addAll(mergedByPath.values)
+                    Log.i("wxhook:rebuild", "merged manifest saved: ${mergedByPath.size} files to $userDir")
                 }
                 // Records
                 for (p in bestChain) {
@@ -611,6 +624,17 @@ object BackupOrchestrator {
             }
             // 4. Save backup records (may need to reconnect Binder)
             callback?.onProgress("保存备份记录...", 0, 0)
+            // 重建根目录全局清单：所有用户去重后的附件并集（与备份时 globalManifest 语义一致）
+            if (globalMergedFiles.isNotEmpty()) {
+                val globalManifest = JSONObject().apply {
+                    put("version", 1)
+                    put("tag", "rebuild_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}")
+                    put("fileCount", globalMergedFiles.size)
+                    put("files", JSONArray(globalMergedFiles))
+                }
+                FileManifest.save(File(BackupEnv.backupDataDir), globalManifest)
+                Log.i("wxhook:rebuild", "global manifest saved: ${globalMergedFiles.size} files")
+            }
             val sorted = (0 until rebuiltRecords.length())
                 .map { rebuiltRecords.getJSONObject(it) }
                 .sortedBy { it.optLong("time", 0L) }
