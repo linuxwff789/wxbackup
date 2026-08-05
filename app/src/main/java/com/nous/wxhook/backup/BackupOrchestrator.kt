@@ -339,6 +339,11 @@ object BackupOrchestrator {
                     }
 
                     callback?.onProgress("[${hash}] 清单已更新: +${userDiff.added.size} ~${userDiff.modified.size} -${userDiff.deleted.size}", totalFiles, totalSize)
+                    // 防复发：modified 占比异常高（>50%）说明清单基准可能过期（如 rebuild 后
+                    // 首次扫描、或之前扫描失败保留了旧 mtime），本次增量会偏大但清单会被校准。
+                    if (oldCount > 0 && userDiff.modified.size > oldCount / 2) {
+                        android.util.Log.w("wxhook:Backup", "[${hash}] 清单基准疑似过期：modified ${userDiff.modified.size}/${oldCount}，本次增量偏大（一次性）")
+                    }
                 }
             }
 

@@ -186,15 +186,37 @@ class BackupService : Service() {
     }
 
     private val logLock = Any()
+    private val pendingLogs = mutableListOf<String>()
+    private var logFlushScheduled = false
+
+    /**
+     * 追加备份日志：先写内存缓冲，2 秒批量刷一次到文件（避免每条日志都走一次
+     * root Binder 调用导致日志进度远远落后于前台服务通知）。
+     */
     private fun appendLog(msg: String) {
+        val line = "[" + SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date()) + "] " + msg
         synchronized(logLock) {
-            try {
-                val line = "[" + SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date()) + "] " + msg
-                val tmp = File(filesDir, "backup_live.log")
-                tmp.appendText(line + "\n")
-                RootGateways.run("mkdir -p /sdcard/Download/wxhook_backup && cat \"${tmp.absolutePath}\" >> /sdcard/Download/wxhook_backup/backup_live.log && chmod 644 /sdcard/Download/wxhook_backup/backup_live.log")
-                tmp.writeText("")
-            } catch (_: Exception) {}
+            pendingLogs.add(line)
+            if (logFlushScheduled) return
+            logFlushScheduled = true
+            val flush = Thread {
+                try {
+                    Thread.sleep(2000)
+                    val batch: String
+                    synchronized(logLock) {
+                        batch = pendingLogs.joinToString("\n")
+                        pendingLogs.clear()
+                        logFlushScheduled = false
+                    }
+                    val tmp = File(filesDir, "backup_live.log")
+                    tmp.appendText(batch + "\n")
+                    RootGateways.run("mkdir -p /sdcard/Download/wxhook_backup && cat \"${tmp.absolutePath}\" >> /sdcard/Download/wxhook_backup/backup_live.log && chmod 644 /sdcard/Download/wxhook_backup/backup_live.log")
+                    tmp.writeText("")
+                } catch (_: Exception) {
+                    synchronized(logLock) { logFlushScheduled = false }
+                }
+            }.apply { isDaemon = true }
+            flush.start()
         }
     }
 
