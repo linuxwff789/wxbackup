@@ -458,12 +458,8 @@ object BackupOrchestrator {
                 BackupManifest.updateDbState(userHash, tag, fromRowId, toRowId)
             }
 
-            // Save incremental SQL files
-            val sqlFiles = RootGateways.runQuiet("find ${BackupEnv.backupDataDir}/tmp -name '*.sql' -path '*${tag}*' 2>/dev/null").lines().filter { it.isNotBlank() }
-            for (f in sqlFiles) {
-                val n = "incr_${tag}.sql"
-                RootGateways.run("cp '$f' '${BackupEnv.backupDataDir}/$n' && chmod 644 '${BackupEnv.backupDataDir}/$n' 2>/dev/null")
-            }
+            // 增量 SQL 已打进 incr_attachments_*.tar.zst 包内（incr_<from>_to_<to>.sql），
+            // 不再单独复制到 backupdata/ 根目录（冗余且占空间，之前每次备份残留 18-22MB）
 
             // Cleanup tmp：清整个 tmp 目录（含历史上失败备份的残留，如打包失败/中断留下的附件副本）
             RootGateways.runQuiet("rm -rf ${BackupEnv.backupDataDir}/tmp 2>/dev/null")

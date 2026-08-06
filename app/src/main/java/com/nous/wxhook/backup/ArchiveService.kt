@@ -131,7 +131,7 @@ object ArchiveService {
         val workDb = "$workDir/wxhook_inc.db"
         val workSql = "$workDir/wxhook_inc_out.sql"
         val finalOut = "$finalDir/wxhook_inc_out.sql"
-        val cleanupWork = "rm -f $workDb $workDb-shm $workDb-wal $workSql 2>/dev/null"
+        val cleanupWork = "rm -f $workDb $workDb-shm $workDb-wal $workSql \"$workDir/incr_query.sql\" 2>/dev/null"
         val cleanupAll = "$cleanupWork; rm -f $finalOut 2>/dev/null"
         return try {
             val pwd = getDbPassword()
