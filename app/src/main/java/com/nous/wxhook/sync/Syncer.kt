@@ -108,17 +108,16 @@ object Syncer {
     }
 
     /**
-     * Scan top-level backup packages and metadata. Per-user state files are already
-     * embedded in archives; syncing them separately would flatten equal file names.
+     * Scan top-level backup packages. Per-user state files are already
+     * embedded in archives; syncing them separately would flatten equal
+     * file names. 只返回 .tar.zst/.tar.gz 归档文件，不传松散元数据文件。
      */
     fun scanArchives(): List<String> {
         val all = RootGateways.runQuiet(
             "find ${BackupEnv.backupDataDir} -maxdepth 1 -type f 2>/dev/null"
         ).lines().filter { it.isNotBlank() }
-        val archives = all.filter { BackupEnv.isArchiveFile(it) }
+        return all.filter { BackupEnv.isArchiveFile(it) }
             .sortedByDescending { File(it).lastModified() }
-        val others = all.filter { !BackupEnv.isArchiveFile(it) }.sorted()
-        return archives + others
     }
 
     /** 已同步记录文件路径（通过 su 读写，因为路径在 /sdcard/ 下） */
@@ -206,8 +205,15 @@ object Syncer {
         val synced = if (force) emptySet() else loadSynced(config)
 
         onProgress?.invoke(Progress("扫描远端文件（用于去重）..."))
-        val remoteFiles = kotlinx.coroutines.runBlocking { client.list(config.remotePath) }
-            .getOrNull() ?: emptyList()
+        val remoteResult = kotlinx.coroutines.runBlocking { client.list(config.remotePath) }
+        if (remoteResult.isFailure) {
+            // 无法列出远端时不能盲目全传（历史 bug：list 失败 -> remoteByName 空 ->
+            // 全部重新上传，云端堆积大量重复）。保守处理：中止同步并提示。
+            val msg = "扫描远端失败，中止同步: ${remoteResult.exceptionOrNull()?.message}"
+            onProgress?.invoke(Progress(msg))
+            return Result(false, message = msg)
+        }
+        val remoteFiles = remoteResult.getOrNull() ?: emptyList()
         // 远端文件以 文件名→RemoteObject 索引，用于大小比对
         val remoteByName = remoteFiles.groupBy { File(it.path).name }.mapValues { it.value.first() }
 
