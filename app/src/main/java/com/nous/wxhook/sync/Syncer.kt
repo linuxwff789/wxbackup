@@ -229,19 +229,18 @@ object Syncer {
 
             onProgress?.invoke(Progress("[${idx + 1}/${toUpload.size}] $pkgName", idx + 1, toUpload.size))
 
-            // 增量判断：本地有记录 + 远端存在 + 大小一致 → 跳过
+            // 增量判断：远端已有同名文件 → 跳过（不管大小，同名=该归档已上传过）。
+            // 增量备份 tag 每次不同，同名只出现在重复打包/重传场景，无需再传，
+            // 否则增量备份每次都会把所有同名归档重传一遍，失去增量意义。
             val remoteMatch = remoteByName[pkgName]
-            if (!force && pkgName in synced && remoteMatch != null && remoteMatch.size == pkgSize) {
-                skipped++
-                newlySynced.add(pkgName)
-                continue
-            }
-
-            // 防重复：远端已有同名文件且大小不同（版本更新/重打包），阿里云盘驱动
-            // NoOverwriteUpload=true 同名不覆盖（改旧文件名为临时名后删除），上传失败或
-            // 直接调用驱动时可能残留/并存，导致云端同名文件堆积。这里先删除旧版再上传。
-            if (remoteMatch != null && remoteMatch.size != pkgSize) {
-                onProgress?.invoke(Progress("远端存在旧版本 $pkgName，先删除再上传...", idx + 1, toUpload.size))
+            if (remoteMatch != null) {
+                if (!force) {
+                    skipped++
+                    newlySynced.add(pkgName)
+                    continue
+                }
+                // force 强制刷新：先删旧版再传，避免 NoOverwriteUpload 云端同名并存
+                onProgress?.invoke(Progress("强制同步：删除旧版 $pkgName...", idx + 1, toUpload.size))
                 kotlinx.coroutines.runBlocking { client.delete("${config.remotePath}/$pkgName") }
             }
 
