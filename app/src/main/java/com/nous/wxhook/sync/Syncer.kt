@@ -237,6 +237,14 @@ object Syncer {
                 continue
             }
 
+            // 防重复：远端已有同名文件且大小不同（版本更新/重打包），阿里云盘驱动
+            // NoOverwriteUpload=true 同名不覆盖（改旧文件名为临时名后删除），上传失败或
+            // 直接调用驱动时可能残留/并存，导致云端同名文件堆积。这里先删除旧版再上传。
+            if (remoteMatch != null && remoteMatch.size != pkgSize) {
+                onProgress?.invoke(Progress("远端存在旧版本 $pkgName，先删除再上传...", idx + 1, toUpload.size))
+                kotlinx.coroutines.runBlocking { client.delete("${config.remotePath}/$pkgName") }
+            }
+
             // 上传
             onProgress?.invoke(Progress("上传 $pkgName (${BackupManifest.formatSize(pkgSize)})...", idx + 1, toUpload.size))
             val uploadResult = kotlinx.coroutines.runBlocking {

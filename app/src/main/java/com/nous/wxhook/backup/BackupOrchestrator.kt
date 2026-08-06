@@ -74,6 +74,8 @@ object BackupOrchestrator {
                     val ld = "LD_PRELOAD='${BackupEnv.binDir}/libz.so.1:${BackupEnv.binDir}/libcrypto.so.3:${BackupEnv.binDir}/libedit.so:${BackupEnv.binDir}/libncursesw.so.6'"
                     val result = RootGateways.run("$ld ${BackupEnv.binDir}/sqlcipher \"$decDb\" < $sqlScript 2>/dev/null", 30_000)
                     RootGateways.run("rm -f $sqlScript", 5_000)
+                    // 清理解密副本（可能很大，避免残留）
+                    RootGateways.run("rm -f $decDb $decDb-shm $decDb-wal", 5_000)
                     // 输出顺序：min, max；取最后两个纯数字行
                     val digits = result.stdout.lines().filter { it.all { c -> c.isDigit() } }
                     val minRowId = digits.getOrNull(digits.size - 2)?.toLongOrNull() ?: 0L
@@ -178,6 +180,9 @@ object BackupOrchestrator {
                 }
             }
             BackupManifest.saveState(tag, totalFiles, totalSize)
+            // Cleanup tmp：清整个 tmp 目录（含失败/中断残留）
+            RootGateways.runQuiet("rm -rf ${BackupEnv.backupDataDir}/tmp 2>/dev/null")
+            RootGateways.run("mkdir -p ${BackupEnv.backupDataDir}/tmp", 5_000)
             BackupManifest.addRecord(
                 BackupManifest.createRecord(tag, "full", totalFiles, totalSize, "全量备份完成", durationMs = System.currentTimeMillis() - startTime)
             )
@@ -460,8 +465,9 @@ object BackupOrchestrator {
                 RootGateways.run("cp '$f' '${BackupEnv.backupDataDir}/$n' && chmod 644 '${BackupEnv.backupDataDir}/$n' 2>/dev/null")
             }
 
-            // Cleanup tmp
-            RootGateways.runQuiet("rm -rf ${BackupEnv.backupDataDir}/tmp/${tag}_* 2>/dev/null")
+            // Cleanup tmp：清整个 tmp 目录（含历史上失败备份的残留，如打包失败/中断留下的附件副本）
+            RootGateways.runQuiet("rm -rf ${BackupEnv.backupDataDir}/tmp 2>/dev/null")
+            RootGateways.run("mkdir -p ${BackupEnv.backupDataDir}/tmp", 5_000)
 
             // Cloud sync
             cloudSync(callback)
