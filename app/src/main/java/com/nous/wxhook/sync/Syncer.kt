@@ -230,18 +230,17 @@ object Syncer {
             onProgress?.invoke(Progress("[${idx + 1}/${toUpload.size}] $pkgName", idx + 1, toUpload.size))
 
             // 增量判断：
-            // - 远端同名且大小一致（bug 重复/未变化）→ 跳过，不重复上传
-            // - 远端同名但大小不同（修复重打包/版本更新，是新的备份内容）→ 删旧传新，
-            //   保证云端是最新版（阿里云盘 NoOverwriteUpload 同名不覆盖，必须先删）
-            // - 远端无同名（新 tag 的增量备份）→ 直接上传
+            // - 远端已有同名文件（不管大小）→ 跳过，不传不删。云端文件是备份历史，
+            //   保留现有；新 tag 的增量备份文件名不同（日期_时间），自然会上传。
+            // - 仅 force 强制同步时才删旧传新。
             val remoteMatch = remoteByName[pkgName]
-            if (remoteMatch != null && remoteMatch.size == pkgSize && !force) {
+            if (remoteMatch != null && !force) {
                 skipped++
                 newlySynced.add(pkgName)
                 continue
             }
             if (remoteMatch != null) {
-                onProgress?.invoke(Progress("远端存在旧版本 $pkgName，先删除再上传...", idx + 1, toUpload.size))
+                onProgress?.invoke(Progress("强制同步：删除旧版 $pkgName...", idx + 1, toUpload.size))
                 kotlinx.coroutines.runBlocking { client.delete("${config.remotePath}/$pkgName") }
             }
 
