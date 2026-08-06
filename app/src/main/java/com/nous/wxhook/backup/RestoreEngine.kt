@@ -162,7 +162,8 @@ object RestoreEngine {
         val convertedSql = "$workDir/baseline_converted.sql"
         RootGateways.run("rm -rf $workDir && mkdir -p $workDir", 10_000)
 
-        // 1. 查询手机 DB 的 message msgSvrId 集合 + max(msgId)（只读，不改动手机 DB）
+        // 1. 查询手机 DB 的 message/ImgInfo2 的 msgSvrId 集合 + max(id)（只读，不改动手机 DB）
+        //    message 用 M 前缀、ImgInfo2 用 I 前缀，合并到一个文件供 awk 区分
         val svrIdsFile = "$workDir/phone_msg_svr.txt"
         val maxIdFile = "$workDir/phone_max_msgid.txt"
         val queryScript = """
@@ -173,26 +174,38 @@ PRAGMA cipher_page_size=1024;
 PRAGMA kdf_iter=4000;
 PRAGMA cipher_use_hmac=OFF;
 .output '$svrIdsFile'
-SELECT msgSvrId FROM message;
+SELECT 'M' || msgSvrId FROM message;
+SELECT 'I' || msgSvrId FROM ImgInfo2;
 .output stdout
 SELECT max(msgId) FROM message;
+SELECT max(id) FROM ImgInfo2;
 .quit
 """.trimIndent()
         val qSql = "$workDir/phone_query.sql"
         RootGateways.run("cat > '$qSql' << 'QEOF'\n$queryScript\nQEOF", 5_000)
         val qr = RootGateways.run("cd $TOOLS_DIR && LD_LIBRARY_PATH=$TOOLS_DIR $SQLCIPHER '$phoneDbPath' < '$qSql' 2>&1 | tail -5", 600_000)
         RootGateways.run("rm -f '$qSql'", 5_000)
-        val maxMsgId = RootGateways.runQuiet("cat '$maxIdFile' 2>/dev/null").trim().toLongOrNull() ?: 0L
+        val maxLines = RootGateways.runQuiet("cat '$maxIdFile' 2>/dev/null").lines().filter { it.all(Char::isDigit) }
+        val maxMsgId = maxLines.getOrNull(0)?.toLongOrNull() ?: 0L
+        val maxImgId = maxLines.getOrNull(1)?.toLongOrNull() ?: 0L
         if (maxMsgId <= 0L) {
             Log.e(TAG, "mergeDb: cannot read phone max(msgId) (phone db query failed: ${qr.stdout.take(200)})")
             return null
         }
-        Log.i(TAG, "mergeDb: phone message maxMsgId=$maxMsgId, svrIds 行数=${RootGateways.runQuiet("wc -l < '$svrIdsFile'").trim()}")
+        Log.i(TAG, "mergeDb: phone maxMsgId=$maxMsgId maxImgId=$maxImgId, svrIds 行数=${RootGateways.runQuiet("wc -l < '$svrIdsFile'").trim()}")
 
         // 2. awk 转换 dump（posix 语法，兼容 toybox awk；只解析行首两个整数，不碰 unistr 内容）
+        //    - message：按 msgSvrId(M 前缀集合) 去重，msgId 重编号（maxMsgId+递增）
+        //    - ImgInfo2：同样按 msgSvrId(I 前缀集合) 去重，id 重编号（maxImgId+递增）
+        //    - 其他表：INSERT OR IGNORE
+        //    - 批量 commit：每 10000 条 INSERT 插入 COMMIT/BEGIN，防大事务 OOM
         val awkFile = "$workDir/convert.awk"
         val awkScript = """
-FNR==NR { svr[$1]=1; next }
+FNR==NR {
+    if (substr($1,1,1) == "M") svrM[substr($1,2)] = 1
+    else if (substr($1,1,1) == "I") svrI[substr($1,2)] = 1
+    next
+}
 /^CREATE TABLE / { sub(/CREATE TABLE /, "CREATE TABLE IF NOT EXISTS "); print; next }
 /^CREATE UNIQUE INDEX / { sub(/CREATE UNIQUE INDEX /, "CREATE UNIQUE INDEX IF NOT EXISTS "); print; next }
 /^CREATE INDEX / { sub(/CREATE INDEX /, "CREATE INDEX IF NOT EXISTS "); print; next }
@@ -203,25 +216,41 @@ FNR==NR { svr[$1]=1; next }
     s2 = substr(s, c1+1)
     c2 = index(s2, ",")
     msgsvr = substr(s2, 1, c2-1)
-    if (msgsvr in svr) next
+    if (msgsvr in svrM) next
     maxid++
     sub(/VALUES\([0-9]+/, "VALUES(" maxid)
     print
+    if (++cnt % 10000 == 0) { print "COMMIT;"; print "BEGIN TRANSACTION;"; }
     next
 }
-/^INSERT INTO / { sub(/INSERT INTO /, "INSERT OR IGNORE INTO "); print; next }
+/^INSERT INTO ImgInfo2 VALUES\(/ {
+    pos = index($0, "VALUES(") + 7
+    s = substr($0, pos)
+    c1 = index(s, ",")
+    id = substr(s, 1, c1-1)
+    s2 = substr(s, c1+1)
+    c2 = index(s2, ",")
+    msgsvr = substr(s2, 1, c2-1)
+    if (msgsvr in svrI) next
+    maximgid++
+    sub(/VALUES\([0-9]+/, "VALUES(" maximgid)
+    print
+    if (++cnt % 10000 == 0) { print "COMMIT;"; print "BEGIN TRANSACTION;"; }
+    next
+}
+/^INSERT INTO / { sub(/INSERT INTO /, "INSERT OR IGNORE INTO "); print; if (++cnt % 10000 == 0) { print "COMMIT;"; print "BEGIN TRANSACTION;"; } next }
 { print }
 """
         RootGateways.writeFile(awkFile, awkScript)
         val convertResult = RootGateways.run(
-            "awk -v maxid=$maxMsgId -f '$awkFile' '$svrIdsFile' '${baselineSql.absolutePath}' > '$convertedSql'",
+            "awk -v maxid=$maxMsgId -v maximgid=$maxImgId -f '$awkFile' '$svrIdsFile' '${baselineSql.absolutePath}' > '$convertedSql'",
             600_000
         )
         if (!convertResult.isSuccess || RootGateways.runQuiet("test -s '$convertedSql' && echo 1 || echo 0").trim() != "1") {
             Log.e(TAG, "mergeDb: dump convert failed: ${convertResult.stderr.take(300)}")
             return null
         }
-        Log.i(TAG, "mergeDb: converted dump 行数=${RootGateways.runQuiet("wc -l < '$convertedSql'").trim()}")
+        Log.i(TAG, "mergeDb: converted dump 行数=${RootGateways.runQuiet("wc -l < '$convertedSql'").trim()}, COMMIT 批数=${RootGateways.runQuiet("grep -c '^COMMIT;' '$convertedSql'").trim()}")
 
         val script = """
 .output /dev/null
