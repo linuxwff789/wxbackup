@@ -152,22 +152,76 @@ object RestoreEngine {
 
         // Build merge SQL script
         val pw = password.replace("'", "''")
-        // 转换 dump：CREATE TABLE/INDEX → IF NOT EXISTS（避免与手机已有表冲突），
-        // INSERT INTO → INSERT OR IGNORE（主键去重，不覆盖手机现有消息）
-        val convertedSql = "/data/local/tmp/wxhook_restore/baseline_converted.sql"
-        RootGateways.run("rm -rf /data/local/tmp/wxhook_restore && mkdir -p /data/local/tmp/wxhook_restore", 10_000)
-        val convertResult = RootGateways.run(
-            "sed -e 's/^CREATE TABLE /CREATE TABLE IF NOT EXISTS /' " +
-                "-e 's/^CREATE UNIQUE INDEX /CREATE UNIQUE INDEX IF NOT EXISTS /' " +
-                "-e 's/^CREATE INDEX /CREATE INDEX IF NOT EXISTS /' " +
-                "-e 's/^INSERT INTO /INSERT OR IGNORE INTO /' " +
-                "'${baselineSql.absolutePath}' > '$convertedSql'",
-            300_000
-        )
-        if (!convertResult.isSuccess || RootGateways.runQuiet("test -s '$convertedSql' && echo 1 || echo 0").trim() != "1") {
-            Log.e(TAG, "mergeDb: dump convert failed")
+        // 转换 dump：
+        //  - CREATE TABLE/INDEX → IF NOT EXISTS（避免与手机已有表冲突）
+        //  - message 表特殊处理：msgId 是 INTEGER PRIMARY KEY 且局部重用，按 msgId 去重
+        //    会丢掉几乎全部备份消息——必须按全局唯一的 msgSvrId 去重，并给新行重新编号
+        //    msgId = 手机 max(msgId) + 递增
+        //  - 其他表 INSERT INTO → INSERT OR IGNORE（主键去重）
+        val workDir = "/data/local/tmp/wxhook_restore"
+        val convertedSql = "$workDir/baseline_converted.sql"
+        RootGateways.run("rm -rf $workDir && mkdir -p $workDir", 10_000)
+
+        // 1. 查询手机 DB 的 message msgSvrId 集合 + max(msgId)（只读，不改动手机 DB）
+        val svrIdsFile = "$workDir/phone_msg_svr.txt"
+        val maxIdFile = "$workDir/phone_max_msgid.txt"
+        val queryScript = """
+.output /dev/null
+PRAGMA key='$pw';
+PRAGMA cipher_compatibility=3;
+PRAGMA cipher_page_size=1024;
+PRAGMA kdf_iter=4000;
+PRAGMA cipher_use_hmac=OFF;
+.output '$svrIdsFile'
+SELECT msgSvrId FROM message;
+.output stdout
+SELECT max(msgId) FROM message;
+.quit
+""".trimIndent()
+        val qSql = "$workDir/phone_query.sql"
+        RootGateways.run("cat > '$qSql' << 'QEOF'\n$queryScript\nQEOF", 5_000)
+        val qr = RootGateways.run("cd $TOOLS_DIR && LD_LIBRARY_PATH=$TOOLS_DIR $SQLCIPHER '$phoneDbPath' < '$qSql' 2>&1 | tail -5", 600_000)
+        RootGateways.run("rm -f '$qSql'", 5_000)
+        val maxMsgId = RootGateways.runQuiet("cat '$maxIdFile' 2>/dev/null").trim().toLongOrNull() ?: 0L
+        if (maxMsgId <= 0L) {
+            Log.e(TAG, "mergeDb: cannot read phone max(msgId) (phone db query failed: ${qr.stdout.take(200)})")
             return null
         }
+        Log.i(TAG, "mergeDb: phone message maxMsgId=$maxMsgId, svrIds 行数=${RootGateways.runQuiet("wc -l < '$svrIdsFile'").trim()}")
+
+        // 2. awk 转换 dump（posix 语法，兼容 toybox awk；只解析行首两个整数，不碰 unistr 内容）
+        val awkFile = "$workDir/convert.awk"
+        val awkScript = """
+FNR==NR { svr[$1]=1; next }
+/^CREATE TABLE / { sub(/CREATE TABLE /, "CREATE TABLE IF NOT EXISTS "); print; next }
+/^CREATE UNIQUE INDEX / { sub(/CREATE UNIQUE INDEX /, "CREATE UNIQUE INDEX IF NOT EXISTS "); print; next }
+/^CREATE INDEX / { sub(/CREATE INDEX /, "CREATE INDEX IF NOT EXISTS "); print; next }
+/^INSERT INTO message VALUES\(/ {
+    pos = index($0, "VALUES(") + 7
+    s = substr($0, pos)
+    c1 = index(s, ",")
+    s2 = substr(s, c1+1)
+    c2 = index(s2, ",")
+    msgsvr = substr(s2, 1, c2-1)
+    if (msgsvr in svr) next
+    maxid++
+    sub(/VALUES\([0-9]+/, "VALUES(" maxid)
+    print
+    next
+}
+/^INSERT INTO / { sub(/INSERT INTO /, "INSERT OR IGNORE INTO "); print; next }
+{ print }
+"""
+        RootGateways.writeFile(awkFile, awkScript)
+        val convertResult = RootGateways.run(
+            "awk -v maxid=$maxMsgId -f '$awkFile' '$svrIdsFile' '${baselineSql.absolutePath}' > '$convertedSql'",
+            600_000
+        )
+        if (!convertResult.isSuccess || RootGateways.runQuiet("test -s '$convertedSql' && echo 1 || echo 0").trim() != "1") {
+            Log.e(TAG, "mergeDb: dump convert failed: ${convertResult.stderr.take(300)}")
+            return null
+        }
+        Log.i(TAG, "mergeDb: converted dump 行数=${RootGateways.runQuiet("wc -l < '$convertedSql'").trim()}")
 
         val script = """
 .output /dev/null
