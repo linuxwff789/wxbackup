@@ -18,8 +18,9 @@ object RestoreEngine {
     private const val PHONE_MM_DIR = "/data_mirror/data_ce/null/0/com.tencent.mm/MicroMsg/6d1f34a5edc49e8b6d238141b2d004f3"
     private const val PHONE_DB = "$PHONE_MM_DIR/EnMicroMsg.db"
     private const val PHONE_INI = "$PHONE_MM_DIR/EnMicroMsg.db.ini"
-    private const val SQLCIPHER = "LD_PRELOAD=/data/data/com.termux/files/home/wxbackup/tools/libz.so.1:/data/data/com.termux/files/home/wxbackup/tools/libcrypto.so.3:/data/data/com.termux/files/home/wxbackup/tools/libedit.so:/data/data/com.termux/files/home/wxbackup/tools/libncursesw.so.6 /data/data/com.termux/files/home/wxbackup/tools/sqlcipher"
-    private const val TOOLS_DIR = "/data/data/com.termux/files/home/wxbackup/tools"
+    // 使用 app 部署的 wxhook_bin（/data/local/tmp/wxhook_bin），不依赖 termux 路径
+    private const val TOOLS_DIR = "/data/local/tmp/wxhook_bin"
+    private const val SQLCIPHER = "LD_PRELOAD=${TOOLS_DIR}/libz.so.1:${TOOLS_DIR}/libcrypto.so.3:${TOOLS_DIR}/libedit.so:${TOOLS_DIR}/libncursesw.so.6 ${TOOLS_DIR}/sqlcipher"
 
     // ── Replace DB ──
 
@@ -151,6 +152,23 @@ object RestoreEngine {
 
         // Build merge SQL script
         val pw = password.replace("'", "''")
+        // 转换 dump：CREATE TABLE/INDEX → IF NOT EXISTS（避免与手机已有表冲突），
+        // INSERT INTO → INSERT OR IGNORE（主键去重，不覆盖手机现有消息）
+        val convertedSql = "/data/local/tmp/wxhook_restore/baseline_converted.sql"
+        RootGateways.run("rm -rf /data/local/tmp/wxhook_restore && mkdir -p /data/local/tmp/wxhook_restore", 10_000)
+        val convertResult = RootGateways.run(
+            "sed -e 's/^CREATE TABLE /CREATE TABLE IF NOT EXISTS /' " +
+                "-e 's/^CREATE UNIQUE INDEX /CREATE UNIQUE INDEX IF NOT EXISTS /' " +
+                "-e 's/^CREATE INDEX /CREATE INDEX IF NOT EXISTS /' " +
+                "-e 's/^INSERT INTO /INSERT OR IGNORE INTO /' " +
+                "'${baselineSql.absolutePath}' > '$convertedSql'",
+            300_000
+        )
+        if (!convertResult.isSuccess || RootGateways.runQuiet("test -s '$convertedSql' && echo 1 || echo 0").trim() != "1") {
+            Log.e(TAG, "mergeDb: dump convert failed")
+            return null
+        }
+
         val script = """
 .output /dev/null
 PRAGMA key='$pw';
@@ -162,9 +180,14 @@ PRAGMA cipher_use_hmac=OFF;
 -- Create output as copy of phone DB
 .save '$outputPath'
 .open '$outputPath'
+PRAGMA key='$pw';
+PRAGMA cipher_compatibility=3;
+PRAGMA cipher_page_size=1024;
+PRAGMA kdf_iter=4000;
+PRAGMA cipher_use_hmac=OFF;
 
--- Attach and read baseline SQL (INSERT OR IGNORE for dedup)
-.read '${baselineSql.absolutePath}'
+-- Apply baseline dump (converted: IF NOT EXISTS + OR IGNORE)
+.read '$convertedSql'
 
 -- Stats
 SELECT 'merged' AS stat, count(*) AS cnt FROM message;
@@ -175,7 +198,7 @@ SELECT 'merged' AS stat, count(*) AS cnt FROM message;
         RootGateways.run("cat > '$sqlFile' << 'MERGEEOF'\n$script\nMERGEEOF", 5_000)
 
         val r = RootGateways.run(
-            "cd $TOOLS_DIR && LD_LIBRARY_PATH=$TOOLS_DIR $SQLCIPHER < '$sqlFile' 2>/dev/null | tail -5",
+            "cd $TOOLS_DIR && LD_LIBRARY_PATH=$TOOLS_DIR $SQLCIPHER < '$sqlFile' 2>&1 | tail -20",
             600_000
         )
         RootGateways.run("rm -f '$sqlFile' 2>/dev/null")
