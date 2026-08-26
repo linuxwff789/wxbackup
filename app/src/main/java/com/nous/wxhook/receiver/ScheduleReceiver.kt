@@ -35,14 +35,26 @@ class ScheduleReceiver : BroadcastReceiver() {
             ACTION_SCHEDULED_SYNC -> handleScheduledSync(context)
             ScheduleManager.ACTION_ALARM_BACKUP -> {
                 Log.i(TAG, "闹钟触发: 定时备份")
-                handleScheduledBackup(context, intent)
-                // 重新设置下一个闹钟（setExactAndAllowWhileIdle 是一次性的）
-                ScheduleManager.updateAll(context)
+                try {
+                    handleScheduledBackup(context, intent)
+                } catch (t: Throwable) {
+                    // 前台服务启动被拒(ForegroundServiceStartNotAllowedException)等
+                    // 异常不得让 receiver 崩溃——否则下面的 updateAll 不会执行，闹钟链断裂
+                    Log.e(TAG, "定时备份任务异常", t)
+                } finally {
+                    // 无论任务成败都重设闹钟，保证长期调度不断链
+                    ScheduleManager.updateAll(context)
+                }
             }
             ScheduleManager.ACTION_ALARM_SYNC -> {
                 Log.i(TAG, "闹钟触发: 定时同步")
-                handleScheduledSync(context)
-                ScheduleManager.updateAll(context)
+                try {
+                    handleScheduledSync(context)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "定时同步任务异常", t)
+                } finally {
+                    ScheduleManager.updateAll(context)
+                }
             }
         }
     }
