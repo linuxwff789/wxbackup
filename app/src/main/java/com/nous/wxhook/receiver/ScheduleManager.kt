@@ -115,19 +115,17 @@ object ScheduleManager {
             triggerAt += 24 * 60 * 60 * 1000L  // 明天
         }
 
-        // 每天重复间隔
-        val intervalMs = intervalDays * 24L * 60 * 60 * 1000L
-
-        // setRepeating: 系统持久化的每天重复闹钟，重启保留，自动每天触发，
-        // 不依赖 receiver 的重设链。以前用一次性 setAlarmClock，触发后靠
-        // ScheduleReceiver.updateAll() 重设下一个，但 receiver 启动前台服务异常时
-        // updateAll 不执行 → 闹钟链断裂 → 备份/同步永久停摆（2026-08 事故）。
-        // API19+ 的 setRepeating 是非精确闹钟，Doze 深休眠时可能延迟到维护窗口；
-        // 对凌晨无人时段的自动备份可接受。触发后 receiver 仍会 updateAll 兜底重设。
-        alarmManager.setRepeating(AlarmManager.RTC_WAKEUP, triggerAt, intervalMs, pi)
+        // setAlarmClock：系统最高优先级闹钟，精确到分钟，Doze 深休眠也准时，
+        // 且闹钟触发广播带前台服务启动豁免（FGS）——setRepeating 在凌晨深度休眠
+        // 时会被 Doze 延迟、且非精确闹钟广播无 FGS 豁免，备份服务起不来
+        // （2026-08-27 实测 02:00 自动备份未执行）。setAlarmClock 重启保留、免权限。
+        // 它是一次性的，靠 ScheduleReceiver 里 try/finally 的 updateAll 重设链续期，
+        // 该链已修复为不因服务启动异常而断裂。
+        val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerAt, null)
+        alarmManager.setAlarmClock(alarmClockInfo, pi)
         Log.i(
             TAG,
-            "$tag 定时已设(每天重复): ${"%02d:%02d".format(hour, minute)}, 间隔${intervalDays}天, 首次 ${
+            "$tag 定时已设(setAlarmClock): ${"%02d:%02d".format(hour, minute)}, 首次 ${
                 java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(triggerAt))
             }"
         )
