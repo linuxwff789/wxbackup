@@ -48,6 +48,12 @@ interface RootGateway {
     /** 纯 Java 统计目录文件数（root 进程内，替代 shell find）。 */
     suspend fun countFiles(dirs: List<String>): Map<String, Int>
 
+    /**
+     * 在 root 进程内纯 Java 扫描附件目录，把 "size mtime 完整路径" 清单写入 outPath 文件，
+     * 只回传每目录文件数。清单必须落盘：走 Binder 回复时 >1MB 会静默丢失全部条目。
+     */
+    suspend fun scanAttachments(basePath: String, outPath: String, dirs: List<String>): Map<String, Int>
+
     // WebDAV upload in root process (no external binary dependency)
     suspend fun webdavUpload(url: String, user: String, pass: String, filePath: String): Boolean
 }

@@ -22,6 +22,9 @@ data class FileDiff(
 object FileManifest {
     private const val MANIFEST_FILE = "file_manifest.json"
 
+    /** 附件清单中转目录：root 进程写入、应用进程读取（清单不进 Binder 回复） */
+    private const val SCAN_DIR = "/data/local/tmp/wxhook_scan"
+
     fun load(backupDir: File): JSONObject {
         val f = File(backupDir, MANIFEST_FILE)
         val local = File(BackupEnv.filesDirForWrite(), MANIFEST_FILE)
@@ -48,27 +51,47 @@ object FileManifest {
         attachmentDirs: List<String>,
     ): List<FileEntry> {
         val entries = mutableListOf<FileEntry>()
+        // 清单必须落盘、再由应用进程流式读取。整份清单若经 Binder 回复（writeString）返回，
+        // 超过 ~1MB 事务上限会抛 TransactionTooLargeException，被 RootManager 吞成异常文本，
+        // 解析时全部丢弃 → 该目录静默变成 "0 条"（image2 七千多个附件就是这么丢的）。
+        val scanDir = File(SCAN_DIR).apply { mkdirs() }
+        val outFile = File(scanDir, "attachments.txt")
+        outFile.delete()
+        val scanned = RootGateways.scanAttachments(wxBasePath, outFile.absolutePath, attachmentDirs)
+        val parsed = mutableMapOf<String, Int>()
+        try {
+            outFile.bufferedReader().use { reader ->
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (line.isBlank()) continue
+                    val parts = line.split(' ', limit = 3)
+                    if (parts.size != 3) continue
+                    val size = parts[0].toLongOrNull() ?: continue
+                    val mtime = parts[1].toLongOrNull() ?: continue
+                    val relativePath = parts[2].removePrefix("$wxBasePath/")
+                    if (relativePath == parts[2]) continue // 不在此 base 下，忽略
+                    entries.add(FileEntry(
+                        path = "$userHash/$relativePath",
+                        size = size,
+                        mtime = mtime,
+                    ))
+                    val dir = relativePath.substringBefore('/')
+                    parsed[dir] = (parsed[dir] ?: 0) + 1
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("wxhook:scan", "读取清单文件失败: ${e.message}")
+        }
+        outFile.delete()
         for (dir in attachmentDirs) {
-            val sourceDir = "$wxBasePath/$dir"
-            val output = RootGateways.runQuiet(
-                "find \"$sourceDir\" -type f -exec stat -c '%s %Y %n' {} + 2>/dev/null"
-            )
-            if (output.isBlank()) {
-                // 目录存在但 find 无输出 = 异常（正常应至少能列出文件），记日志便于定位
-                val dirExists = RootGateways.runQuiet("test -d \"$sourceDir\" && echo 1 || echo 0", 10_000).trim() == "1"
-                android.util.Log.w("wxhook:scan", "$dir: find 输出为空 (目录存在=$dirExists, base=$wxBasePath)")
+            val n = parsed[dir] ?: 0
+            val found = scanned[dir] ?: -1 // -1 = 降级路径（shell 兜底）未回传条数
+            if (n == 0) {
+                // 目录存在但清单为空 = 异常（正常应至少能列出文件），记日志便于定位
+                val dirExists = RootGateways.runQuiet("test -d \"$wxBasePath/$dir\" && echo 1 || echo 0", 10_000).trim() == "1"
+                android.util.Log.w("wxhook:scan", "$dir: 0 条 (root扫描=$found, 目录存在=$dirExists, base=$wxBasePath)")
             }
-            output.lineSequence().filter { it.isNotBlank() }.forEach { line ->
-                val parts = line.split(' ', limit = 3)
-                if (parts.size != 3) return@forEach
-                val relativePath = parts[2].removePrefix("$wxBasePath/")
-                entries.add(FileEntry(
-                    path = "$userHash/$relativePath",
-                    size = parts[0].toLongOrNull() ?: return@forEach,
-                    mtime = parts[1].toLongOrNull() ?: return@forEach,
-                ))
-            }
-            android.util.Log.i("wxhook:scan", "$dir: ${entries.count { it.path.startsWith("$userHash/$dir/") }} 条")
+            android.util.Log.i("wxhook:scan", "$dir: $n 条 (root扫描=$found)")
         }
         return entries
     }

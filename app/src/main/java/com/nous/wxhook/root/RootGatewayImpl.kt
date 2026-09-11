@@ -118,13 +118,28 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
         }
     }
 
+    override suspend fun scanAttachments(basePath: String, outPath: String, dirs: List<String>): Map<String, Int> =
+        withContext(Dispatchers.IO) {
+            if (useLibsu) {
+                com.nous.wxhook.root.libsu.RootManager.scanAttachments(basePath, outPath, dirs)
+            } else {
+                // 降级路径（RootService 未就绪）：shell find 写文件兜底。
+                // 输出同样不进 Binder 回复，所以大目录也不会丢；条数由调用方解析文件得到。
+                val script = dirs.joinToString("; ") { d ->
+                    "find ${ShellEscaper.quote("$basePath/$d")} -type f " +
+                        "-exec stat -c '%s %Y %n' {} + >> ${ShellEscaper.quote(outPath)} 2>/dev/null"
+                }
+                run(": > ${ShellEscaper.quote(outPath)}; $script", 300_000)
+                emptyMap()
+            }
+        }
+
     override suspend fun writeTarZstd(outputPath: String, pairsPath: String, useZstd: Boolean): Int =
         withContext(Dispatchers.IO) {
             val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder()
                 ?: return@withContext -1
             com.nous.wxhook.root.libsu.WxRootBinder.writeTarZstd(binder, outputPath, pairsPath, useZstd)
         }
-
     override suspend fun webdavUpload(url: String, user: String, pass: String, filePath: String): Boolean =
         withContext(Dispatchers.IO) {
             val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder()

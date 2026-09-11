@@ -13,7 +13,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
     override fun asBinder(): android.os.IBinder = this
 
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-        if (code in TRANSACTION_EXEC..TRANSACTION_COUNT_FILES) {
+        if (code in TRANSACTION_EXEC..TRANSACTION_SCAN_ATTACHMENTS) {
             data.enforceInterface(DESCRIPTOR)
         }
         return when (code) {
@@ -239,6 +239,54 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 }
                 true
             }
+            TRANSACTION_SCAN_ATTACHMENTS -> {
+                // 纯 Java 在 root 进程内遍历附件目录，清单写入文件、只回传每目录文件数。
+                // 清单绝不能走 Binder 回复（writeString）：>1MB 事务上限会抛
+                // TransactionTooLargeException，调用方只拿到异常文本 → 解析全丢 → 静默 "0 条"
+                // （image2 七千多个附件就是这么丢的）。mtime 用秒，与 stat -c %Y 对齐。
+                val basePath = data.readString() ?: ""
+                val outPath = data.readString() ?: ""
+                val dirs = mutableListOf<String>()
+                val n = data.readInt()
+                for (i in 0 until n) dirs.add(data.readString() ?: "")
+                val counts = mutableMapOf<String, Int>()
+                try {
+                    val out = File(outPath)
+                    // 中转目录需让应用进程（非 root）能按名读取并删除：root 建目录 + 放开 other 位
+                    out.parentFile?.let { p ->
+                        p.mkdirs()
+                        p.setWritable(true, false)
+                        p.setExecutable(true, false)
+                    }
+                    java.io.BufferedWriter(
+                        java.io.OutputStreamWriter(java.io.FileOutputStream(out), Charsets.UTF_8),
+                    ).use { w ->
+                        for (d in dirs) {
+                            var c = 0
+                            val root = File("$basePath/$d")
+                            if (root.isDirectory) {
+                                root.walkTopDown().forEach { f ->
+                                    if (f.isFile) {
+                                        w.write("${f.length()} ${f.lastModified() / 1000} ${f.absolutePath}")
+                                        w.newLine()
+                                        c++
+                                    }
+                                }
+                            }
+                            counts[d] = c
+                        }
+                    }
+                } catch (e: Throwable) {
+                    Log.e("wxhook:scan", "scanAttachments failed base=$basePath out=$outPath", e)
+                }
+                reply?.writeNoException()
+                reply?.writeInt(counts.size)
+                for ((d, c) in counts) {
+                    reply?.writeString(d)
+                    reply?.writeInt(c)
+                }
+                true
+            }
             TRANSACTION_WEBDAV_UPLOAD -> {
                 val url = data.readString()
                 val user = data.readString()
@@ -291,6 +339,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
         const val TRANSACTION_GET_FULL_ARCHIVE_ROWID = android.os.IBinder.FIRST_CALL_TRANSACTION + 16
         const val TRANSACTION_POLL_FULL_ARCHIVE_ROWID = android.os.IBinder.FIRST_CALL_TRANSACTION + 17
         const val TRANSACTION_COUNT_FILES = android.os.IBinder.FIRST_CALL_TRANSACTION + 18
+        const val TRANSACTION_SCAN_ATTACHMENTS = android.os.IBinder.FIRST_CALL_TRANSACTION + 19
         private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
 
         fun exec(shell: android.os.IBinder, command: String): ExecResult {
@@ -476,6 +525,40 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 data.writeInt(dirs.size)
                 for (d in dirs) data.writeString(d)
                 shell.transact(TRANSACTION_COUNT_FILES, data, reply, 0)
+                reply.readException()
+                val n = reply.readInt()
+                val result = mutableMapOf<String, Int>()
+                for (i in 0 until n) {
+                    val d = reply.readString() ?: continue
+                    result[d] = reply.readInt()
+                }
+                return result
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
+
+        /**
+         * 纯 Java 扫描附件目录（root 进程内，替代 shell find + stat）。
+         * 清单写入 outPath（每行 "size mtime 完整路径"），只回传每目录文件数，
+         * 避免 >1MB 的清单走 Binder 回复被 TransactionTooLargeException 吞掉。
+         */
+        fun scanAttachments(
+            shell: android.os.IBinder,
+            basePath: String,
+            outPath: String,
+            dirs: List<String>,
+        ): Map<String, Int> {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                data.writeString(basePath)
+                data.writeString(outPath)
+                data.writeInt(dirs.size)
+                for (d in dirs) data.writeString(d)
+                shell.transact(TRANSACTION_SCAN_ATTACHMENTS, data, reply, 0)
                 reply.readException()
                 val n = reply.readInt()
                 val result = mutableMapOf<String, Int>()

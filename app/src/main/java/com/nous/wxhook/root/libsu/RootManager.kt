@@ -142,6 +142,16 @@ object RootManager {
         try { WxRootBinder.countFiles(binder, dirs) } catch (_: Exception) { emptyMap() }
     }
 
+    /**
+     * 纯 Java 扫描附件目录（root 进程内）：清单写入 outPath，返回每目录文件数。
+     * 清单不经过 Binder 回复（>1MB 会 TransactionTooLargeException 静默变 0 条）。
+     */
+    suspend fun scanAttachments(basePath: String, outPath: String, dirs: List<String>): Map<String, Int> =
+        withContext(Dispatchers.IO) {
+            val binder = service ?: return@withContext emptyMap()
+            try { WxRootBinder.scanAttachments(binder, basePath, outPath, dirs) } catch (_: Exception) { emptyMap() }
+        }
+
     fun disconnect(context: Context) {
         if (bound) RootService.unbind(connection)
         bound = false
