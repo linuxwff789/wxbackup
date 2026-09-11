@@ -494,7 +494,10 @@ object BackupOrchestrator {
             val rc = try { JSONObject(BackupEnv.suOut("cat \"${configFile.absolutePath}\" 2>/dev/null").ifBlank { "{}" }) } catch (_: Exception) { JSONObject() }
             if (!rc.optBoolean("enabled", true)) return
         }
-        val archives = if (archivePath != null && BackupEnv.backupExists(archivePath)) listOf(archivePath) else emptyList()
+        // archivePath 未指定时传 null，让 Syncer 走 scanArchives() 兜底扫描全部备份包。
+        // 传空列表会让 Syncer 里 `specificArchives?.filter{...} ?: scanArchives()` 的兜底失效，
+        // 自动同步永远停在"无备份包可同步"（全量/增量备份后的自动云同步一直是空跑）。
+        val archives = if (archivePath != null && BackupEnv.backupExists(archivePath)) listOf(archivePath) else null
         val result = Syncer.sync(config, specificArchives = archives) { p ->
             callback?.onProgress(p.message, p.current.toLong(), p.total.toLong())
         }
