@@ -901,7 +901,15 @@ object BackupOrchestrator {
             val restoreScript = buildString {
                 appendLine("#!/system/bin/sh")
                 appendLine("set -e")
-                appendLine("LD_PRELOAD='${binDir}/libz.so.1:${binDir}/libcrypto.so.3:${binDir}/libedit.so:${binDir}/libncursesw.so.6'")
+                // 关键：sqlcipher 的 .so 就在 binDir 旁边，不在系统搜索路径里。
+                // 原来只写了 `LD_PRELOAD='...'`（未 export 的普通赋值），在 app 的 root
+                // 进程里不生效，实测报：
+                //   CANNOT LINK EXECUTABLE ".../sqlcipher": library "libz.so.1" not found
+                // 这里显式 export LD_LIBRARY_PATH + LD_PRELOAD 并 cd 进去，
+                // 这也就是 app 里 getPhoneStats 一直在用、验证可用的写法。
+                appendLine("export LD_LIBRARY_PATH='$binDir'")
+                appendLine("export LD_PRELOAD='${binDir}/libz.so.1:${binDir}/libcrypto.so.3:${binDir}/libedit.so:${binDir}/libncursesw.so.6'")
+                appendLine("cd '$binDir'")
                 appendLine("SQLCIPHER=\"${binDir}/sqlcipher\"")
                 appendLine("")
                 appendLine("\$SQLCIPHER \"$decDb\" <<'ENDSQL'")
@@ -952,7 +960,7 @@ object BackupOrchestrator {
             // 产物校验：用真密码真查询一次，确认不是半截库/错密钥库（714 个 schema 对象量级）
             val preload = "$binDir/libz.so.1:$binDir/libcrypto.so.3:$binDir/libedit.so:$binDir/libncursesw.so.6"
             val probe = RootGateways.run(
-                "LD_PRELOAD='$preload' '${binDir}/sqlcipher' -readonly \"$outDb\" " +
+                "cd '$binDir' && LD_LIBRARY_PATH='$binDir' LD_PRELOAD='$preload' './sqlcipher' -readonly \"$outDb\" " +
                     "\"PRAGMA key='$keySql'; PRAGMA cipher_compatibility=3; PRAGMA cipher_page_size=1024;" +
                     " PRAGMA kdf_iter=4000; PRAGMA cipher_use_hmac=OFF; SELECT count(*) FROM sqlite_master;\" 2>&1",
                 300_000
