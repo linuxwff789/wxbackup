@@ -22,8 +22,7 @@ object ArchiveManager {
     private const val TAG = "wxhook:ArchiveMgr"
     private const val BACKUP_DIR = "/sdcard/Download/wxhook_backup"
     private const val SELECTED_FILE = "/data/local/tmp/wxhook_selected_archive.json"
-    // 当前设备微信用户 hash（备份包内路径前缀），避免 listTar 全量扫包
-    private const val WX_USER_HASH = "6d1f34a5edc49e8b6d238141b2d004f3"
+    // 当前设备微信用户 hash 见 BackupEnv.WX_USER_HASH（备份包内路径前缀，避免 listTar 全量扫包）
     /** 标准附件目录（手机侧与存档侧只对比这些，避免 manifest 里其他目录造成假缺失）。 */
     private val ATTACHMENT_DIRS = listOf("image2", "voice2", "video", "avatar", "emoji", "cdn")
 
@@ -146,7 +145,7 @@ object ArchiveManager {
      */
     private fun readPackageInfo(pkg: File): ArchiveInfo? {
         return try {
-            val hash = WX_USER_HASH
+            val hash = BackupEnv.WX_USER_HASH
             val stateRaw = RootGateways.readFileFromTar(pkg.absolutePath, "$hash/db_state.json")
             if (stateRaw.isBlank()) return null
             val state = JSONObject(stateRaw)

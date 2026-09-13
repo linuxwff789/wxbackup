@@ -13,6 +13,10 @@ object BackupEnv {
     var filesDirPath = "/data/local/tmp"
     var rcloneConfigPath = ""
 
+    /** 当前设备微信用户 hash（备份包内路径前缀）。包内能解析出来时以包内为准，
+     *  这个常量只作兜底（微信重装/换账号后可能变化，届时按需更新）。 */
+    const val WX_USER_HASH = "6d1f34a5edc49e8b6d238141b2d004f3"
+
     fun init(binDirectory: String, filesDir: String, rcloneCfg: String = "") {
         binDir = binDirectory
         filesDirPath = filesDir

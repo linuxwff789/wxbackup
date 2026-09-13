@@ -748,13 +748,27 @@ object BackupOrchestrator {
         return files?.sortedBy { it.lastModified() } ?: emptyList()
     }
 
+    /** 包内用户 hash = 第一条路径的 <32位hex>/ 前缀。
+     *  注意全量包不含目录条目（打包只写文件），所以不能只认以 "/" 结尾的行。 */
+    private val USER_HASH_RE = Regex("(?:^|/)([0-9a-f]{32})(?=/)")
+
+    private fun userHashFromListing(listing: String): String? =
+        listing.lineSequence()
+            .map { it.trim() }
+            .mapNotNull { USER_HASH_RE.find(it)?.groupValues?.get(1) }
+            .firstOrNull()
+
     /** Parse metadata from a full archive: return userHash and password. */
     private fun parseMetadata(archive: File): Pair<String, String>? {
         return try {
             val listing = NativeArchive.listTar(archive.absolutePath)
-            // Find the first user hash directory
-            val hashDirs = listing.lines().filter { it.contains('/') && it.endsWith("/") }
-            val hash = hashDirs.firstOrNull()?.trimEnd('/') ?: return null
+            val derived = userHashFromListing(listing)
+            val hash = derived ?: BackupEnv.WX_USER_HASH
+            val source = if (derived == null) "包内无 hash 前缀, 用 BackupEnv.WX_USER_HASH 兜底" else "包内推导"
+            Log.i(
+                "wxhook:restore",
+                "parseMetadata: hash=$hash ($source, ${listing.lines().size} entries)"
+            )
 
             // Try to get db_config.json from archive
             val dbConfigJson = try {
