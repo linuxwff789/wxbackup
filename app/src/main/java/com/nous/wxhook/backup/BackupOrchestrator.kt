@@ -818,36 +818,70 @@ object BackupOrchestrator {
         return try {
             callback?.onProgress("🗄️ 解压数据库...", 0, 0)
             val workDir = "/data/local/tmp/wxhook_restore"
+            val binDir = BackupEnv.binDir
+            val zstd = "$binDir/zstd"
             RootGateways.run("rm -rf \"$workDir\" && mkdir -p \"$workDir\"", 10_000)
 
-            // Extract SQL dump from full archive
+            // 基线 SQL 只解这一个成员到磁盘：整份 ~2GB 走 JNI 读进 String 会 OOM
+            // （实测 OutOfMemoryError "Failed to allocate a 3892156848 byte allocation"，
+            //  app 堆 growth limit 只有 256MB），而且 writeFile 受 Binder 1MB 事务上限也传不下去。
             val dumpName = "EnMicroMsg_baseline.sql"
-            val sqlContent = NativeArchive.readFileFromTar(meta.fullArchive.absolutePath, "${meta.userHash}/$dumpName")
-            if (sqlContent.isBlank()) {
-                Log.e("wxhook:restore", "SQL dump is empty in archive")
+            val dumpMember = "${meta.userHash}/$dumpName"
+            val dumpPath = "$workDir/$dumpMember"
+            val ex = RootGateways.run(
+                "cd \"$workDir\" && tar -I '$zstd' -xf \"${meta.fullArchive.absolutePath}\" \"$dumpMember\"",
+                900_000
+            )
+            val dumpSize = if (RootGateways.exists(dumpPath)) BackupEnv.backupSize(dumpPath) else 0L
+            if (dumpSize <= 0L) {
+                Log.e("wxhook:restore", "基线 SQL 解包失败(rc=${ex.isSuccess}) ${ex.stderr.take(200)}")
                 return false
             }
-            val sqlFile = "$workDir/$dumpName"
-            RootGateways.writeFile(sqlFile, sqlContent)
+            Log.i("wxhook:restore", "基线 SQL 已解出 $dumpPath ($dumpSize B)")
+            callback?.onProgress("🗄️ 基线 SQL ${dumpSize / 1048576}MB", 0, 0)
 
-            // Apply incremental SQLs
-            for (incrArc in meta.incrArchives) {
-                val listing = NativeArchive.listTar(incrArc.absolutePath)
-                for (line in listing.lines()) {
-                    if (line.contains(meta.userHash) && line.contains(".sql")) {
-                        val incrSql = NativeArchive.readFileFromTar(incrArc.absolutePath, line.trim())
-                        if (incrSql.isNotBlank()) {
-                            RootGateways.run("echo '${incrSql.replace("'", "'\\''")}' >> \"$workDir/incr.sql\"", 30_000)
-                        }
-                    }
+            // 增量 SQL 同样解到磁盘再按包顺序拼接：18MB 的 SQL 用 `echo '...' >>` 会超 ARG_MAX，
+            // 走 JNI 读进 String 也会 OOM（增量 SQL 单包 ~20MB，堆只有 256MB）。
+            val incrRoot = "$workDir/incr_parts"
+            RootGateways.run("rm -rf \"$incrRoot\" && mkdir -p \"$incrRoot\"", 10_000)
+            val incrFiles = mutableListOf<String>()
+            meta.incrArchives.forEachIndexed { idx, incrArc ->
+                val members = try {
+                    NativeArchive.listTar(incrArc.absolutePath).lines()
+                        .map { it.trim() }
+                        .filter { it.contains(meta.userHash) && it.endsWith(".sql") }
+                } catch (_: Exception) { emptyList() }
+                if (members.isEmpty()) return@forEachIndexed
+                val dst = "$incrRoot/" + "%04d".format(idx)
+                RootGateways.run("mkdir -p \"$dst\"", 5_000)
+                val quoted = members.joinToString(" ") { "\"$it\"" }
+                RootGateways.run(
+                    "cd \"$dst\" && tar -I '$zstd' -xf \"${incrArc.absolutePath}\" $quoted 2>/dev/null",
+                    300_000
+                )
+                members.sorted().forEach { m -> if (RootGateways.exists("$dst/$m")) incrFiles.add("$dst/$m") }
+            }
+            val incrSql = "$workDir/incr.sql"
+            RootGateways.run("rm -f \"$incrSql\" && touch \"$incrSql\"", 10_000)
+            if (incrFiles.isNotEmpty()) {
+                val catCmd = "cat " + incrFiles.joinToString(" ") { "\"$it\"" } + " >> \"$incrSql\""
+                val catRes = RootGateways.run(catCmd, 600_000)
+                if (!catRes.isSuccess) {
+                    Log.e("wxhook:restore", "增量 SQL 拼接失败: ${catRes.stderr.take(200)}")
+                    return false
                 }
             }
+            Log.i("wxhook:restore", "增量 SQL: ${incrFiles.size} 个文件 -> $incrSql")
+            callback?.onProgress("🗄️ 增量 SQL ${incrFiles.size} 个", 0, 0)
 
             callback?.onProgress("🔐 重建加密数据库...", 0, 0)
             val pwd = meta.password
-            val binDir = BackupEnv.binDir
             val decDb = "$workDir/EnMicroMsg_dec.db"
             val outDb = "$workDir/EnMicroMsg.db"
+            // PRAGMA key 必须内联真实密码：下面的 heredoc 用引号定界符 <<'ENDSQL'，
+            // shell 不做变量展开 —— 原来写 PRAGMA key = '$PWD' 会把字面量 "$PWD"
+            // 当成密钥，重建出来的库微信根本打不开。单引号按 SQL 规则翻倍转义。
+            val keySql = pwd.replace("'", "''")
 
             // Write restore script to a file using writeFile (no shell escaping issues)
             val restoreScript = buildString {
@@ -857,14 +891,13 @@ object BackupOrchestrator {
                 appendLine("SQLCIPHER=\"${binDir}/sqlcipher\"")
                 appendLine("DEC_DB=\"$decDb\"")
                 appendLine("OUT_DB=\"$outDb\"")
-                appendLine("PWD='$pwd'")
-                appendLine("DUMP=\"$workDir/$dumpName\"")
-                appendLine("INCR=\"$workDir/incr.sql\"")
+                appendLine("DUMP=\"$dumpPath\"")
+                appendLine("INCR=\"$incrSql\"")
                 appendLine("touch \"\$INCR\"")
                 appendLine("")
                 // Use heredoc inside the shell script to pipe SQL
                 appendLine("\$SQLCIPHER \"\$DEC_DB\" <<'ENDSQL'")
-                appendLine("PRAGMA key = '\$PWD';")
+                appendLine("PRAGMA key = '$keySql';")
                 appendLine("PRAGMA cipher_compatibility = 3;")
                 appendLine("PRAGMA cipher_page_size = 1024;")
                 appendLine("PRAGMA kdf_iter = 4000;")
@@ -884,9 +917,9 @@ object BackupOrchestrator {
             RootGateways.writeFile(scriptPath, restoreScript)
             RootGateways.run("chmod 755 \"$scriptPath\"", 5_000)
 
-            // Execute the script via su
+            // Execute the script via su (2GB SQL 导入要几十分钟，120s 必被杀)
             val cmd = "$scriptPath 2>&1"
-            val result = RootGateways.run(cmd, 120_000)
+            val result = RootGateways.run(cmd, 3_600_000)
 
             if (!result.isSuccess) {
                 Log.e("wxhook:restore", "DB restore script failed: ${result.stderr}")
