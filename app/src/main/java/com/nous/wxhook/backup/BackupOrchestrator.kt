@@ -1016,29 +1016,52 @@ object BackupOrchestrator {
         }
     }
 
-    /** Finalize: copy DB back to WeChat dir, fix owner and permissions. */
+    /**
+     * 把结果库写回微信目录。必须按微信的完整性校验来收尾（见技能
+     * android-app-database-replacement）：只换 db 文件、不更新 .ini 的 createmd5，
+     * 微信启动时校验不过就会把库挪进 corrupted/ 并新建空库 —— 用户看到的就是
+     * 「数据库损坏」。2026-09-13 实测（换库后微信接受了 2.1GB 的库、corrupted/ 未再出现）。
+     */
     private fun finalizeDatabase(meta: RestoreMeta, callback: BackupHookLocal.ProgressCallback?): Boolean {
         return try {
             callback?.onProgress("📋 写入数据库...", 0, 0)
             val workDir = "/data/local/tmp/wxhook_restore"
+            val mmDir = meta.wxBasePath
             val srcDb = "$workDir/EnMicroMsg.db"
-            val dstDb = "${meta.wxBasePath}/EnMicroMsg.db"
+            val dstDb = "$mmDir/EnMicroMsg.db"
 
             // Check owner of existing files in WeChat dir
             val ownerResult = RootGateways.run("stat -c '%U:%G' \"$dstDb\" 2>/dev/null", 10_000)
-            val owner = if (ownerResult.isSuccess) ownerResult.stdout.trim() else "u0_a620:u0_a620"
+            val owner = if (ownerResult.isSuccess && ownerResult.stdout.isNotBlank())
+                ownerResult.stdout.trim() else "u0_a620:u0_a620"
 
-            // Copy the restored DB
-            RootGateways.run("cp \"$srcDb\" \"$dstDb\" && chmod 660 \"$dstDb\" && chown $owner \"$dstDb\"", 30_000)
-
-            // Copy WAL/SHM if they came from restore
-            for (ext in listOf("db-wal", "db-shm")) {
-                val src = "$workDir/EnMicroMsg.$ext"
-                val dst = "${meta.wxBasePath}/EnMicroMsg.$ext"
-                if (RootGateways.exists(src)) {
-                    RootGateways.run("cp \"$src\" \"$dst\" && chmod 660 \"$dst\" && chown $owner \"$dst\"", 30_000)
-                }
+            // 1) 必须用 dd：data_mirror/FUSE 路径下 cp 大文件会静默失败（技能里实测过）
+            val want = BackupEnv.backupSize(srcDb)
+            val ddRes = RootGateways.run("dd if=\"$srcDb\" of=\"$dstDb\" bs=4M 2>&1", 600_000)
+            val got = if (RootGateways.exists(dstDb)) BackupEnv.backupSize(dstDb) else 0L
+            if (want <= 0 || got != want) {
+                Log.e("wxhook:restore", "换库大小不符 got=$got want=$want / ${ddRes.stderr.take(160)}")
+                return false
             }
+            RootGateways.run("chmod 600 \"$dstDb\" && chown $owner \"$dstDb\"", 30_000)
+
+            // 2) 更新 EnMicroMsg.db.ini：createmd5 = 换完之后文件的真实 md5
+            val md5Out = RootGateways.run("md5sum \"$dstDb\" | cut -d' ' -f1", 600_000)
+            val md5 = md5Out.stdout.trim()
+            if (!Regex("^[0-9a-f]{32}$").matches(md5)) {
+                Log.e("wxhook:restore", "取 md5 失败: ${md5Out.stdout.take(80)} ${md5Out.stderr.take(80)}")
+                return false
+            }
+            RootGateways.writeFile("$mmDir/EnMicroMsg.db.ini",
+                "#\n#${java.util.Date()}\ncreatemd5=$md5\n")
+            RootGateways.run("chmod 600 \"$mmDir/EnMicroMsg.db.ini\" && chown $owner \"$mmDir/EnMicroMsg.db.ini\"", 30_000)
+            Log.i("wxhook:restore", "createmd5 已更新: $md5")
+
+            // 3) 清掉 WAL/SHM/迁移状态与上次失败留下的 corrupted/
+            //    （残留任一都可能让微信继续判损坏）
+            RootGateways.run(
+                "rm -f \"$mmDir/EnMicroMsg.db-wal\" \"$mmDir/EnMicroMsg.db-shm\" \"$mmDir/EnMicroMsg.db.sm\"; " +
+                    "rm -rf \"$mmDir/corrupted\"", 60_000)
 
             callback?.onProgress("✅ 数据库写入完成", 0, 0)
             true
