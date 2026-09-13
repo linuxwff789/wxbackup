@@ -870,6 +870,14 @@ object BackupOrchestrator {
                     Log.e("wxhook:restore", "增量 SQL 拼接失败: ${catRes.stderr.take(200)}")
                     return false
                 }
+                // 增量里会重复 INSERT 已存在的行（实测 28.7 万条 UNIQUE constraint）。
+                // OR IGNORE 与「语句失败即跳过」结果一致，但确定性更好，也不会再让
+                // sqlcipher 以非 0 退出、把日志刷满 Error。
+                val sedRes = RootGateways.run(
+                    "sed -i 's/^INSERT INTO /INSERT OR IGNORE INTO /' \"$incrSql\"", 900_000)
+                if (!sedRes.isSuccess) {
+                    Log.w("wxhook:restore", "增量 SQL 改写失败(继续): ${sedRes.stderr.take(120)}")
+                }
             }
             Log.i("wxhook:restore", "增量 SQL: ${incrFiles.size} 个文件 -> $incrSql")
             callback?.onProgress("🗄️ 增量 SQL ${incrFiles.size} 个", 0, 0)
@@ -907,7 +915,6 @@ object BackupOrchestrator {
                 appendLine("-- Apply incremental if exists")
                 appendLine(".read \"$incrSql\"")
                 appendLine("")
-                appendLine(".clone \"$outDb\"")
                 appendLine(".quit")
                 appendLine("ENDSQL")
                 appendLine("echo \"OK\"")
@@ -917,24 +924,45 @@ object BackupOrchestrator {
             RootGateways.writeFile(scriptPath, restoreScript)
             RootGateways.run("chmod 755 \"$scriptPath\"", 5_000)
 
-            // Execute the script via su (2GB SQL 导入要几十分钟，120s 必被杀)
+            // Execute the script via su（实测 2GB 基线 + 691MB 增量约 5 分钟）
             val cmd = "$scriptPath 2>&1"
             val result = RootGateways.run(cmd, 3_600_000)
-
+            val detail = (result.stdout + result.stderr).trim().replace('\n', ' ').take(400)
             if (!result.isSuccess) {
-                // 命令带了 2>&1，所以真正的报错在 stdout 里；以前只打 stderr 是空的，
-                // 现场就只剩一句 "DB restore script failed: " 看不出原因。
-                val detail = (result.stdout + result.stderr).trim().replace('\n', ' ').take(500)
-                Log.e("wxhook:restore",
-                    "DB restore script failed (rc=${result.exitCode}, timedOut=${result.timedOut}): $detail")
+                // 不能因为非 0 就判失败：增量里的重复 INSERT 会让 sqlcipher 记一堆错误并以
+                // 非 0 退出（实测 28.7 万条 UNIQUE constraint，例如 09-11 image2 重建后
+                // 整批重导的文件记录），但库其实已经建好了。真正判据是下面的产物校验。
+                // 命令带 2>&1，所以详情在 stdout（以前只打 stderr，现场只剩空字符串）。
+                Log.w("wxhook:restore",
+                    "restore.sh rc=${result.exitCode} timedOut=${result.timedOut}（多为可忽略的 UNIQUE 冲突）: $detail")
+            }
+
+            // 结果库直接用 DEC_DB 拷贝。原来的 `.clone "$OUT_DB"` 实测产出的库打不开
+            // （用本次会话同样的 cipher 参数读它报 "file is not a database"），不要再走它。
+            if (!RootGateways.exists(decDb) || BackupEnv.backupSize(decDb) <= 0) {
+                Log.e("wxhook:restore", "dec 库缺失/为空 rc=${result.exitCode}: $detail")
+                return false
+            }
+            val cpRes = RootGateways.run("cp \"$decDb\" \"$outDb\"", 600_000)
+            if (!cpRes.isSuccess) {
+                Log.e("wxhook:restore", "拷贝结果库失败: ${cpRes.stderr.take(200)}")
                 return false
             }
 
-            // Verify output DB exists
-            if (!RootGateways.exists(outDb) || BackupEnv.backupSize(outDb) <= 0) {
-                Log.e("wxhook:restore", "Output DB not found or empty")
+            // 产物校验：用真密码真查询一次，确认不是半截库/错密钥库（714 个 schema 对象量级）
+            val preload = "$binDir/libz.so.1:$binDir/libcrypto.so.3:$binDir/libedit.so:$binDir/libncursesw.so.6"
+            val probe = RootGateways.run(
+                "LD_PRELOAD='$preload' '${binDir}/sqlcipher' -readonly \"$outDb\" " +
+                    "\"PRAGMA key='$keySql'; PRAGMA cipher_compatibility=3; PRAGMA cipher_page_size=1024;" +
+                    " PRAGMA kdf_iter=4000; PRAGMA cipher_use_hmac=OFF; SELECT count(*) FROM sqlite_master;\" 2>&1",
+                300_000
+            )
+            val objects = Regex("(\\d+)").findAll(probe.stdout).map { it.value.toInt() }.lastOrNull() ?: 0
+            if (objects < 50) {
+                Log.e("wxhook:restore", "结果库校验失败: schema 对象=$objects / ${probe.stdout.trim().take(200)}")
                 return false
             }
+            Log.i("wxhook:restore", "结果库校验通过: schema 对象=$objects, ${BackupEnv.backupSize(outDb)} B")
 
             callback?.onProgress("✅ 数据库恢复完成", 0, 0)
             true
