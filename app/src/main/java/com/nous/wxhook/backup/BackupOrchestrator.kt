@@ -884,30 +884,30 @@ object BackupOrchestrator {
             val keySql = pwd.replace("'", "''")
 
             // Write restore script to a file using writeFile (no shell escaping issues)
+            //
+            // 关键：下面用的是引号定界 heredoc <<'ENDSQL'，shell **不会**做变量展开，
+            // 所以 heredoc 里不能再出现 $DUMP / $INCR / $OUT_DB 这类 shell 变量 ——
+            // 原来就是这么写的，sqlcipher 收到的是字面量路径，实测报
+            //   Error: cannot open "$DUMP" / "$INCR"  → 脚本 exit 1 → 「数据库恢复失败」。
+            // 所有路径和密钥都在 Kotlin 侧内联进去。
             val restoreScript = buildString {
                 appendLine("#!/system/bin/sh")
                 appendLine("set -e")
                 appendLine("LD_PRELOAD='${binDir}/libz.so.1:${binDir}/libcrypto.so.3:${binDir}/libedit.so:${binDir}/libncursesw.so.6'")
                 appendLine("SQLCIPHER=\"${binDir}/sqlcipher\"")
-                appendLine("DEC_DB=\"$decDb\"")
-                appendLine("OUT_DB=\"$outDb\"")
-                appendLine("DUMP=\"$dumpPath\"")
-                appendLine("INCR=\"$incrSql\"")
-                appendLine("touch \"\$INCR\"")
                 appendLine("")
-                // Use heredoc inside the shell script to pipe SQL
-                appendLine("\$SQLCIPHER \"\$DEC_DB\" <<'ENDSQL'")
+                appendLine("\$SQLCIPHER \"$decDb\" <<'ENDSQL'")
                 appendLine("PRAGMA key = '$keySql';")
                 appendLine("PRAGMA cipher_compatibility = 3;")
                 appendLine("PRAGMA cipher_page_size = 1024;")
                 appendLine("PRAGMA kdf_iter = 4000;")
                 appendLine("PRAGMA cipher_use_hmac = OFF;")
-                appendLine(".read \"\$DUMP\"")
+                appendLine(".read \"$dumpPath\"")
                 appendLine("")
                 appendLine("-- Apply incremental if exists")
-                appendLine(".read \"\$INCR\"")
+                appendLine(".read \"$incrSql\"")
                 appendLine("")
-                appendLine(".clone \"\$OUT_DB\"")
+                appendLine(".clone \"$outDb\"")
                 appendLine(".quit")
                 appendLine("ENDSQL")
                 appendLine("echo \"OK\"")
@@ -922,7 +922,11 @@ object BackupOrchestrator {
             val result = RootGateways.run(cmd, 3_600_000)
 
             if (!result.isSuccess) {
-                Log.e("wxhook:restore", "DB restore script failed: ${result.stderr}")
+                // 命令带了 2>&1，所以真正的报错在 stdout 里；以前只打 stderr 是空的，
+                // 现场就只剩一句 "DB restore script failed: " 看不出原因。
+                val detail = (result.stdout + result.stderr).trim().replace('\n', ' ').take(500)
+                Log.e("wxhook:restore",
+                    "DB restore script failed (rc=${result.exitCode}, timedOut=${result.timedOut}): $detail")
                 return false
             }
 
