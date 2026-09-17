@@ -155,9 +155,12 @@ object Syncer {
     /**
      * 上传单个包，并在传输期间每秒回调一次进度（tick=true）。
      *
-     * 阿里云盘走 openlistbridge 的 AAR，`upload` 是阻塞调用、没有字节回调 —— 只能显示
-     * 已耗时 + 包大小（进度条用不确定态）；WebDAV 客户端会通过 onBytes 回报真实字节，
-     * 此时进度条转确定态并显示百分比。
+     * 字节进度有两个来源，取较大者：
+     * - WebDAV：客户端通过 onBytes 回报**精确**的已写字节；
+     * - 阿里云盘/AAR：`Openlistbridge.upload` 是阻塞调用、没有回调，改用本 UID 的
+     *   网络发送计数（`TrafficStats.getUidTxBytes`）推算真实已传字节 —— 不依赖任何权限，
+     *   所以进度条是确定态、每秒真的在动，而不是一直转圈。
+     * 计数含协议开销，故按包大小封顶（完成时才置 100%）。
      */
     private fun uploadWithProgress(
         client: CloudClient,
@@ -172,6 +175,8 @@ object Syncer {
         val sent = java.util.concurrent.atomic.AtomicLong(0L)
         val finished = java.util.concurrent.atomic.AtomicBoolean(false)
         val startAt = System.currentTimeMillis()
+        val uid = android.os.Process.myUid()
+        val netBase = runCatching { android.net.TrafficStats.getUidTxBytes(uid) }.getOrDefault(-1L)
         val ticker = Thread {
             while (!finished.get()) {
                 try {
@@ -180,11 +185,16 @@ object Syncer {
                     break
                 }
                 if (finished.get()) break
+                val exact = sent.get()
+                val netDelta = if (netBase >= 0) {
+                    runCatching { android.net.TrafficStats.getUidTxBytes(uid) - netBase }.getOrDefault(0L)
+                } else 0L
+                val moved = maxOf(exact, netDelta).coerceIn(0L, pkgSize)
                 onProgress?.invoke(Progress(
-                    message = tickMessage(pkgName, sent.get(), pkgSize, System.currentTimeMillis() - startAt),
+                    message = tickMessage(pkgName, moved, pkgSize, System.currentTimeMillis() - startAt),
                     current = index,
                     total = count,
-                    bytesSent = sent.get(),
+                    bytesSent = moved,
                     bytesTotal = pkgSize,
                     fileName = pkgName,
                     tick = true,
@@ -196,9 +206,15 @@ object Syncer {
             start()
         }
         return try {
-            kotlinx.coroutines.runBlocking {
+            val r = kotlinx.coroutines.runBlocking {
                 client.upload(File(pkgPath), "$remoteDir/$pkgName") { written, _ -> sent.set(written) }
             }
+            if (r.isSuccess) {
+                onProgress?.invoke(Progress(
+                    "上传完成 $pkgName", index, count, pkgSize, pkgSize, pkgName, tick = true,
+                ))
+            }
+            r
         } finally {
             finished.set(true)
             ticker.interrupt()
@@ -207,9 +223,11 @@ object Syncer {
 
     private fun tickMessage(name: String, sent: Long, total: Long, elapsedMs: Long): String {
         val secs = elapsedMs / 1000
+        val speed = if (secs > 0) sent / secs else 0L
         return if (sent > 0 && total > 0) {
             val pct = (sent * 100 / total).coerceIn(0, 100)
-            "上传 $name $pct% (${BackupManifest.formatSize(sent)}/${BackupManifest.formatSize(total)}) · ${secs}s"
+            "上传 $name $pct% (${BackupManifest.formatSize(sent)}/${BackupManifest.formatSize(total)}" +
+                if (speed > 0) " · ${BackupManifest.formatSize(speed)}/s) · ${secs}s" else ") · ${secs}s"
         } else {
             "上传 $name · 已耗时 ${secs}s · 共 ${BackupManifest.formatSize(total)}"
         }

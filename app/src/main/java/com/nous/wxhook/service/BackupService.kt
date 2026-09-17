@@ -27,8 +27,11 @@ class BackupService : Service() {
         private const val ACTION_RESTORE = "com.nous.wxhook.BACKUP_RESTORE"
         private const val EXTRA_INCREMENTAL = "incremental"
         const val ACTION_FINISH = "com.nous.wxhook.BACKUP_FINISH"
+        const val ACTION_PROGRESS = "com.nous.wxhook.BACKUP_PROGRESS"
         const val EXTRA_OK = "ok"
         const val EXTRA_MSG = "msg"
+        const val EXTRA_PERCENT = "percent"
+        const val EXTRA_DETAIL = "detail"
 
         fun start(ctx: Context, incremental: Boolean) {
             val i = Intent(ctx, BackupService::class.java).apply {
@@ -90,13 +93,20 @@ class BackupService : Service() {
                 updateNotification("sqlcipher检查完成")
                 val cb = object : BackupHookLocal.ProgressCallback {
                     override fun onProgress(current: String, fileCount: Long, totalSize: Long) {
-                        updateNotification(current)
+                        updateNotification(current, currentPercent())
+                        sendProgress(currentPercent(), current)
                         appendLog(current)
                     }
                 }
-                val result = if (incremental) BackupHookLocal.doIncrementalBackup(cb) else BackupHookLocal.doFullBackup(cb)
+                val stagePolling = startStagePolling()
+                val result = try {
+                    if (incremental) BackupHookLocal.doIncrementalBackup(cb) else BackupHookLocal.doFullBackup(cb)
+                } finally {
+                    stagePolling.set(true)
+                    com.nous.wxhook.backup.BackupOrchestrator.ProgressStage.clear()
+                }
                 appendLog((if (result.success) "完成: " else "失败: ") + result.message)
-                updateNotification(result.message)
+                sendProgress(100, result.message)
                 sendBroadcast(Intent(ACTION_FINISH).apply {
                     setPackage(packageName)
                     putExtra(EXTRA_OK, result.success)
@@ -111,6 +121,7 @@ class BackupService : Service() {
                     putExtra(EXTRA_MSG, "服务异常: ${e.message}")
                 })
             }
+            finishNotification()
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ stopSelf() }, 3000)
         }.start()
     }
@@ -141,6 +152,7 @@ class BackupService : Service() {
                 appendLog("重建异常: ${e.message}")
                 updateNotification("重建异常: ${e.message}")
             }
+            finishNotification()
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ stopSelf() }, 3000)
         }.start()
     }
@@ -164,13 +176,20 @@ class BackupService : Service() {
                 updateNotification("正在恢复...")
                 val cb = object : BackupHookLocal.ProgressCallback {
                     override fun onProgress(current: String, fileCount: Long, totalSize: Long) {
-                        updateNotification(current)
+                        updateNotification(current, currentPercent())
+                        sendProgress(currentPercent(), current)
                         appendLog(current)
                     }
                 }
-                val result = BackupHookLocal.doRestore(cb)
+                val stagePolling = startStagePolling()
+                val result = try {
+                    BackupHookLocal.doRestore(cb)
+                } finally {
+                    stagePolling.set(true)
+                    com.nous.wxhook.backup.BackupOrchestrator.ProgressStage.clear()
+                }
                 appendLog(if (result.success) "✅ 恢复成功" else "❌ 恢复失败: ${result.message}")
-                updateNotification(result.message)
+                sendProgress(100, result.message)
                 sendBroadcast(Intent(ACTION_FINISH).apply {
                     setPackage(packageName)
                     putExtra(EXTRA_OK, result.success)
@@ -181,6 +200,7 @@ class BackupService : Service() {
                 appendLog("恢复异常: ${e.message}")
                 updateNotification("恢复异常: ${e.message}")
             }
+            finishNotification()
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ stopSelf() }, 3000)
         }.start()
     }
@@ -224,21 +244,100 @@ class BackupService : Service() {
         return RootGateways.runQuiet(cmd)
     }
 
-    private fun createNotification(text: String): Notification {
+    private fun createNotification(text: String, percent: Int = -1): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(CHANNEL_ID, "备份服务", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setContentTitle("wxhook 备份")
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setOngoing(true)
-            .build()
+        // percent < 0 时不显示进度条（以前的实现一律带不确定进度条 → 一直转圈）
+        if (percent >= 0) builder.setProgress(100, percent, false)
+        return builder.build()
     }
 
-    private fun updateNotification(text: String) {
+    private fun updateNotification(text: String, percent: Int = -1) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, createNotification(text))
+        nm.notify(NOTIFICATION_ID, createNotification(text, percent))
+    }
+
+    /**
+     * 备份结束：撤掉前台状态并**取消通知**。
+     * 以前只 stopSelf()，而 notify() 单独发过的通知不归前台服务管，会一直挂在通知栏闪。
+     */
+    private fun finishNotification() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
+            else @Suppress("DEPRECATION") stopForeground(true)
+        } catch (_: Exception) {
+        }
+        try {
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIFICATION_ID)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** 当前阶段百分比（0..99，完成前不显示 100）。 */
+    private fun currentPercent(): Int {
+        val stage = com.nous.wxhook.backup.BackupOrchestrator.ProgressStage
+        val pct = stage.percent()
+        return if (pct < 0) -1 else pct.coerceIn(0, 99)
+    }
+
+    private fun stageDetail(): String {
+        val stage = com.nous.wxhook.backup.BackupOrchestrator.ProgressStage
+        if (stage.label.isEmpty() || stage.total <= 0) return ""
+        val secs = if (stage.startAt > 0) (System.currentTimeMillis() - stage.startAt) / 1000 else 0
+        val done = com.nous.wxhook.backup.BackupManifest.formatSize(stage.done)
+        val total = com.nous.wxhook.backup.BackupManifest.formatSize(stage.total)
+        return if (stage.unit == "entry") {
+            "${stage.label} ${stage.done}/${stage.total} 个 · ${secs}s"
+        } else {
+            "${stage.label} $done/$total · ${secs}s"
+        }
+    }
+
+    /**
+     * 每秒把 ProgressStage（真实产物大小/打包条目数）刷进通知和 UI 广播。
+     * 数据库基线 dump 和 native 打包这两步都没有回调，只能靠轮询真实信号。
+     */
+    private fun startStagePolling(): java.util.concurrent.atomic.AtomicBoolean {
+        val stop = java.util.concurrent.atomic.AtomicBoolean(false)
+        Thread {
+            while (!stop.get()) {
+                try {
+                    Thread.sleep(1000)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (stop.get()) break
+                val pct = currentPercent()
+                val detail = stageDetail()
+                if (pct >= 0 && detail.isNotEmpty()) {
+                    updateNotification("$pct% · $detail", pct)
+                    sendProgress(pct, detail)
+                }
+            }
+        }.apply {
+            isDaemon = true
+            name = "wxhook-stage-poll"
+            start()
+        }
+        return stop
+    }
+
+    private fun sendProgress(percent: Int, detail: String) {
+        try {
+            sendBroadcast(Intent(ACTION_PROGRESS).apply {
+                setPackage(packageName)
+                putExtra(EXTRA_PERCENT, percent)
+                putExtra(EXTRA_DETAIL, detail)
+            })
+        } catch (_: Exception) {
+        }
     }
 }

@@ -56,14 +56,14 @@ class SyncService : Service() {
                 // Load config and check enabled
                 val config = Syncer.loadConfig()
                 if (!config.isValid) {
-                    result = "WebDAV未配置"; appendLog(result); updateNotification(result); sendResult(false, result)
+                    result = "WebDAV未配置"; appendLog(result); sendResult(false, result); finishNotification()
                     BackupManifest.addRecord(BackupManifest.createRecord(tag, "sync", 0L, 0L, result, durationMs = System.currentTimeMillis() - startTime))
                     return@Thread
                 }
                 // 云同步开关（唯一来源见 SyncSettings；以前这里读 /sdcard 的 remote_config.json，
                 // 与设置页开关写的 settings_config.json 不是同一个文件 → 开关形同虚设）
                 if (!SyncSettings.isRemoteEnabled()) {
-                    result = "同步未启用"; appendLog(result); updateNotification(result); sendResult(false, result)
+                    result = "同步未启用"; appendLog(result); sendResult(false, result); finishNotification()
                     BackupManifest.addRecord(BackupManifest.createRecord(tag, "sync", 0L, 0L, result, durationMs = System.currentTimeMillis() - startTime))
                     return@Thread
                 }
@@ -75,8 +75,9 @@ class SyncService : Service() {
 
                 result = syncResult.message
                 appendLog(result)
-                updateNotification(result)
                 sendResult(syncResult.success, result)
+                // 同步结束：取消通知（以前 stopSelf 后通知还挂在通知栏，带着进度条一直闪）
+                finishNotification()
 
                 // Save sync record
                 BackupManifest.addRecord(BackupManifest.createRecord(tag, "sync",
@@ -98,8 +99,8 @@ class SyncService : Service() {
             } catch (e: Exception) {
                 result = "同步异常: ${e.message}"
                 appendLog(result)
-                updateNotification(result)
                 sendResult(false, result)
+                finishNotification()
                 BackupManifest.addRecord(BackupManifest.createRecord(tag, "sync", 0L, 0L, result, durationMs = System.currentTimeMillis() - startTime))
                 // On error, retry after 30 min if interval is set
                 val intervalMin = try {
@@ -126,6 +127,22 @@ class SyncService : Service() {
 
     private fun stopSelfAfter(delayMs: Long) {
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ stopSelf() }, delayMs)
+    }
+
+    /**
+     * 同步结束：撤前台状态 + 取消通知。
+     * 以前只 stopSelf()，而通知是 notify() 单独发的（不随前台服务消失），
+     * 于是同步结束后通知栏里一直挂着一条带进度条的通知。
+     */
+    private fun finishNotification() {
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Exception) {
+        }
+        try {
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIFICATION_ID)
+        } catch (_: Exception) {
+        }
     }
 
     private fun appendLog(msg: String) {

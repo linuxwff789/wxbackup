@@ -236,6 +236,13 @@ static bool write_tree(TarWriter* tw, const char* dir_src, const char* dir_arc) 
 }
 
 // ── shared write logic ──
+static void write_progress(const std::string& path, size_t done, size_t total) {
+    FILE* f = fopen(path.c_str(), "we");
+    if (!f) return;
+    fprintf(f, "%zu %zu\n", done, total);
+    fclose(f);
+}
+
 static int do_write_tar(const char* output, const char* pairs_path, int mode) {
     FILE* pf = fopen(pairs_path, "re");
     if (!pf) { __android_log_print(ANDROID_LOG_ERROR, "wxhook:archive", "open pairs: %s", strerror(errno)); return -1; }
@@ -257,23 +264,31 @@ static int do_write_tar(const char* output, const char* pairs_path, int mode) {
 
     TarWriter tw;
     if (!tw.open(output, mode)) { return -2; }
+    // 进度 sidecar：<output>.progress 里写 "已处理 总数"，应用侧每秒轮询它换算百分比。
+    // 走文件而不是 JNI 回调 —— 调用方在另一线程轮询，简单且不会拖慢打包。
+    const std::string progress_path = std::string(output) + ".progress";
+    write_progress(progress_path, 0, pairs.size());
     int skipped = 0;
+    size_t done = 0;
     for (const auto& p : pairs) {
         struct stat st;
         if (lstat(p.first.c_str(), &st) != 0) {
             __android_log_print(ANDROID_LOG_WARN, "wxhook:archive", "skip missing %s", p.first.c_str());
             skipped++;
-            continue;
+        } else {
+            bool ok = S_ISDIR(st.st_mode) ? write_tree(&tw, p.first.c_str(), p.second.c_str()) : write_entry(&tw, p.first.c_str(), p.second.c_str());
+            if (!ok) {
+                __android_log_print(ANDROID_LOG_WARN, "wxhook:archive", "write failed %s", p.first.c_str());
+                skipped++;
+            }
         }
-        bool ok = S_ISDIR(st.st_mode) ? write_tree(&tw, p.first.c_str(), p.second.c_str()) : write_entry(&tw, p.first.c_str(), p.second.c_str());
-        if (!ok) {
-            __android_log_print(ANDROID_LOG_WARN, "wxhook:archive", "write failed %s", p.first.c_str());
-            skipped++;
-        }
+        done++;
+        if (done % 16 == 0 || done == pairs.size()) write_progress(progress_path, done, pairs.size());
     }
     tw.write_zero_blocks(2);
     bool closed = tw.close();
     if (!closed) return -4;
+    write_progress(progress_path, pairs.size(), pairs.size());
     __android_log_print(ANDROID_LOG_INFO, "wxhook:archive", "done: %zu entries, %d skipped", pairs.size(), skipped);
     return 0;
 }

@@ -16,6 +16,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Orchestrates the full backup flow: stop → resolve → archive → verify → record.
@@ -27,6 +29,96 @@ object BackupOrchestrator {
     private val ATT_DIRS = listOf(
         "image2", "voice2", "video", "emoji", "avatar", "cdn", "record", "favorite"
     )
+
+    // ── Progress Stage ──
+
+    /**
+     * 备份/恢复的字节级进度状态（给通知的确定态进度条用）。
+     *
+     * 备份流程大部分时间花在「数据库基线 dump」和「打包 tar」这两步：前者是 shell 里的
+     * sqlcipher，后者是 JNI 里的 native 循环，都拿不到回调。这里统一用两个真实信号：
+     * - 输出文件大小：sqlcipher 的 dump、native 的 tar.zst 都在往文件里写；
+     * - 目标文件数：native 写 `<包>.progress` 文件汇报「已处理/总数」。
+     * BackupService 每秒读一次，换算成百分比。
+     */
+    object ProgressStage {
+        @Volatile var label: String = ""
+        @Volatile var done: Long = 0L
+        @Volatile var total: Long = 0L
+        /** "B" = 字节（dump/打包产物大小），"entry" = 打包条目数 */
+        @Volatile var unit: String = ""
+        @Volatile var startAt: Long = 0L
+
+        fun begin(label: String, total: Long, unit: String) {
+            this.label = label
+            this.total = total
+            this.unit = unit
+            this.done = 0L
+            this.startAt = System.currentTimeMillis()
+        }
+
+        fun update(done: Long) { this.done = done }
+
+        fun percent(): Int = if (total > 0) ((done * 100) / total).toInt().coerceIn(0, 100) else -1
+
+        fun clear() {
+            label = ""
+            done = 0L
+            total = 0L
+            unit = ""
+            startAt = 0L
+        }
+    }
+
+    // ── Progress helpers ──
+
+    /**
+     * 在 [block] 执行期间每秒轮询真实信号（产物大小或 native 汇报的条目数），
+     * 写入 [ProgressStage] 供服务/UI 显示确定态进度条。
+     */
+    private fun <T> withStageProgress(
+        label: String,
+        total: Long,
+        unit: String,
+        sampler: (() -> Long)?,
+        block: () -> T,
+    ): T {
+        ProgressStage.begin(label, total, unit)
+        val stop = AtomicBoolean(false)
+        val ticker = if (sampler != null) Thread {
+            while (!stop.get()) {
+                try {
+                    Thread.sleep(1000)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (stop.get()) break
+                runCatching { sampler() }.getOrNull()?.let { ProgressStage.update(it) }
+            }
+        }.apply {
+            isDaemon = true
+            name = "wxhook-stage"
+            start()
+        } else null
+        return try {
+            block()
+        } finally {
+            stop.set(true)
+            ticker?.interrupt()
+            sampler?.let { runCatching { it() }.getOrNull()?.let { d -> ProgressStage.update(d) } }
+        }
+    }
+
+    /** native 打包汇报的 sidecar：`<包>.progress` 里是 "已处理 总数"。 */
+    private fun readTarProgress(progressPath: String): Long {
+        val raw = try {
+            RootGateways.readFile(progressPath).trim()
+        } catch (_: Exception) {
+            ""
+        }
+        if (raw.isEmpty()) return 0L
+        return raw.substringBefore(' ').trim().toLongOrNull() ?: 0L
+    }
 
     // ── Full Backup ──
 
@@ -49,7 +141,12 @@ object BackupOrchestrator {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 callback?.onProgress("[$userHash] 数据库基线...", totalFiles, totalSize)
                 val dbSrc = "$wxBasePath/EnMicroMsg.db"
-                val dumpResult = ArchiveService.decryptAndDump(dbSrc)
+                // 数据库基线是最长的一步（分钟级），用 dump 产物大小 / 库大小做确定态进度
+                val dumpFile = "/data/local/tmp/wxhook_backup/${FullBackupLayout.databaseDumpName()}"
+                val dbSize = runCatching { RootGateways.fileSize(dbSrc) }.getOrDefault(0L)
+                val dumpResult = withStageProgress("数据库基线", dbSize, "B", { RootGateways.fileSize(dumpFile) }) {
+                    ArchiveService.decryptAndDump(dbSrc)
+                }
                 val dumpPath = dumpResult.removePrefix("OK:").takeIf { dumpResult.startsWith("OK:") }
                 if (dumpPath == null) return BackupHookLocal.Result(false, "数据库导出失败: $userHash")
                 databaseSources += NativeArchivePlan.Source(dumpPath, "$userHash/${FullBackupLayout.databaseDumpName()}")
@@ -150,7 +247,10 @@ object BackupOrchestrator {
                 return BackupHookLocal.Result(false, "写入源文件清单失败")
             }
             localPairs.delete()
-            val writeResult = RootGateways.writeTarZstd(tmpPkg, pairsFile, BackupEnv.useZstd())
+            val writeResult = withStageProgress("打包附件", sources.size.toLong(), "entry", { readTarProgress("$tmpPkg.progress") }) {
+                RootGateways.writeTarZstd(tmpPkg, pairsFile, BackupEnv.useZstd())
+            }
+            RootGateways.delete("$tmpPkg.progress")
             val verifyResult = if (writeResult == 0) RootGateways.verifyTarZstd(tmpPkg) else -1
             val pkgSize = BackupEnv.suOut("stat -c %s \"$tmpPkg\" 2>/dev/null").trim().toLongOrNull() ?: 0L
             if (writeResult != 0 || verifyResult <= 0 || pkgSize <= 0L) {
@@ -436,7 +536,12 @@ object BackupOrchestrator {
                 localPairs.writeText(plan.toPairsContent())
                 val copied = RootGateways.copy(localPairs.absolutePath, pairsFile)
                 localPairs.delete()
-                val writeResult = if (copied) RootGateways.writeTarZstd(tmpPkg, pairsFile, BackupEnv.useZstd()) else -1
+                val writeResult = if (copied) {
+                    withStageProgress("打包附件", incrSources.size.toLong(), "entry", { readTarProgress("$tmpPkg.progress") }) {
+                        RootGateways.writeTarZstd(tmpPkg, pairsFile, BackupEnv.useZstd())
+                    }
+                } else -1
+                RootGateways.delete("$tmpPkg.progress")
                 val verifyResult = if (writeResult == 0) RootGateways.verifyTarZstd(tmpPkg) else -1
                 RootGateways.delete(pairsFile)
                 val pkgSize = BackupEnv.backupSize(tmpPkg)

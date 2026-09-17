@@ -39,6 +39,31 @@ class ModuleActivity : AppCompatActivity() {
     private lateinit var syncBar: LinearProgressIndicator
     private lateinit var syncTitleText: TextView
     private lateinit var syncDetailText: TextView
+    private lateinit var backupProgressRow: LinearLayout
+    private lateinit var backupBar: LinearProgressIndicator
+    private lateinit var backupTitleText: TextView
+    private lateinit var backupDetailText: TextView
+    private val backupProgressReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(ctx: android.content.Context?, intent: Intent?) {
+            if (intent?.action == com.nous.wxhook.service.BackupService.ACTION_PROGRESS) {
+                val percent = intent.getIntExtra(com.nous.wxhook.service.BackupService.EXTRA_PERCENT, -1)
+                val detail = intent.getStringExtra(com.nous.wxhook.service.BackupService.EXTRA_DETAIL) ?: ""
+                runOnUiThread {
+                    if (!::backupProgressRow.isInitialized) return@runOnUiThread
+                    backupProgressRow.visibility = android.view.View.VISIBLE
+                    backupDetailText.text = detail
+                    if (percent in 0..100) {
+                        backupBar.isIndeterminate = false
+                        backupBar.setProgressCompat(percent, true)
+                        backupTitleText.text = "备份中 $percent%"
+                    } else {
+                        backupBar.isIndeterminate = true
+                        backupTitleText.text = "备份中..."
+                    }
+                }
+            }
+        }
+    }
     private val backupFinishReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(ctx: android.content.Context?, intent: Intent?) {
             if (intent?.action == com.nous.wxhook.service.BackupService.ACTION_FINISH) {
@@ -56,6 +81,9 @@ class ModuleActivity : AppCompatActivity() {
         ScheduleManager.updateAll(this)
         registerReceiver(backupFinishReceiver,
             android.content.IntentFilter(com.nous.wxhook.service.BackupService.ACTION_FINISH),
+            RECEIVER_NOT_EXPORTED)
+        registerReceiver(backupProgressReceiver,
+            android.content.IntentFilter(com.nous.wxhook.service.BackupService.ACTION_PROGRESS),
             RECEIVER_NOT_EXPORTED)
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             try { requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001) } catch (_: Exception) {}
@@ -85,9 +113,30 @@ class ModuleActivity : AppCompatActivity() {
                             }
                         }
                     }
+                    if (::backupProgressRow.isInitialized) {
+                        if (state.backupRunning) {
+                            // 开始备份后立刻显示（第一条服务广播要等约 1 秒）
+                            if (backupProgressRow.visibility != android.view.View.VISIBLE) {
+                                backupProgressRow.visibility = android.view.View.VISIBLE
+                                backupTitleText.text = "备份中..."
+                                backupDetailText.text = ""
+                                backupBar.isIndeterminate = true
+                            }
+                        } else {
+                            // 备份结束后收起进度区（服务那边同时会取消通知）
+                            backupProgressRow.visibility = android.view.View.GONE
+                            backupBar.isIndeterminate = true
+                        }
+                    }
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        try { unregisterReceiver(backupFinishReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(backupProgressReceiver) } catch (_: Exception) {}
+        super.onDestroy()
     }
 
     // ── helpers ──
@@ -202,6 +251,34 @@ class ModuleActivity : AppCompatActivity() {
         backupCard.addView(primaryButton("全量备份 (DB + 附件)") { viewModel.startBackup(false) })
         backupCard.addView(spacer(10))
         backupCard.addView(outlinedButton("增量备份 (仅新文件)") { viewModel.startBackup(true) })
+
+        // 备份进度（真实信号：数据库 dump 产物大小 / native 打包条目数，由服务每秒广播）
+        backupProgressRow = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = android.view.View.GONE
+            setPadding(0, dp(12), 0, 0)
+        }
+        backupTitleText = TextView(this).apply {
+            textSize = 13f
+            setTextColor(M3.onSurface(this@ModuleActivity))
+        }
+        backupProgressRow.addView(backupTitleText)
+        backupBar = LinearProgressIndicator(
+            this, null, com.google.android.material.R.attr.linearProgressIndicatorStyle
+        ).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(6)
+            ).apply { topMargin = dp(8) }
+        }
+        backupProgressRow.addView(backupBar)
+        backupDetailText = TextView(this).apply {
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
+            setTextColor(M3.onSurfaceVariant(this@ModuleActivity))
+            setPadding(0, dp(6), 0, 0)
+        }
+        backupProgressRow.addView(backupDetailText)
+        backupCard.addView(backupProgressRow)
         root.addView(backupCard)
 
         // ═══ ☁️ 云同步 ═══
