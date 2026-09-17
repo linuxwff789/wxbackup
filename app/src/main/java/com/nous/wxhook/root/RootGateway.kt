@@ -30,6 +30,12 @@ interface RootGateway {
     suspend fun exec(command: String, timeoutMs: Long): CommandResult
     /** Read a file from a tar[.zst|.gz] archive via JNI (runs in root process). */
     suspend fun readFileFromTar(archivePath: String, filePath: String): String
+    /**
+     * root 进程内把包内成员写到 outPath，返回写入字符数（失败 -1）。
+     * 大成员必须用它：readFileFromTar 的回复受 Binder 1MB 上限限制，
+     * file_manifest.json（1.66MB）走那里必然 TransactionTooLargeException。
+     */
+    suspend fun readFileFromTarToPath(archivePath: String, memberPath: String, outPath: String): Long
     /** List files in a tar[.zst|.gz] archive via JNI. */
     suspend fun listTar(archivePath: String): String
     /** Get max rowid from SQL file in a tar archive via JNI. */

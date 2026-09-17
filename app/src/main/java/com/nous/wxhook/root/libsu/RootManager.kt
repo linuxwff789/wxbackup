@@ -109,6 +109,21 @@ object RootManager {
         }
     }
 
+    /**
+     * root 进程内把 tar 包内成员写到 outPath，返回写入字符数（失败 -1）。
+     * 大成员（file_manifest.json >1MB）必须走这条：readFileFromTar 的回复过不了 Binder 1MB 上限。
+     */
+    suspend fun readTarMemberToPath(archivePath: String, memberPath: String, outPath: String): Long =
+        withContext(Dispatchers.IO) {
+            val binder = service ?: return@withContext -1L
+            try {
+                WxRootBinder.readTarMemberToPath(binder, archivePath, memberPath, outPath)
+            } catch (e: Exception) {
+                android.util.Log.e("wxhook:Root", "readTarMemberToPath 失败 $memberPath: ${e.message}")
+                -1L
+            }
+        }
+
     suspend fun readFile(path: String): String = withContext(Dispatchers.IO) {
         val binder = service ?: return@withContext ""
         try { WxRootBinder.readFile(binder, path) } catch (_: Exception) { "" }

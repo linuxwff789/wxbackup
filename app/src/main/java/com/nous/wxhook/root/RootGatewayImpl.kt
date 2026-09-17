@@ -171,6 +171,17 @@ class RootGatewayImpl(private val context: Context? = null) : RootGateway {
         runQuiet(cmd, 30_000)
     }
 
+    override suspend fun readFileFromTarToPath(archivePath: String, memberPath: String, outPath: String): Long =
+        withContext(Dispatchers.IO) {
+            val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder() ?: return@withContext -1L
+            try {
+                com.nous.wxhook.root.libsu.WxRootBinder.readTarMemberToPath(binder, archivePath, memberPath, outPath)
+            } catch (e: Exception) {
+                android.util.Log.e("wxhook:Root", "readFileFromTarToPath 失败: ${e.message}")
+                -1L
+            }
+        }
+
     override suspend fun listTar(archivePath: String): String = withContext(Dispatchers.IO) {
         val binder = com.nous.wxhook.root.libsu.RootManager.currentBinder() ?: return@withContext ""
         com.nous.wxhook.root.libsu.WxRootBinder.listTar(binder, archivePath)

@@ -136,7 +136,7 @@ class SyncService : Service() {
      */
     private fun finishNotification() {
         try {
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopForeground(Service.STOP_FOREGROUND_REMOVE)
         } catch (_: Exception) {
         }
         try {

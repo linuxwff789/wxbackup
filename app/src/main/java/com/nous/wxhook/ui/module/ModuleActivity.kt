@@ -133,12 +133,6 @@ class ModuleActivity : AppCompatActivity() {
         }
     }
 
-    override fun onDestroy() {
-        try { unregisterReceiver(backupFinishReceiver) } catch (_: Exception) {}
-        try { unregisterReceiver(backupProgressReceiver) } catch (_: Exception) {}
-        super.onDestroy()
-    }
-
     // ── helpers ──
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -411,5 +405,9 @@ class ModuleActivity : AppCompatActivity() {
     }
 
     override fun onSupportNavigateUp(): Boolean { finish(); return true }
-    override fun onDestroy() { runCatching { unregisterReceiver(backupFinishReceiver) }; super.onDestroy() }
+    override fun onDestroy() {
+        runCatching { unregisterReceiver(backupFinishReceiver) }
+        runCatching { unregisterReceiver(backupProgressReceiver) }
+        super.onDestroy()
+    }
 }

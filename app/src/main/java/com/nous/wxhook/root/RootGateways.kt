@@ -32,6 +32,9 @@ object RootGateways {
         runBlocking { gateway.verifyTarZstd(archivePath) }
     fun readFileFromTar(archivePath: String, filePath: String): String =
         runBlocking { gateway.readFileFromTar(archivePath, filePath) }
+    /** root 进程内把包内成员写到 outPath（大成员专用，不过 Binder 回复）。返回写入字符数，失败 -1。 */
+    fun readFileFromTarToPath(archivePath: String, memberPath: String, outPath: String): Long =
+        runBlocking { gateway.readFileFromTarToPath(archivePath, memberPath, outPath) }
     fun listTar(archivePath: String): String =
         runBlocking { gateway.listTar(archivePath) }
     fun getTarSqlMaxRowId(archivePath: String, filePath: String): Long =

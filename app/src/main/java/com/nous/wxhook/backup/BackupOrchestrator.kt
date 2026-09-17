@@ -752,7 +752,7 @@ object BackupOrchestrator {
                 for (cp in bestChain) {
                     val arcPath = File(BackupEnv.backupDataDir, cp.name).absolutePath
                     try {
-                        val json = try { NativeArchive.readFileFromTar(arcPath, "${hash}/file_manifest.json") } catch (e: Throwable) { "" }
+                        val json = try { com.nous.wxhook.backup.TarMemberReader.readText(arcPath, "${hash}/file_manifest.json") } catch (e: Throwable) { "" }
                         if (json.isNotBlank()) {
                             val manifest = JSONObject(json)
                             val files = manifest.optJSONArray("files") ?: manifest.optJSONArray("entries")

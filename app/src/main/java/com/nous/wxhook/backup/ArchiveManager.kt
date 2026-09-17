@@ -159,10 +159,10 @@ object ArchiveManager {
                 if (cfgRaw.isNotBlank()) password = JSONObject(cfgRaw).optString("password", password)
             } catch (_: Exception) {}
 
-            // 附件统计：JNI 读 file_manifest.json（包前部，快），不 listTar
+            // 附件统计：读包内 file_manifest.json（大成员，走 TarMemberReader 不过 Binder 回复）
             var counts = emptyMap<String, Int>()
             try {
-                val manRaw = RootGateways.readFileFromTar(pkg.absolutePath, "$hash/file_manifest.json")
+                val manRaw = TarMemberReader.readText(pkg.absolutePath, "$hash/file_manifest.json")
                 if (manRaw.isNotBlank()) {
                     val man = JSONObject(manRaw)
                     val files = man.optJSONArray("files") ?: JSONArray()

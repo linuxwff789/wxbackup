@@ -13,7 +13,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
     override fun asBinder(): android.os.IBinder = this
 
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-        if (code in TRANSACTION_EXEC..TRANSACTION_SCAN_ATTACHMENTS) {
+        if (code in TRANSACTION_EXEC..TRANSACTION_READ_TAR_MEMBER_TO_PATH) {
             data.enforceInterface(DESCRIPTOR)
         }
         return when (code) {
@@ -150,6 +150,31 @@ class WxRootBinder : android.os.Binder(), IInterface {
                 }
                 reply?.writeNoException()
                 reply?.writeString(result)
+                true
+            }
+            TRANSACTION_READ_TAR_MEMBER_TO_PATH -> {
+                // 大成员（file_manifest.json 已 1.66MB）不能经 Binder 回复返回：
+                // 在 root 进程内用 JNI 读出后写到 outPath，只回传字节数。
+                val archivePath = data.readString()
+                val memberPath = data.readString()
+                val outPath = data.readString()
+                val written = try {
+                    val content = NativeArchive.readFileFromTar(archivePath ?: "", memberPath ?: "")
+                    if (content.isEmpty()) {
+                        0
+                    } else {
+                        val f = File(outPath!!)
+                        f.parentFile?.mkdirs()
+                        f.writeText(content)
+                        f.setReadable(true, false)
+                        content.length.toLong()
+                    }
+                } catch (e: Throwable) {
+                    Log.e("wxhook:archive", "readTarMemberToPath failed", e)
+                    -1L
+                }
+                reply?.writeNoException()
+                reply?.writeLong(written)
                 true
             }
             TRANSACTION_LIST_TAR -> {
@@ -340,6 +365,7 @@ class WxRootBinder : android.os.Binder(), IInterface {
         const val TRANSACTION_POLL_FULL_ARCHIVE_ROWID = android.os.IBinder.FIRST_CALL_TRANSACTION + 17
         const val TRANSACTION_COUNT_FILES = android.os.IBinder.FIRST_CALL_TRANSACTION + 18
         const val TRANSACTION_SCAN_ATTACHMENTS = android.os.IBinder.FIRST_CALL_TRANSACTION + 19
+        const val TRANSACTION_READ_TAR_MEMBER_TO_PATH = android.os.IBinder.FIRST_CALL_TRANSACTION + 20
         private const val DESCRIPTOR = "com.nous.wxhook.root.libsu.WxRootBinder"
 
         fun exec(shell: android.os.IBinder, command: String): ExecResult {
@@ -495,6 +521,27 @@ class WxRootBinder : android.os.Binder(), IInterface {
             shell,
             TRANSACTION_READ_FILE_FROM_TAR,
         ) { data -> data.writeString(archivePath); data.writeString(filePath) }
+
+        /**
+         * root 进程内把包内成员写到 outPath，返回写入的字符数（失败 -1）。
+         * 用于大成员：`readFileFromTar` 走 `reply.writeString`，超 1MB 必抛 TransactionTooLargeException。
+         */
+        fun readTarMemberToPath(shell: android.os.IBinder, archivePath: String, memberPath: String, outPath: String): Long {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DESCRIPTOR)
+                data.writeString(archivePath)
+                data.writeString(memberPath)
+                data.writeString(outPath)
+                shell.transact(TRANSACTION_READ_TAR_MEMBER_TO_PATH, data, reply, 0)
+                reply.readException()
+                return reply.readLong()
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
+        }
 
         fun listTar(shell: android.os.IBinder, archivePath: String): String = transactString(
             shell,
