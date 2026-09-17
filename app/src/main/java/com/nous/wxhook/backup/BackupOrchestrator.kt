@@ -191,7 +191,7 @@ object BackupOrchestrator {
             val sourceFiles = wxPaths.flatMap { wxBasePath ->
                 val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val prevBytes = runCatching {
-                    BackupEnv.fileSize(File(BackupEnv.backupDataDir, "$hash/file_manifest.json").absolutePath)
+                    BackupEnv.backupSize(File(BackupEnv.backupDataDir, "$hash/file_manifest.json").absolutePath)
                 }.getOrDefault(0L)
                 withStageProgress("扫描附件", prevBytes, "B", { RootGateways.fileSize(scanOut) }) {
                     FileManifest.scanWeChatAttachments(wxBasePath, hash, ATT_DIRS)
@@ -379,7 +379,7 @@ object BackupOrchestrator {
                 val userDir = File(BackupEnv.backupDataDir, userHash)
                 callback?.onProgress("[${userHash}] 扫描附件清单...", totalFiles, totalSize)
                 val prevBytes = runCatching {
-                    BackupEnv.fileSize(File(userDir, "file_manifest.json").absolutePath)
+                    BackupEnv.backupSize(File(userDir, "file_manifest.json").absolutePath)
                 }.getOrDefault(0L)
                 val currentFiles = withStageProgress(
                     "扫描附件", prevBytes, "B",
