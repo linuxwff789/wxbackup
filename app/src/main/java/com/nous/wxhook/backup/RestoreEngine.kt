@@ -136,49 +136,37 @@ object RestoreEngine {
     // ── DB Merge ──
 
     /**
-     * Merge archive's baseline SQL dump with phone's current encrypted DB.
-     * Uses sqlcipher to ATTACH both, INSERT OR IGNORE from baseline into a copy of phone DB.
+     * 把存档 SQL 合并进「手机库的副本」—— **union 语义**：手机现有数据全部保留，存档历史补进来。
      *
-     * @param archivePath path to extracted archive directory (contains _baseline.sql)
-     * @param phoneDbPath path to current phone EnMicroMsg.db
-     * @param outputPath  where to write the merged result
-     * @param password    encryption key
-     * @return outputPath on success, null on failure
+     * 这是两条恢复入口（存档管理 / 备份管理）共用的**唯一**合并实现：
+     * - baseline SQL（全量包的 `.dump`）按 `msgSvrId` 去重 + `msgId` 重编号后补入；
+     * - 增量 SQL（`incr_X_to_Y.sql`）改写成 `INSERT OR IGNORE` 后按时间顺序补入。
+     *
+     * @param baselineSql  全量包解出来的 baseline dump 路径（可空）
+     * @param incrSqlPaths 增量包解出来的 incr sql 路径（按时间升序）
+     * @param phoneDbPath  手机当前 EnMicroMsg.db（只读，不改动）
+     * @param outputPath   输出：合并后的加密库
      */
-    fun mergeDb(
-        archivePath: String,
+    fun mergePhoneWithArchive(
+        baselineSql: String?,
+        incrSqlPaths: List<String>,
         phoneDbPath: String,
         outputPath: String,
         password: String,
-    ): String? {
-        Log.i(TAG, "mergeDb: archive=$archivePath phone=$phoneDbPath out=$outputPath")
-
-        // Find baseline SQL
-        val dir = File(archivePath)
-        val baselineSql = dir.listFiles()?.find { it.name.endsWith("_baseline.sql") }
-        if (baselineSql == null) {
-            Log.w(TAG, "mergeDb: no _baseline.sql found in $archivePath")
-            // Fallback: just copy phone DB as-is, no merge
-            Log.i(TAG, "mergeDb: no baseline, copying phone DB directly")
-            val r = RootGateways.run("cp '$phoneDbPath' '$outputPath'", 30_000)
-            return if (r.isSuccess) outputPath else null
+        progress: ((String) -> Unit)? = null,
+    ): Boolean {
+        if (baselineSql.isNullOrBlank() && incrSqlPaths.isEmpty()) {
+            Log.e(TAG, "mergePhoneWithArchive: 没有可用的存档 SQL")
+            return false
         }
-        Log.i(TAG, "mergeDb: baseline SQL=${baselineSql.name} size=${baselineSql.length()}")
-
-        // Build merge SQL script
         val pw = password.replace("'", "''")
-        // 转换 dump：
-        //  - CREATE TABLE/INDEX → IF NOT EXISTS（避免与手机已有表冲突）
-        //  - message 表特殊处理：msgId 是 INTEGER PRIMARY KEY 且局部重用，按 msgId 去重
-        //    会丢掉几乎全部备份消息——必须按全局唯一的 msgSvrId 去重，并给新行重新编号
-        //    msgId = 手机 max(msgId) + 递增
-        //  - 其他表 INSERT INTO → INSERT OR IGNORE（主键去重）
-        val workDir = "/data/local/tmp/wxhook_restore"
-        val convertedSql = "$workDir/baseline_converted.sql"
+        // 独立 scratch：调用方解出来的 SQL/附件都在 /data/local/tmp/wxhook_restore 下，
+        // 这里绝不能整目录 rm，否则把待合并的 SQL 一起删了
+        val workDir = "/data/local/tmp/wxhook_restore/merge"
         RootGateways.run("rm -rf $workDir && mkdir -p $workDir", 10_000)
+        Log.i(TAG, "mergePhoneWithArchive: baseline=${baselineSql ?: "(none)"} incr=${incrSqlPaths.size} 个")
 
-        // 1. 查询手机 DB 的 message/ImgInfo2 的 msgSvrId 集合 + max(id)（只读，不改动手机 DB）
-        //    message 用 M 前缀、ImgInfo2 用 I 前缀，合并到一个文件供 awk 区分
+        // 1. 查询手机 DB 的 message/ImgInfo2 的 msgSvrId 集合 + max(id)（只读）
         val svrIdsFile = "$workDir/phone_msg_svr.txt"
         val maxIdFile = "$workDir/phone_max_msgid.txt"
         val queryScript = """
@@ -204,26 +192,24 @@ SELECT max(id) FROM ImgInfo2;
         val maxMsgId = maxLines.getOrNull(0)?.toLongOrNull() ?: 0L
         val maxImgId = maxLines.getOrNull(1)?.toLongOrNull() ?: 0L
         if (maxMsgId <= 0L) {
-            Log.e(TAG, "mergeDb: cannot read phone max(msgId) (phone db query failed: ${qr.stdout.take(200)})")
-            return null
+            Log.e(TAG, "mergePhoneWithArchive: 读不到手机 max(msgId)（查询失败: ${qr.stdout.take(200)}）")
+            return false
         }
-        Log.i(TAG, "mergeDb: phone maxMsgId=$maxMsgId maxImgId=$maxImgId, svrIds 行数=${RootGateways.runQuiet("wc -l < '$svrIdsFile'").trim()}")
+        Log.i(TAG, "mergePhoneWithArchive: phone maxMsgId=$maxMsgId maxImgId=$maxImgId")
 
-        // 2. awk 转换 dump（posix 语法，兼容 toybox awk；只解析行首两个整数，不碰 unistr 内容）
-        //    - message：按 msgSvrId(M 前缀集合) 去重，msgId 重编号（maxMsgId+递增）
-        //    - ImgInfo2：同样按 msgSvrId(I 前缀集合) 去重，id 重编号（maxImgId+递增）
-        //    - 其他表：INSERT OR IGNORE
-        //    - 批量 commit：每 10000 条 INSERT 插入 COMMIT/BEGIN，防大事务 OOM
-        val awkFile = "$workDir/convert.awk"
-        val awkScript = """
+        // 2. baseline dump 转换（CREATE → IF NOT EXISTS；message/ImgInfo2 按 msgSvrId 去重 + 主键重编号）
+        val convertedSql = "$workDir/baseline_converted.sql"
+        if (!baselineSql.isNullOrBlank()) {
+            val awkFile = "$workDir/convert.awk"
+            val awkScript = """
 FNR==NR {
     if (substr($1,1,1) == "M") svrM[substr($1,2)] = 1
     else if (substr($1,1,1) == "I") svrI[substr($1,2)] = 1
     next
 }
 /^CREATE TABLE / { sub(/CREATE TABLE /, "CREATE TABLE IF NOT EXISTS "); print; next }
-/^CREATE UNIQUE INDEX / { sub(/CREATE UNIQUE INDEX /, "CREATE UNIQUE INDEX IF NOT EXISTS "); print; next }
-/^CREATE INDEX / { sub(/CREATE INDEX /, "CREATE INDEX IF NOT EXISTS "); print; next }
+/^CREATE UNIQUE INDEX / { sub(/^CREATE UNIQUE INDEX /, "CREATE UNIQUE INDEX IF NOT EXISTS "); print; next }
+/^CREATE INDEX / { sub(/^CREATE INDEX /, "CREATE INDEX IF NOT EXISTS "); print; next }
 /^INSERT INTO message VALUES\(/ {
     pos = index($0, "VALUES(") + 7
     s = substr($0, pos)
@@ -255,136 +241,72 @@ FNR==NR {
 }
 /^INSERT INTO / { sub(/INSERT INTO /, "INSERT OR IGNORE INTO "); print; if (++cnt % 10000 == 0) { print "COMMIT;"; print "BEGIN TRANSACTION;"; } next }
 { print }
-"""
-        RootGateways.writeFile(awkFile, awkScript)
-        val convertResult = RootGateways.run(
-            "awk -v maxid=$maxMsgId -v maximgid=$maxImgId -f '$awkFile' '$svrIdsFile' '${baselineSql.absolutePath}' > '$convertedSql'",
-            600_000
-        )
-        if (!convertResult.isSuccess || RootGateways.runQuiet("test -s '$convertedSql' && echo 1 || echo 0").trim() != "1") {
-            Log.e(TAG, "mergeDb: dump convert failed: ${convertResult.stderr.take(300)}")
-            return null
-        }
-        Log.i(TAG, "mergeDb: converted dump 行数=${RootGateways.runQuiet("wc -l < '$convertedSql'").trim()}, COMMIT 批数=${RootGateways.runQuiet("grep -c '^COMMIT;' '$convertedSql'").trim()}")
-
-        val script = """
-.output /dev/null
-PRAGMA key='$pw';
-PRAGMA cipher_compatibility=3;
-PRAGMA cipher_page_size=1024;
-PRAGMA kdf_iter=4000;
-PRAGMA cipher_use_hmac=OFF;
-
--- Create output as copy of phone DB
-.save '$outputPath'
-.open '$outputPath'
-PRAGMA key='$pw';
-PRAGMA cipher_compatibility=3;
-PRAGMA cipher_page_size=1024;
-PRAGMA kdf_iter=4000;
-PRAGMA cipher_use_hmac=OFF;
-
--- Apply baseline dump (converted: IF NOT EXISTS + OR IGNORE)
-.read '$convertedSql'
-
--- Stats
-SELECT 'merged' AS stat, count(*) AS cnt FROM message;
-.quit
 """.trimIndent()
+            RootGateways.writeFile(awkFile, awkScript)
+            progress?.invoke("🔗 转换基线 SQL...")
+            val convertResult = RootGateways.run(
+                "awk -v maxid=$maxMsgId -v maximgid=$maxImgId -f '$awkFile' '$svrIdsFile' '$baselineSql' > '$convertedSql'",
+                900_000
+            )
+            if (!convertResult.isSuccess || RootGateways.runQuiet("test -s '$convertedSql' && echo 1 || echo 0").trim() != "1") {
+                Log.e(TAG, "mergePhoneWithArchive: baseline 转换失败: ${convertResult.stderr.take(300)}")
+                return false
+            }
+            Log.i(TAG, "mergePhoneWithArchive: baseline 转换完成 行数=${RootGateways.runQuiet("wc -l < '$convertedSql'").trim()}")
+        }
 
+        // 3. 增量 SQL：INSERT → INSERT OR IGNORE，按时间顺序拼到一个文件
+        val incrConverted = "$workDir/incr_converted.sql"
+        if (incrSqlPaths.isNotEmpty()) {
+            RootGateways.run("rm -f '$incrConverted' && touch '$incrConverted'", 5_000)
+            for (incr in incrSqlPaths) {
+                RootGateways.run(
+                    "sed 's/^INSERT INTO /INSERT OR IGNORE INTO /' '$incr' >> '$incrConverted'",
+                    900_000
+                )
+            }
+            Log.i(TAG, "mergePhoneWithArchive: 增量 SQL ${incrSqlPaths.size} 个 行数=${RootGateways.runQuiet("wc -l < '$incrConverted'").trim()}")
+        }
+
+        // 4. 合并：以手机库副本为底（.save），依次 .read 基线与增量
+        val script = buildString {
+            appendLine(".output /dev/null")
+            appendLine("PRAGMA key='$pw';")
+            appendLine("PRAGMA cipher_compatibility=3;")
+            appendLine("PRAGMA cipher_page_size=1024;")
+            appendLine("PRAGMA kdf_iter=4000;")
+            appendLine("PRAGMA cipher_use_hmac=OFF;")
+            appendLine("")
+            appendLine("-- 输出 = 手机库副本（union 语义：手机数据保留）")
+            appendLine(".save '$outputPath'")
+            appendLine(".open '$outputPath'")
+            appendLine("PRAGMA key='$pw';")
+            appendLine("PRAGMA cipher_compatibility=3;")
+            appendLine("PRAGMA cipher_page_size=1024;")
+            appendLine("PRAGMA kdf_iter=4000;")
+            appendLine("PRAGMA cipher_use_hmac=OFF;")
+            if (!baselineSql.isNullOrBlank()) appendLine(".read '$convertedSql'")
+            if (incrSqlPaths.isNotEmpty()) appendLine(".read '$incrConverted'")
+            appendLine("SELECT 'merged' AS stat, count(*) AS cnt FROM message;")
+            appendLine(".quit")
+        }
         val sqlFile = "/data/local/tmp/wxhook_merge_${System.currentTimeMillis()}.sql"
-        RootGateways.run("cat > '$sqlFile' << 'MERGEEOF'\n$script\nMERGEEOF", 5_000)
-
+        RootGateways.writeFile(sqlFile, script)
+        progress?.invoke("🔗 合并数据库（手机 ∪ 存档）...")
         val r = RootGateways.run(
             "cd $TOOLS_DIR && LD_LIBRARY_PATH=$TOOLS_DIR $SQLCIPHER < '$sqlFile' 2>&1 | tail -20",
-            600_000
+            1_800_000
         )
         RootGateways.run("rm -f '$sqlFile' 2>/dev/null")
-
         if (!r.isSuccess) {
-            Log.e(TAG, "mergeDb: sqlcipher failed: ${r.stderr.take(200)}")
-            return null
-        }
-
-        val merged = RootGateways.runQuiet("test -s '$outputPath' && echo 1 || echo 0").trim()
-        if (merged != "1") {
-            Log.e(TAG, "mergeDb: output file empty or missing")
-            return null
-        }
-
-        val size = RootGateways.runQuiet("stat -c %s '$outputPath' 2>/dev/null").trim()
-        Log.i(TAG, "mergeDb: done, output size=$size")
-        return outputPath
-    }
-
-    // ── Full restore ──
-
-    /**
-     * Run the full restore flow:
-     * 1. Merge DB (archive baseline + phone current → merged)
-     * 2. Replace phone's EnMicroMsg.db
-     * 3. Copy attachments from archive to phone
-     *
-     * @param archive the selected archive info
-     * @param progress callback for UI updates (runs on calling thread)
-     */
-    fun restore(
-        archive: ArchiveInfo,
-        progress: ((String) -> Unit)? = null,
-    ): Boolean {
-        // 选中时不再整包解压；恢复前确保解压完成
-        val usable = ArchiveManager.ensureExtracted(archive)
-        if (usable == null) {
-            progress?.invoke("❌ 存档解压失败，无法恢复")
-            Log.e(TAG, "restore: extract failed for ${archive.tag}")
+            Log.e(TAG, "mergePhoneWithArchive: sqlcipher 失败: ${r.stderr.take(200)}")
             return false
         }
-        progress?.invoke("✅ 存档解压完成")
-        val tag = archive.tag
-        val pwd = archive.password
-        val mergedPath = "/sdcard/Download/wxhook_backup/merged_${tag}_${System.currentTimeMillis()}.db"
-        // 微信 uid 动态取（重装/换机会变），后面 DB/.ini/附件统一用它
-        val owner = wechatOwner()
-        Log.i(TAG, "restore: wechat owner=$owner")
-
-        progress?.invoke("🔗 合并数据库...")
-        Log.i(TAG, "restore: starting restore for $tag path=${usable.path}")
-
-        // Step 1: Merge
-        val merged = mergeDb(usable.path, PHONE_DB, mergedPath, pwd)
-        if (merged == null) {
-            Log.e(TAG, "restore: merge failed")
-            progress?.invoke("❌ 合并失败")
+        if (RootGateways.runQuiet("test -s '$outputPath' && echo 1 || echo 0").trim() != "1") {
+            Log.e(TAG, "mergePhoneWithArchive: 输出为空")
             return false
         }
-        progress?.invoke("✅ 数据库合并完成")
-
-        // Step 2: Replace
-        progress?.invoke("💾 替换手机 DB...")
-        Log.i(TAG, "restore: replacing phone DB")
-        if (!replaceDb(merged, pwd, owner)) {
-            Log.e(TAG, "restore: replaceDb failed")
-            progress?.invoke("❌ DB 替换失败")
-            return false
-        }
-        progress?.invoke("✅ DB 替换完成")
-        // 合并产物是 2GB 级，恢复完就删，别在备份目录里堆着
-        RootGateways.run("rm -f '$mergedPath' 2>/dev/null", 60_000)
-
-        // Step 3: Attachments
-        // 不按 totalAttachmentFiles 判断：清单读失败时它是 0，会导致附件被整段跳过。
-        // copyAttachments 自己会跳过存档里没有的目录。
-        progress?.invoke("📁 复制附件...")
-        Log.i(TAG, "restore: copying attachments (manifest 声明 ${archive.totalAttachmentFiles} 个)")
-        copyAttachments(usable.path, owner)
-        progress?.invoke("✅ 附件复制完成")
-
-        // Step 4: Remove corrupted dir
-        RootGateways.run("rm -rf '$PHONE_MM_DIR/corrupted' 2>/dev/null")
-        Log.i(TAG, "restore: cleared corrupted/ dir")
-
-        progress?.invoke("✅ 恢复完成，可启动微信验证")
-        Log.i(TAG, "restore: complete for $tag")
+        Log.i(TAG, "mergePhoneWithArchive: done size=${RootGateways.runQuiet("stat -c %s '$outputPath' 2>/dev/null").trim()} (${r.stdout.trim().takeLast(80)})")
         return true
     }
 }

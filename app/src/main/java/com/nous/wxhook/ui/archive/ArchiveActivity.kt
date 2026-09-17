@@ -12,7 +12,6 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
 import com.nous.wxhook.backup.ArchiveManager
 import com.nous.wxhook.backup.ArchiveManager.ArchiveInfo
-import com.nous.wxhook.backup.RestoreEngine
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.service.CloudDownloadService
 import com.nous.wxhook.sync.Syncer
@@ -39,6 +38,38 @@ class ArchiveActivity : AppCompatActivity() {
         }
     }
     private var rootLayout: LinearLayout? = null
+    /** 恢复进度输出到的日志视图（由前台服务广播驱动） */
+    private var restoreLogView: TextView? = null
+    private val restoreReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(ctx: android.content.Context?, intent: android.content.Intent?) {
+            when (intent?.action) {
+                com.nous.wxhook.service.BackupService.ACTION_PROGRESS -> {
+                    val pct = intent.getIntExtra(com.nous.wxhook.service.BackupService.EXTRA_PERCENT, -1)
+                    val detail = intent.getStringExtra(com.nous.wxhook.service.BackupService.EXTRA_DETAIL) ?: ""
+                    if (detail.isBlank()) return
+                    val line = if (pct in 0..100) "[$pct%] $detail" else detail
+                    runOnUiThread {
+                        val v = restoreLogView ?: return@runOnUiThread
+                        val lines = v.text.split("\n")
+                        // 进度行原地替换，不刷屏
+                        if (lines.lastOrNull()?.startsWith("[") == true) {
+                            v.text = (lines.dropLast(1) + line).joinToString("\n")
+                        } else {
+                            v.append("\n$line")
+                        }
+                    }
+                }
+                com.nous.wxhook.service.BackupService.ACTION_FINISH -> {
+                    val ok = intent.getBooleanExtra(com.nous.wxhook.service.BackupService.EXTRA_OK, false)
+                    val msg = intent.getStringExtra(com.nous.wxhook.service.BackupService.EXTRA_MSG) ?: ""
+                    runOnUiThread {
+                        restoreLogView?.append(if (ok) "\n\n✅ 恢复完成：$msg" else "\n\n❌ 恢复失败：$msg")
+                    }
+                    refreshList(rootLayout ?: return)
+                }
+            }
+        }
+    }
     /** 多选高亮的存档 tag 集合（内存态，单击切换，长按出详情操作）。 */
     private val selectedTags = LinkedHashSet<String>()
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -109,9 +140,24 @@ class ArchiveActivity : AppCompatActivity() {
             filter.addAction(CloudDownloadService.ACTION_FINISH)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 registerReceiver(downloadFinishReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+                registerReceiver(
+                    restoreReceiver,
+                    android.content.IntentFilter().apply {
+                        addAction(com.nous.wxhook.service.BackupService.ACTION_PROGRESS)
+                        addAction(com.nous.wxhook.service.BackupService.ACTION_FINISH)
+                    },
+                    android.content.Context.RECEIVER_NOT_EXPORTED
+                )
             } else {
                 @Suppress("DEPRECATION")
                 registerReceiver(downloadFinishReceiver, filter)
+                registerReceiver(
+                    restoreReceiver,
+                    android.content.IntentFilter().apply {
+                        addAction(com.nous.wxhook.service.BackupService.ACTION_PROGRESS)
+                        addAction(com.nous.wxhook.service.BackupService.ACTION_FINISH)
+                    }
+                )
             }
         }
     }
@@ -119,6 +165,7 @@ class ArchiveActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         try { unregisterReceiver(downloadFinishReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(restoreReceiver) } catch (_: Exception) {}
     }
 
     override fun onSupportNavigateUp(): Boolean { finish(); return true }
@@ -566,39 +613,24 @@ class ArchiveActivity : AppCompatActivity() {
     }
 
     private fun doRestore(archive: ArchiveInfo) {
+        // 统一实现：交给前台服务跑（与「备份管理 → 从备份恢复微信」同一条引擎），
+        // 好处是离开页面/息屏也不会中断，进度走通知 + 本页日志。
         val logCard = cardBg()
-        logCard.id = View.generateViewId()
-        val logView = TextView(this).apply { textSize = 13f; typeface = Typeface.MONOSPACE; minLines = 5 }
         logCard.addView(TextView(this).apply { text = "📝 恢复日志"; textSize = 17f; typeface = Typeface.DEFAULT_BOLD })
-        logCard.addView(logView)
-        val root = findViewById<LinearLayout>(android.R.id.content).getChildAt(0) as? android.widget.ScrollView
-        root?.let { sv ->
-            val ll = sv.getChildAt(0) as? LinearLayout
-            ll?.addView(logCard)
+        val logView = TextView(this).apply {
+            textSize = 13f; typeface = Typeface.MONOSPACE; minLines = 5
+            text = "⏳ 已提交恢复任务（${archive.tag}）..."
         }
+        restoreLogView = logView
+        logCard.addView(logView)
+        val sv = findViewById<LinearLayout>(android.R.id.content).getChildAt(0) as? android.widget.ScrollView
+        (sv?.getChildAt(0) as? LinearLayout)?.addView(logCard)
 
-        Thread {
-            try {
-                runOnUiThread { logView.text = "⏳ 停止微信..." }
-                Log.i(TAG, "doRestore: force-stopping WeChat")
-                RootGateways.run("am force-stop com.tencent.mm 2>/dev/null")
-                Thread.sleep(1000)
-
-                val result = RestoreEngine.restore(archive) { msg ->
-                    runOnUiThread {
-                        logView.append("\n$msg")
-                        Log.d(TAG, "restore progress: $msg")
-                    }
-                }
-
-                runOnUiThread {
-                    if (result) logView.append("\n\n✅ 恢复完成！请启动微信验证")
-                    else logView.append("\n\n❌ 恢复失败，查看日志")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "doRestore: ${e.message}", e)
-                runOnUiThread { logView.append("\n❌ ${e.message}") }
-            }
-        }.start()
+        try {
+            com.nous.wxhook.service.BackupService.startRestore(this, archive.tag)
+        } catch (e: Exception) {
+            logView.append("\n❌ 启动恢复服务失败: ${e.message}")
+            Log.e(TAG, "doRestore: start service failed", e)
+        }
     }
 }

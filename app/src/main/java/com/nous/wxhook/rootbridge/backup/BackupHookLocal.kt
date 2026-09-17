@@ -48,8 +48,9 @@ object BackupHookLocal {
     fun rebuildDbState(): String =
         BackupOrchestrator.rebuildDbState()
 
-    fun doRestore(callback: ProgressCallback? = null): Result =
-        BackupOrchestrator.doRestore(callback)
+    /** @param targetTag 指定存档（存档管理长按的包）；null = 自动取最新链（备份管理） */
+    fun doRestore(callback: ProgressCallback? = null, targetTag: String? = null): Result =
+        BackupOrchestrator.doRestore(callback, targetTag)
 
     fun setCompressionUseZstd(enabled: Boolean) =
         BackupManifest.setCompressionUseZstd(enabled)

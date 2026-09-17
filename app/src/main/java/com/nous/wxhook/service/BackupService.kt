@@ -28,6 +28,7 @@ class BackupService : Service() {
         private const val EXTRA_INCREMENTAL = "incremental"
         const val ACTION_FINISH = "com.nous.wxhook.BACKUP_FINISH"
         const val ACTION_PROGRESS = "com.nous.wxhook.BACKUP_PROGRESS"
+        const val EXTRA_RESTORE_TAG = "restore_tag"
         const val EXTRA_OK = "ok"
         const val EXTRA_MSG = "msg"
         const val EXTRA_PERCENT = "percent"
@@ -48,9 +49,11 @@ class BackupService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i) else ctx.startService(i)
         }
 
-        fun startRestore(ctx: Context) {
+        /** @param targetTag 指定存档（存档管理长按的包）；null = 自动取最新链（备份管理） */
+        fun startRestore(ctx: Context, targetTag: String? = null) {
             val i = Intent(ctx, BackupService::class.java).apply {
                 action = ACTION_RESTORE
+                if (targetTag != null) putExtra(EXTRA_RESTORE_TAG, targetTag)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i) else ctx.startService(i)
         }
@@ -65,7 +68,7 @@ class BackupService : Service() {
         } else if (intent?.action == ACTION_REBUILD) {
             startRebuild()
         } else if (intent?.action == ACTION_RESTORE) {
-            startRestore()
+            startRestore(intent.getStringExtra(EXTRA_RESTORE_TAG))
         }
         return START_NOT_STICKY
     }
@@ -163,7 +166,7 @@ class BackupService : Service() {
         }.start()
     }
 
-    private fun startRestore() {
+    private fun startRestore(targetTag: String? = null) {
         try {
             startForeground(NOTIFICATION_ID, createNotification("准备从备份恢复..."))
         } catch (e: Exception) {
@@ -189,7 +192,7 @@ class BackupService : Service() {
                 }
                 val stagePolling = startStagePolling()
                 val result = try {
-                    BackupHookLocal.doRestore(cb)
+                    BackupHookLocal.doRestore(cb, targetTag)
                 } finally {
                     stagePolling.set(true)
                     com.nous.wxhook.backup.BackupOrchestrator.ProgressStage.clear()
