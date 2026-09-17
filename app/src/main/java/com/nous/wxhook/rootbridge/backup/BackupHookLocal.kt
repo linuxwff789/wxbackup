@@ -58,6 +58,13 @@ object BackupHookLocal {
 
     interface ProgressCallback {
         fun onProgress(current: String, fileCount: Long, totalSize: Long)
+        /**
+         * 每秒刷新的细粒度进度（上传 tick 等）：只更新进度条/通知，**不要写日志** ——
+         * 否则一个 759MB 的包上传期间每秒一条日志会把日志刷满。
+         */
+        fun onTickProgress(current: String, fileCount: Long, totalSize: Long) {
+            onProgress(current, fileCount, totalSize)
+        }
     }
 
     data class Result(val success: Boolean, val message: String)

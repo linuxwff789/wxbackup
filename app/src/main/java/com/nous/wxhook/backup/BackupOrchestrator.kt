@@ -628,7 +628,9 @@ object BackupOrchestrator {
         // 自动同步永远停在"无备份包可同步"（全量/增量备份后的自动云同步一直是空跑）。
         val archives = if (archivePath != null && BackupEnv.backupExists(archivePath)) listOf(archivePath) else null
         val result = Syncer.sync(config, specificArchives = archives) { p ->
-            callback?.onProgress(p.message, p.current.toLong(), p.total.toLong())
+            // tick 只刷进度，不进日志（大包上传时每秒一条会把日志刷满）
+            if (p.tick) callback?.onTickProgress(p.message, p.current.toLong(), p.total.toLong())
+            else callback?.onProgress(p.message, p.current.toLong(), p.total.toLong())
         }
         if (result.uploaded > 0 || result.skipped > 0) {
             callback?.onProgress(result.message, 1, 1)

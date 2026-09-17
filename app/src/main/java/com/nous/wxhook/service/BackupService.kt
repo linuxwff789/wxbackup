@@ -97,6 +97,12 @@ class BackupService : Service() {
                         sendProgress(currentPercent(), current)
                         appendLog(current)
                     }
+
+                    // 细粒度（每秒）进度：只刷通知/UI，不写日志
+                    override fun onTickProgress(current: String, fileCount: Long, totalSize: Long) {
+                        updateNotification(current, currentPercent())
+                        sendProgress(currentPercent(), current)
+                    }
                 }
                 val stagePolling = startStagePolling()
                 val result = try {
