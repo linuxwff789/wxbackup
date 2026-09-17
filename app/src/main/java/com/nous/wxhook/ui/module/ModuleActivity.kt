@@ -43,6 +43,10 @@ class ModuleActivity : AppCompatActivity() {
     private lateinit var backupBar: LinearProgressIndicator
     private lateinit var backupTitleText: TextView
     private lateinit var backupDetailText: TextView
+    private lateinit var backupPercentText: TextView
+    private lateinit var syncPercentText: TextView
+    /** 最近一次收到备份进度的时间（避免 state 刷新早于服务广播时把进度区提前收起） */
+    @Volatile private var backupProgressAt = 0L
     private val backupProgressReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(ctx: android.content.Context?, intent: Intent?) {
             if (intent?.action == com.nous.wxhook.service.BackupService.ACTION_PROGRESS) {
@@ -50,15 +54,18 @@ class ModuleActivity : AppCompatActivity() {
                 val detail = intent.getStringExtra(com.nous.wxhook.service.BackupService.EXTRA_DETAIL) ?: ""
                 runOnUiThread {
                     if (!::backupProgressRow.isInitialized) return@runOnUiThread
+                    backupProgressAt = System.currentTimeMillis()
                     backupProgressRow.visibility = android.view.View.VISIBLE
                     backupDetailText.text = detail
                     if (percent in 0..100) {
                         backupBar.isIndeterminate = false
                         backupBar.setProgressCompat(percent, true)
-                        backupTitleText.text = "备份中 $percent%"
+                        backupTitleText.text = "备份中"
+                        backupPercentText.text = "$percent%"
                     } else {
                         backupBar.isIndeterminate = true
                         backupTitleText.text = "备份中..."
+                        backupPercentText.text = ""
                     }
                 }
             }
@@ -108,8 +115,10 @@ class ModuleActivity : AppCompatActivity() {
                             if (state.syncPercent >= 0) {
                                 syncBar.isIndeterminate = false
                                 syncBar.setProgressCompat(state.syncPercent, true)
+                                syncPercentText.text = "${state.syncPercent}%"
                             } else {
                                 syncBar.isIndeterminate = true
+                                syncPercentText.text = ""
                             }
                         }
                     }
@@ -120,10 +129,11 @@ class ModuleActivity : AppCompatActivity() {
                                 backupProgressRow.visibility = android.view.View.VISIBLE
                                 backupTitleText.text = "备份中..."
                                 backupDetailText.text = ""
+                                backupPercentText.text = ""
                                 backupBar.isIndeterminate = true
                             }
-                        } else {
-                            // 备份结束后收起进度区（服务那边同时会取消通知）
+                        } else if (System.currentTimeMillis() - backupProgressAt > 3000) {
+                            // 备份结束且 3 秒内没有新进度 → 收起进度区（服务那边同时会取消通知）
                             backupProgressRow.visibility = android.view.View.GONE
                             backupBar.isIndeterminate = true
                         }
@@ -256,7 +266,18 @@ class ModuleActivity : AppCompatActivity() {
             textSize = 13f
             setTextColor(M3.onSurface(this@ModuleActivity))
         }
-        backupProgressRow.addView(backupTitleText)
+        backupPercentText = TextView(this).apply {
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(M3.colorPrimary(this@ModuleActivity))
+        }
+        val backupTitleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        backupTitleRow.addView(backupTitleText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        backupTitleRow.addView(backupPercentText)
+        backupProgressRow.addView(backupTitleRow)
         backupBar = LinearProgressIndicator(
             this, null, com.google.android.material.R.attr.linearProgressIndicatorStyle
         ).apply {
@@ -318,7 +339,18 @@ class ModuleActivity : AppCompatActivity() {
             textSize = 13f
             setTextColor(M3.onSurface(this@ModuleActivity))
         }
-        syncProgressRow.addView(syncTitleText)
+        syncPercentText = TextView(this).apply {
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(M3.colorPrimary(this@ModuleActivity))
+        }
+        val syncTitleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        syncTitleRow.addView(syncTitleText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        syncTitleRow.addView(syncPercentText)
+        syncProgressRow.addView(syncTitleRow)
         syncBar = LinearProgressIndicator(
             this, null, com.google.android.material.R.attr.linearProgressIndicatorStyle
         ).apply {

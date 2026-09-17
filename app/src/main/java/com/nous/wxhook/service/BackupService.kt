@@ -294,8 +294,10 @@ class BackupService : Service() {
         val secs = if (stage.startAt > 0) (System.currentTimeMillis() - stage.startAt) / 1000 else 0
         val done = com.nous.wxhook.backup.BackupManifest.formatSize(stage.done)
         val total = com.nous.wxhook.backup.BackupManifest.formatSize(stage.total)
-        return if (stage.unit == "entry") {
+        return if (stage.unit == "entry" || stage.unit == "file") {
             "${stage.label} ${stage.done}/${stage.total} 个 · ${secs}s"
+        } else if (stage.unit == "dir") {
+            "${stage.label} ${stage.done}/${stage.total} 个目录 · ${secs}s"
         } else {
             "${stage.label} $done/$total · ${secs}s"
         }

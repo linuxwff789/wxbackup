@@ -49,6 +49,7 @@ object FileManifest {
         wxBasePath: String,
         userHash: String,
         attachmentDirs: List<String>,
+        onDirDone: ((String, Int) -> Unit)? = null,
     ): List<FileEntry> {
         val entries = mutableListOf<FileEntry>()
         // 清单必须落盘、再由应用进程流式读取。整份清单若经 Binder 回复（writeString）返回，
@@ -92,6 +93,7 @@ object FileManifest {
                 android.util.Log.w("wxhook:scan", "$dir: 0 条 (root扫描=$found, 目录存在=$dirExists, base=$wxBasePath)")
             }
             android.util.Log.i("wxhook:scan", "$dir: $n 条 (root扫描=$found)")
+            onDirDone?.invoke(dir, n)
         }
         return entries
     }

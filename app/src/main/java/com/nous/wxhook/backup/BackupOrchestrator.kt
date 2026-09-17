@@ -185,8 +185,17 @@ object BackupOrchestrator {
             }
 
             // 3. Scan source files for manifest
+            // 扫描阶段唯一可得的真实信号：root 进程边扫边写 /data/local/tmp/wxhook_scan/attachments.txt，
+            // 用上一次清单大小的字节数作分母（两者量级接近），至少百分比是单调前进的
+            val scanOut = "/data/local/tmp/wxhook_scan/attachments.txt"
             val sourceFiles = wxPaths.flatMap { wxBasePath ->
-                FileManifest.scanWeChatAttachments(wxBasePath, WeChatSourceResolver.extractUserHash(wxBasePath), ATT_DIRS)
+                val hash = WeChatSourceResolver.extractUserHash(wxBasePath)
+                val prevBytes = runCatching {
+                    BackupEnv.fileSize(File(BackupEnv.backupDataDir, "$hash/file_manifest.json").absolutePath)
+                }.getOrDefault(0L)
+                withStageProgress("扫描附件", prevBytes, "B", { RootGateways.fileSize(scanOut) }) {
+                    FileManifest.scanWeChatAttachments(wxBasePath, hash, ATT_DIRS)
+                }
             }
             val manifest = FileManifest.toManifest(sourceFiles, tag)
             val pendingFullUserManifests = mutableListOf<Pair<File, JSONObject>>()
@@ -369,7 +378,15 @@ object BackupOrchestrator {
                 val userHash = WeChatSourceResolver.extractUserHash(wxBasePath)
                 val userDir = File(BackupEnv.backupDataDir, userHash)
                 callback?.onProgress("[${userHash}] 扫描附件清单...", totalFiles, totalSize)
-                val currentFiles = FileManifest.scanWeChatAttachments(wxBasePath, userHash, ATT_DIRS)
+                val prevBytes = runCatching {
+                    BackupEnv.fileSize(File(userDir, "file_manifest.json").absolutePath)
+                }.getOrDefault(0L)
+                val currentFiles = withStageProgress(
+                    "扫描附件", prevBytes, "B",
+                    { RootGateways.fileSize("/data/local/tmp/wxhook_scan/attachments.txt") },
+                ) {
+                    FileManifest.scanWeChatAttachments(wxBasePath, userHash, ATT_DIRS)
+                }
                 preScanned[userHash] = currentFiles
                 val userOldManifest = FileManifest.load(userDir)
                 val oldCount = (userOldManifest.optJSONArray("files") ?: JSONArray()).length()
@@ -391,14 +408,21 @@ object BackupOrchestrator {
                 val userOldManifest = FileManifest.load(userDir)
                 val sizeOnly = staleBaseline[userHash] == true
                 val allCurrent = preScanned[userHash] ?: emptyList()
-                for (attDir in ATT_DIRS) {
+                // 先算好每个目录要复制的清单，才能给出"已复制/总数"这种真实百分比
+                val copyPlans = ATT_DIRS.map { attDir ->
+                    val currentFiles = allCurrent.filter { it.path.startsWith("$userHash/$attDir/") }
+                    val toCopy = currentFiles.filter { entry ->
+                        val oldEntry = FileManifest.findEntry(userOldManifest, entry.path)
+                        oldEntry == null || oldEntry.size != entry.size || (!sizeOnly && oldEntry.mtime != entry.mtime)
+                    }
+                    attDir to toCopy
+                }
+                val totalToCopy = copyPlans.sumOf { it.second.size }
+                ProgressStage.begin("复制附件", totalToCopy.toLong(), "file")
+                var copied = 0L
+                for ((attDir, toCopy) in copyPlans) {
                     val src = "$wxBasePath/$attDir"
                     try {
-                        val currentFiles = allCurrent.filter { it.path.startsWith("$userHash/$attDir/") }
-                        val toCopy = currentFiles.filter { entry ->
-                            val oldEntry = FileManifest.findEntry(userOldManifest, entry.path)
-                            oldEntry == null || oldEntry.size != entry.size || (!sizeOnly && oldEntry.mtime != entry.mtime)
-                        }
                         if (toCopy.isEmpty()) continue
 
                         callback?.onProgress("[${userHash}] 增量 $attDir: ${toCopy.size}个", totalFiles, totalSize)
@@ -414,6 +438,8 @@ object BackupOrchestrator {
                                 // find 输出大时超过 Binder 事务限制会静默丢附件）
                                 incrSources += NativeArchivePlan.Source(dstFile.absolutePath, "$userHash/$rel")
                             }
+                            copied++
+                            ProgressStage.update(copied)
                         }
                     } catch (e: Exception) {
                         Log.e("wxhook:Backup", "Incr $userHash/$attDir failed: $e")
