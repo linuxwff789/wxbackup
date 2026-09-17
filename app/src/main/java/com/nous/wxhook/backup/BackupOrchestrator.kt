@@ -101,7 +101,7 @@ object BackupOrchestrator {
                 pendingFullUserManifests += userDir to userManifest
                 val snapshotPath = "${BackupEnv.backupDataDir}/tmp/${tag}_${hash}/file_manifest.json"
                 RootGateways.mkdirs(File(snapshotPath).parent ?: return BackupHookLocal.Result(false, "创建清单快照目录失败"))
-                if (!RootGateways.writeFile(snapshotPath, userManifest.toString())) {
+                if (!BackupEnv.writeFileSafe(snapshotPath, userManifest.toString())) {
                     return BackupHookLocal.Result(false, "写入清单快照失败")
                 }
                 fullManifestSnapshots[hash] = snapshotPath
@@ -362,7 +362,7 @@ object BackupOrchestrator {
                         val tmpManifestDir = "${BackupEnv.backupDataDir}/tmp/${tag}_${hash}"
                         RootGateways.mkdirs(tmpManifestDir)
                         val incrManifestPath = "$tmpManifestDir/file_manifest.json"
-                        if (RootGateways.writeFile(incrManifestPath, incrOnlyManifest.toString())) {
+                        if (BackupEnv.writeFileSafe(incrManifestPath, incrOnlyManifest.toString())) {
                             incrManifestPaths[hash] = incrManifestPath
                         } else {
                             android.util.Log.e("wxhook:Backup", "[${hash}] 写入增量清单失败，打包时回退 userDir 全量清单")

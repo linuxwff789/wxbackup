@@ -103,7 +103,10 @@ object RootManager {
 
     suspend fun writeFile(path: String, content: String): Boolean = withContext(Dispatchers.IO) {
         val binder = service ?: return@withContext false
-        try { WxRootBinder.writeFile(binder, path, content) == 0 } catch (_: Exception) { false }
+        try { WxRootBinder.writeFile(binder, path, content) == 0 } catch (e: Exception) {
+            android.util.Log.e("wxhook:Root", "writeFile 失败 $path (${content.length} 字符): ${e.message}")
+            false
+        }
     }
 
     suspend fun readFile(path: String): String = withContext(Dispatchers.IO) {

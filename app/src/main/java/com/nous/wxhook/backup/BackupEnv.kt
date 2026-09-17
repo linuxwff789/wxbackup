@@ -68,6 +68,35 @@ object BackupEnv {
 
     fun filesDirForWrite(): File = File(filesDirPath).apply { mkdirs() }
 
+    // ── 大内容写入 ──
+
+    /** Binder 单次事务上限 ~1MB，且 Parcel 里字符串按 UTF-16 双倍占位 —— 超过这个阈值必须绕开 writeFile。 */
+    private const val BINDER_SAFE_LIMIT = 256 * 1024
+
+    /**
+     * 写文件到任意路径（含 /sdcard）。内容超过 Binder 安全阈值时不能走 RootGateways.writeFile
+     * ——那是一条 transact 把整份字符串塞进 Parcel，超限抛 TransactionTooLargeException，
+     * 被 RootManager 吞成 false，调用方只看到「写入失败」（file_manifest.json 1.66MB 就是这么丢的）。
+     * 大内容先写 app 私有目录，再让 root 侧按路径 copy（只传路径，与内容大小无关）。
+     */
+    fun writeFileSafe(path: String, content: String): Boolean {
+        val bytes = content.toByteArray(Charsets.UTF_8)
+        if (bytes.size <= BINDER_SAFE_LIMIT) return RootGateways.writeFile(path, content)
+        Log.i("wxhook:Backup", "大内容写入走 copy 路径: ${bytes.size} 字节 -> $path")
+        val tmp = File(filesDirForWrite(), "bigwrite_${System.nanoTime()}.tmp")
+        return try {
+            tmp.writeBytes(bytes)
+            val ok = RootGateways.copy(tmp.absolutePath, path)
+            if (!ok) Log.e("wxhook:Backup", "大内容写入 copy 失败: $path (${bytes.size} 字节)")
+            ok
+        } catch (e: Exception) {
+            Log.e("wxhook:Backup", "大内容写入异常: ${e.message}")
+            false
+        } finally {
+            tmp.delete()
+        }
+    }
+
     // ── /sdcard 操作（走 root） ──
 
     fun backupExists(path: String): Boolean =
