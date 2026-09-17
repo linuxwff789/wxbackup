@@ -330,6 +330,7 @@ class SettingsActivity : AppCompatActivity() {
                         val time = "%02d:%02d".format(h, m)
                         text = time
                         save(key, time)
+                        promptExactAlarmIfNeeded()
                     }, parts[0], parts[1], true).show()
                 }
             }
@@ -376,6 +377,28 @@ class SettingsActivity : AppCompatActivity() {
         timePickerRow("backup_schedule_time", "备份时间")
         editRow("backup_schedule_interval_days", "备份间隔（天）", "1", "1=每天,7=每周")
         toggleRow("backup_full_enabled", "全量备份", false)
+    }
+
+    /**
+     * Android 12+ 起准点触发需要系统的「闹钟与提醒」特殊权限（SCHEDULE_EXACT_ALARM），
+     * 没授予时 setAlarmClock 会抛 SecurityException → 定时静默失效。这里引导用户去开。
+     */
+    private fun promptExactAlarmIfNeeded() {
+        if (com.nous.wxhook.receiver.ScheduleManager.canScheduleExactAlarms(this)) return
+        android.app.AlertDialog.Builder(this)
+            .setTitle("需要「闹钟与提醒」权限")
+            .setMessage("Android 12+ 起，准点触发定时备份/同步需要系统授予「闹钟与提醒」特殊权限。\n\n" +
+                "不开也能跑（会自动降级为非精确闹钟），但可能延迟几分钟。建议现在去打开。")
+            .setPositiveButton("去设置") { _, _ ->
+                try {
+                    startActivity(android.content.Intent(
+                        android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                        android.net.Uri.parse("package:$packageName")
+                    ))
+                } catch (_: Exception) {}
+            }
+            .setNegativeButton("稍后", null)
+            .show()
     }
 
     private fun handleAction(action: String) {

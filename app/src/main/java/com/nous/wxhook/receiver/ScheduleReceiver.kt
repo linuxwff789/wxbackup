@@ -23,6 +23,10 @@ class ScheduleReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "wxhook:ScheduleRcvr"
         private const val ACTION_PING = "com.nous.wxhook.KEEPALIVE_PING"
+        private const val ACTION_BOOT = "android.intent.action.BOOT_COMPLETED"
+        private const val ACTION_LOCKED_BOOT = "android.intent.action.LOCKED_BOOT_COMPLETED"
+        private const val ACTION_PKG_REPLACED = "android.intent.action.MY_PACKAGE_REPLACED"
+        private const val ACTION_QUICKBOOT = "android.intent.action.QUICKBOOT_POWERON"
         private const val ACTION_SCHEDULED_BACKUP = "com.nous.wxhook.SCHEDULED_BACKUP"
         private const val ACTION_SCHEDULED_SYNC = "com.nous.wxhook.SCHEDULED_SYNC"
         private const val SCHEDULE_FILE = "/data/local/tmp/wxhook_schedule.json"
@@ -31,6 +35,18 @@ class ScheduleReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             ACTION_PING -> handlePing(context)
+            ACTION_BOOT, ACTION_LOCKED_BOOT, ACTION_PKG_REPLACED, ACTION_QUICKBOOT,
+            "com.htc.intent.action.QUICKBOOT_POWERON" -> {
+                // 开机 / 覆盖安装后 AlarmManager 里的闹钟已经被清空，必须重新挂上，
+                // 否则"定时备份"会在用户毫无察觉的情况下永久消失
+                Log.i(TAG, "系统事件重新挂定时: ${intent.action}")
+                try {
+                    ScheduleManager.updateAll(context)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "重新挂定时失败", t)
+                }
+                writeSchedule(context)
+            }
             ACTION_SCHEDULED_BACKUP -> handleScheduledBackup(context, intent)
             ACTION_SCHEDULED_SYNC -> handleScheduledSync(context)
             ScheduleManager.ACTION_ALARM_BACKUP -> {
@@ -63,6 +79,12 @@ class ScheduleReceiver : BroadcastReceiver() {
         Log.d(TAG, "PING 收到")
         // 每次 PING 都把定时配置写到 /data/local/tmp/ 下供 Xposed 免 root 读取
         writeSchedule(ctx)
+        // Xposed 模块每 2 分钟 PING 一次（微信在跑就一定会来）：顺手重挂一次闹钟，
+        // 这样即使闹钟被系统/装包清掉，最多 2 分钟内自愈，不用用户手动开一次 App
+        try {
+            ScheduleManager.updateAll(ctx)
+        } catch (_: Throwable) {
+        }
     }
 
     private fun handleScheduledBackup(ctx: Context, intent: Intent) {

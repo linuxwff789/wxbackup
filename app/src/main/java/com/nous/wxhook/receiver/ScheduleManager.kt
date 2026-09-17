@@ -125,17 +125,55 @@ object ScheduleManager {
         // setAlarmClock：系统最高优先级闹钟，精确到分钟，Doze 深休眠也准时，
         // 且闹钟触发广播带前台服务启动豁免（FGS）——setRepeating 在凌晨深度休眠
         // 时会被 Doze 延迟、且非精确闹钟广播无 FGS 豁免，备份服务起不来
-        // （2026-08-27 实测 02:00 自动备份未执行）。setAlarmClock 重启保留、免权限。
-        // 它是一次性的，靠 ScheduleReceiver 里 try/finally 的 updateAll 重设链续期，
-        // 该链已修复为不因服务启动异常而断裂。
-        val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerAt, null)
-        alarmManager.setAlarmClock(alarmClockInfo, pi)
-        Log.i(
-            TAG,
-            "$tag 定时已设(setAlarmClock): ${"%02d:%02d".format(hour, minute)}, 首次 ${
-                java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(triggerAt))
-            }"
-        )
+        // （2026-08-27 实测 02:00 自动备份未执行）。
+        // 它是一次性的，靠 ScheduleReceiver 里 try/finally 的 updateAll 重设链续期。
+        //
+        // Android 12+ 起 setAlarmClock 需要 SCHEDULE_EXACT_ALARM（或 USE_EXACT_ALARM）：
+        // 声明了权限也不够，targetSdk 33+ 默认**不授予**，要在系统里开「闹钟与提醒」，
+        // 否则每次 setAlarmClock 都抛 SecurityException，整段 updateAll 失败 →
+        // 闹钟永远是空的（2026-09-18 实测：SecurityException 后 dumpsys alarm 里没有
+        // 任何 wxhook 闹钟，用户看到的就是"又没有自动备份"）。
+        // 这里做降级：没有精确闹钟权限时用 setAndAllowWhileIdle（非精确，可能晚几分钟），
+        // 保证"自动备份会跑"这件事不依赖于用户去开特殊权限。
+        val canExact = try {
+            alarmManager.canScheduleExactAlarms()
+        } catch (_: Throwable) {
+            true // 旧版本没有这个 API
+        }
+        if (canExact) {
+            try {
+                alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAt, null), pi)
+                Log.i(
+                    TAG,
+                    "$tag 定时已设(setAlarmClock): ${"%02d:%02d".format(hour, minute)}, 首次 ${
+                        java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(triggerAt))
+                    }"
+                )
+                return
+            } catch (e: SecurityException) {
+                Log.w(TAG, "$tag 精确闹钟被拒(${e.message})，降级为非精确闹钟")
+            }
+        } else {
+            Log.w(TAG, "$tag 无「闹钟与提醒」权限，降级为非精确闹钟（可能延迟几分钟）")
+        }
+        try {
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+            Log.i(
+                TAG,
+                "$tag 定时已设(setAndAllowWhileIdle, 非精确): ${"%02d:%02d".format(hour, minute)}, 首次 ${
+                    java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(triggerAt))
+                }"
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "$tag 定时设置失败", e)
+        }
+    }
+
+    /** 是否具备精确闹钟权限（供 UI 引导用户去系统里开「闹钟与提醒」）。 */
+    fun canScheduleExactAlarms(context: Context): Boolean = try {
+        (context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager)?.canScheduleExactAlarms() ?: false
+    } catch (_: Throwable) {
+        true
     }
 
     private fun cancelAlarm(context: Context, requestCode: Int) {

@@ -70,6 +70,14 @@
             android:name=".receiver.ScheduleReceiver"
             android:exported="true">
             <intent-filter>
+                <!-- 开机 / 覆盖安装 / 快速重启后必须重新挂闹钟：
+                     AlarmManager 的闹钟在 force-stop（含 pm install -r）和重启后会全部清掉，
+                     以前没人监听这些广播 → 装一次包/重启一次，定时备份就静默消失 -->
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
                 <action android:name="com.nous.wxhook.KEEPALIVE_PING" />
                 <action android:name="com.nous.wxhook.SCHEDULED_BACKUP" />
                 <action android:name="com.nous.wxhook.SCHEDULED_SYNC" />
