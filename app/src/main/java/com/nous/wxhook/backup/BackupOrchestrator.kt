@@ -26,9 +26,8 @@ import java.util.concurrent.atomic.AtomicLong
 object BackupOrchestrator {
 
     private const val DB_STATE_FILE = WxHookPaths.DB_STATE_FILE
-    private val ATT_DIRS = listOf(
-        "image2", "voice2", "video", "emoji", "avatar", "cdn", "record", "favorite"
-    )
+    // 与恢复/对比共用同一份目录清单，避免各处列表漂移
+    private val ATT_DIRS = BackupEnv.ATTACHMENT_DIRS
 
     // ── Progress Stage ──
 

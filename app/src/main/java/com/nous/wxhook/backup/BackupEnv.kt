@@ -17,6 +17,15 @@ object BackupEnv {
      *  这个常量只作兜底（微信重装/换账号后可能变化，届时按需更新）。 */
     const val WX_USER_HASH = "6d1f34a5edc49e8b6d238141b2d004f3"
 
+    /**
+     * 微信附件目录（备份 / 恢复 / 对比共用同一份清单）。
+     * 以前 RestoreEngine 少写了 favorite、ArchiveManager 少写了 record/favorite，
+     * 导致"备份有、恢复不回"和"对比界面看不到"。
+     */
+    val ATTACHMENT_DIRS = listOf(
+        "image2", "voice2", "video", "emoji", "avatar", "cdn", "record", "favorite"
+    )
+
     fun init(binDirectory: String, filesDir: String, rcloneCfg: String = "") {
         binDir = binDirectory
         filesDirPath = filesDir

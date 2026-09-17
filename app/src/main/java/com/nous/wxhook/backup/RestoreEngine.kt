@@ -25,14 +25,30 @@ object RestoreEngine {
     // ── Replace DB ──
 
     /**
+     * 微信当前属主（uid:gid）。
+     *
+     * 以前这里是硬编码的 `10298`，但本机微信实际是 **10297**（重装/换机后 uid 会变）。
+     * 恢复时把 DB/.ini/附件 chown 到不存在的 uid 上，微信（10297）读不了自己的库 →
+     * 表现为「数据库损坏」/聊天记录打不开。改为从目标目录实时取属主。
+     */
+    private fun wechatOwner(): String {
+        val out = RootGateways.runQuiet("stat -c '%u:%g' '$PHONE_MM_DIR' 2>/dev/null").trim()
+        if (Regex("^\\d+:\\d+$").matches(out)) return out
+        val uid = RootGateways.runQuiet(
+            "pm list packages -U 2>/dev/null | grep 'package:com.tencent.mm ' | sed 's/.*uid://'"
+        ).trim().toIntOrNull()
+        return if (uid != null) "$uid:$uid" else "10297:10297"
+    }
+
+    /**
      * Replace phone's EnMicroMsg.db with the merged DB file.
      * 1. dd the new DB into place
-     * 2. Set ownership (u0_a298 = 10298) and permissions (0600)
+     * 2. Set ownership (动态取微信 uid) and permissions (0600)
      * 3. Compute MD5 and update EnMicroMsg.db.ini
      * 4. Remove WAL/SHM files
      */
-    fun replaceDb(mergedDbPath: String, password: String): Boolean {
-        Log.i(TAG, "replaceDb: $mergedDbPath -> $PHONE_DB (pwd=$password)")
+    fun replaceDb(mergedDbPath: String, password: String, owner: String = wechatOwner()): Boolean {
+        Log.i(TAG, "replaceDb: $mergedDbPath -> $PHONE_DB (owner=$owner)")
 
         // 1. Write DB via dd (faster than cp for large files)
         val ddResult = RootGateways.run(
@@ -46,7 +62,7 @@ object RestoreEngine {
         Log.i(TAG, "replaceDb: dd write complete")
 
         // 2. Ownership and permissions
-        RootGateways.run("chown 10298:10298 '$PHONE_DB' 2>/dev/null")
+        RootGateways.run("chown $owner '$PHONE_DB' 2>/dev/null")
         RootGateways.run("chmod 0600 '$PHONE_DB' 2>/dev/null")
 
         // 3. Remove stale WAL/SHM
@@ -63,7 +79,7 @@ object RestoreEngine {
             Log.i(TAG, "replaceDb: DB md5=$md5")
             val iniContent = "#\n#${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())}\ncreatemd5=$md5\n"
             RootGateways.run("cat > '$PHONE_INI' << 'INIEOF'\n$iniContent\nINIEOF")
-            RootGateways.run("chown 10298:10298 '$PHONE_INI' 2>/dev/null")
+            RootGateways.run("chown $owner '$PHONE_INI' 2>/dev/null")
             RootGateways.run("chmod 0600 '$PHONE_INI' 2>/dev/null")
             Log.d(TAG, "replaceDb: .ini updated with createmd5=$md5")
         }
@@ -78,14 +94,12 @@ object RestoreEngine {
 
     /**
      * Copy attachment files from archive's extracted directory to phone.
-     * Uses cp -rn (no overwrite), then fixes permissions:
-     *   directories → 0700, files → 0600, owner → u0_a298
+     * 覆盖同名文件（恢复语义），目录 0700 / 文件 0600 / 属主 = 微信当前 uid。
      */
-    fun copyAttachments(archivePath: String): Boolean {
-        Log.i(TAG, "copyAttachments: from archive=$archivePath")
-        val attDirs = listOf("image2", "voice2", "video", "avatar", "emoji", "cdn")
-        var totalCopied = 0
-        var totalErrors = 0
+    fun copyAttachments(archivePath: String, owner: String = wechatOwner()): Boolean {
+        Log.i(TAG, "copyAttachments: from archive=$archivePath (owner=$owner)")
+        // 与备份侧共用同一份目录清单（原来这里漏了 favorite/record，恢复永远补不回收藏）
+        val attDirs = BackupEnv.ATTACHMENT_DIRS
 
         for (dir in attDirs) {
             val src = "$archivePath/$dir"
@@ -97,21 +111,22 @@ object RestoreEngine {
             }
 
             Log.d(TAG, "copyAttachments: copying $dir...")
-            val r = RootGateways.run(
-                "cp -rn '$src/'* '$dst/' 2>&1",
-                120_000
-            )
+            // 不用 glob：image2 有 8000+ 个文件，'$src/'* 展开后可能超 ARG_MAX 直接失败，
+            // 而失败只记一行 warning → 静默没复制。`cp -r src/. dst/` 覆盖同名文件
+            // （恢复语义下就该让存档版本落地），-p 保留 mtime 以便与清单对齐。
+            val r = RootGateways.run("cp -r -p '$src/.' '$dst/' 2>&1", 900_000)
             if (!r.isSuccess) {
-                Log.w(TAG, "copyAttachments: $dir cp had warnings: ${r.stderr.take(200)}")
+                Log.w(TAG, "copyAttachments: $dir cp 失败: ${r.stderr.take(200)}")
             }
 
-            // Fix permissions
-            RootGateways.run("find '$dst/' -type d -exec chmod 0700 {} \\; 2>/dev/null", 60_000)
-            RootGateways.run("find '$dst/' -type f -exec chmod 0600 {} \\; 2>/dev/null", 60_000)
-            RootGateways.run("chown -R 10298:10298 '$dst/' 2>/dev/null", 30_000)
+            // Fix permissions（-exec ... + 批量执行，避免每个文件 fork 一次）
+            RootGateways.run("find '$dst/' -type d -exec chmod 0700 {} + 2>/dev/null", 120_000)
+            RootGateways.run("find '$dst/' -type f -exec chmod 0600 {} + 2>/dev/null", 120_000)
+            RootGateways.run("chown -R $owner '$dst/' 2>/dev/null", 120_000)
 
-            val count = RootGateways.runQuiet("find '$dst/' -type f 2>/dev/null | wc -l").trim()
-            Log.i(TAG, "copyAttachments: $dir done, now $count files")
+            val srcCount = RootGateways.runQuiet("find '$src' -type f 2>/dev/null | wc -l").trim()
+            val dstCount = RootGateways.runQuiet("find '$dst/' -type f 2>/dev/null | wc -l").trim()
+            Log.i(TAG, "copyAttachments: $dir 存档 $srcCount 个 → 手机 $dstCount 个")
         }
 
         Log.i(TAG, "copyAttachments: complete")
@@ -328,6 +343,9 @@ SELECT 'merged' AS stat, count(*) AS cnt FROM message;
         val tag = archive.tag
         val pwd = archive.password
         val mergedPath = "/sdcard/Download/wxhook_backup/merged_${tag}_${System.currentTimeMillis()}.db"
+        // 微信 uid 动态取（重装/换机会变），后面 DB/.ini/附件统一用它
+        val owner = wechatOwner()
+        Log.i(TAG, "restore: wechat owner=$owner")
 
         progress?.invoke("🔗 合并数据库...")
         Log.i(TAG, "restore: starting restore for $tag path=${usable.path}")
@@ -344,22 +362,22 @@ SELECT 'merged' AS stat, count(*) AS cnt FROM message;
         // Step 2: Replace
         progress?.invoke("💾 替换手机 DB...")
         Log.i(TAG, "restore: replacing phone DB")
-        if (!replaceDb(merged, pwd)) {
+        if (!replaceDb(merged, pwd, owner)) {
             Log.e(TAG, "restore: replaceDb failed")
             progress?.invoke("❌ DB 替换失败")
             return false
         }
         progress?.invoke("✅ DB 替换完成")
+        // 合并产物是 2GB 级，恢复完就删，别在备份目录里堆着
+        RootGateways.run("rm -f '$mergedPath' 2>/dev/null", 60_000)
 
         // Step 3: Attachments
-        if (archive.totalAttachmentFiles > 0) {
-            progress?.invoke("📁 复制附件...")
-            Log.i(TAG, "restore: copying ${archive.totalAttachmentFiles} attachments")
-            copyAttachments(usable.path)
-            progress?.invoke("✅ 附件复制完成")
-        } else {
-            Log.d(TAG, "restore: no attachments to copy")
-        }
+        // 不按 totalAttachmentFiles 判断：清单读失败时它是 0，会导致附件被整段跳过。
+        // copyAttachments 自己会跳过存档里没有的目录。
+        progress?.invoke("📁 复制附件...")
+        Log.i(TAG, "restore: copying attachments (manifest 声明 ${archive.totalAttachmentFiles} 个)")
+        copyAttachments(usable.path, owner)
+        progress?.invoke("✅ 附件复制完成")
 
         // Step 4: Remove corrupted dir
         RootGateways.run("rm -rf '$PHONE_MM_DIR/corrupted' 2>/dev/null")

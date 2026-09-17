@@ -24,7 +24,8 @@ object ArchiveManager {
     private const val SELECTED_FILE = "/data/local/tmp/wxhook_selected_archive.json"
     // 当前设备微信用户 hash 见 BackupEnv.WX_USER_HASH（备份包内路径前缀，避免 listTar 全量扫包）
     /** 标准附件目录（手机侧与存档侧只对比这些，避免 manifest 里其他目录造成假缺失）。 */
-    private val ATTACHMENT_DIRS = listOf("image2", "voice2", "video", "avatar", "emoji", "cdn")
+    // 与备份/恢复共用同一份清单（以前这里少 record/favorite，对比界面看不到这两类）
+    private val ATTACHMENT_DIRS = BackupEnv.ATTACHMENT_DIRS
 
     /** 包元数据缓存：path -> (包 mtime, ArchiveInfo)，避免每次刷新都 JNI 扫包。 */
     private val pkgInfoCache = mutableMapOf<String, Pair<Long, ArchiveInfo>>()
