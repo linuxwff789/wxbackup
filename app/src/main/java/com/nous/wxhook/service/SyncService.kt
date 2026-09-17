@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import com.nous.wxhook.backup.BackupEnv
 import com.nous.wxhook.backup.BackupManifest
 import com.nous.wxhook.root.RootGateways
+import com.nous.wxhook.sync.SyncSettings
 import com.nous.wxhook.sync.Syncer
 import java.io.File
 import java.text.SimpleDateFormat
@@ -59,9 +60,9 @@ class SyncService : Service() {
                     BackupManifest.addRecord(BackupManifest.createRecord(tag, "sync", 0L, 0L, result, durationMs = System.currentTimeMillis() - startTime))
                     return@Thread
                 }
-                val remoteCfgRaw = RootGateways.runQuiet("cat \"${BackupEnv.backupDir}/remote_config.json\" 2>/dev/null").ifBlank { "{}" }
-                val remoteCfg = org.json.JSONObject(remoteCfgRaw)
-                if (!remoteCfg.optBoolean("enabled", true)) {
+                // 云同步开关（唯一来源见 SyncSettings；以前这里读 /sdcard 的 remote_config.json，
+                // 与设置页开关写的 settings_config.json 不是同一个文件 → 开关形同虚设）
+                if (!SyncSettings.isRemoteEnabled()) {
                     result = "同步未启用"; appendLog(result); updateNotification(result); sendResult(false, result)
                     BackupManifest.addRecord(BackupManifest.createRecord(tag, "sync", 0L, 0L, result, durationMs = System.currentTimeMillis() - startTime))
                     return@Thread
@@ -69,7 +70,7 @@ class SyncService : Service() {
 
                 // Sync via shared Syncer
                 val syncResult = Syncer.sync(config) { p ->
-                    updateNotification(p.message)
+                    updateSyncNotification(p)
                 }
 
                 result = syncResult.message
@@ -141,17 +142,33 @@ class SyncService : Service() {
         try { (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, createNotification(text)) } catch (_: Exception) {}
     }
 
-    private fun createNotification(text: String): Notification {
+    /**
+     * 同步进度写进通知：能拿到字节（WebDAV）就显示确定进度条，拿不到（阿里云盘 AAR）
+     * 就用不确定进度条 + 每秒刷新的详细文案（已耗时/包大小）。
+     */
+    private fun updateSyncNotification(p: Syncer.Progress) {
+        try {
+            val percent = if (p.bytesTotal > 0 && p.bytesSent > 0) {
+                ((p.bytesSent * 100) / p.bytesTotal).toInt().coerceIn(0, 100)
+            } else -1
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(NOTIFICATION_ID, createNotification(p.message, percent))
+        } catch (_: Exception) {}
+    }
+
+    private fun createNotification(text: String, percent: Int = -1): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "云同步", NotificationManager.IMPORTANCE_LOW)
             )
         }
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setContentTitle("wxhook 同步")
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setOngoing(true)
-            .build()
+        if (percent >= 0) builder.setProgress(100, percent, false) else builder.setProgress(0, 0, true)
+        return builder.build()
     }
 }

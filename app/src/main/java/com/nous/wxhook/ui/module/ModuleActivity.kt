@@ -17,6 +17,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
 import com.nous.wxhook.db.BackupManager
@@ -33,6 +34,11 @@ class ModuleActivity : AppCompatActivity() {
     private lateinit var recordsText: TextView
     private lateinit var pathInput: TextInputEditText
     private lateinit var syncSwitch: SwitchMaterial
+    private lateinit var syncButton: MaterialButton
+    private lateinit var syncProgressRow: LinearLayout
+    private lateinit var syncBar: LinearProgressIndicator
+    private lateinit var syncTitleText: TextView
+    private lateinit var syncDetailText: TextView
     private val backupFinishReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(ctx: android.content.Context?, intent: Intent?) {
             if (intent?.action == com.nous.wxhook.service.BackupService.ACTION_FINISH) {
@@ -64,6 +70,21 @@ class ModuleActivity : AppCompatActivity() {
                     if (state.recordsText.isNotEmpty()) recordsText.text = state.recordsText
                     if (state.logText.isNotEmpty()) logText.text = state.logText
                     if (::syncSwitch.isInitialized) syncSwitch.isChecked = state.remoteEnabled
+                    if (::syncProgressRow.isInitialized) {
+                        syncProgressRow.visibility =
+                            if (state.syncRunning) android.view.View.VISIBLE else android.view.View.GONE
+                        syncButton.isEnabled = !state.syncRunning
+                        if (state.syncRunning) {
+                            syncTitleText.text = state.syncTitle
+                            syncDetailText.text = state.syncDetail
+                            if (state.syncPercent >= 0) {
+                                syncBar.isIndeterminate = false
+                                syncBar.setProgressCompat(state.syncPercent, true)
+                            } else {
+                                syncBar.isIndeterminate = true
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -204,16 +225,45 @@ class ModuleActivity : AppCompatActivity() {
         syncCard.addView(syncRow)
 
         val syncBtns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        syncBtns.addView(primaryButton("☁️ 同步到云盘") { viewModel.doSync() }.apply {
+        syncButton = primaryButton("☁️ 同步到云盘") { viewModel.doSync() }.apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, dp(52)
             )
-        })
+        }
+        syncBtns.addView(syncButton)
         syncBtns.addView(spacer(12))
         syncBtns.addView(textBtn("⚙️ 配置") {
             startActivity(Intent(this, com.nous.wxhook.ui.cloud.CloudConfigActivity::class.java))
         })
         syncCard.addView(syncBtns)
+
+        // 同步进度（只在同步进行中显示：标题 + 进度条 + 明细）
+        syncProgressRow = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = android.view.View.GONE
+            setPadding(0, dp(12), 0, 0)
+        }
+        syncTitleText = TextView(this).apply {
+            textSize = 13f
+            setTextColor(M3.onSurface(this@ModuleActivity))
+        }
+        syncProgressRow.addView(syncTitleText)
+        syncBar = LinearProgressIndicator(
+            this, null, com.google.android.material.R.attr.linearProgressIndicatorStyle
+        ).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(6)
+            ).apply { topMargin = dp(8) }
+        }
+        syncProgressRow.addView(syncBar)
+        syncDetailText = TextView(this).apply {
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
+            setTextColor(M3.onSurfaceVariant(this@ModuleActivity))
+            setPadding(0, dp(6), 0, 0)
+        }
+        syncProgressRow.addView(syncDetailText)
+        syncCard.addView(syncProgressRow)
         root.addView(syncCard)
 
         // ═══ 🛠 工具 ═══

@@ -45,6 +45,13 @@ object Syncer {
         val message: String,
         val current: Int = 0,
         val total: Int = 0,
+        /** 当前文件的字节进度；驱动拿不到字节回调时保持 0 */
+        val bytesSent: Long = 0,
+        val bytesTotal: Long = 0,
+        /** 当前正在上传的文件名 */
+        val fileName: String = "",
+        /** true = 每秒刷新的计时进度；UI 只更新进度区，不写日志（否则每秒刷屏） */
+        val tick: Boolean = false,
     )
 
     data class Result(
@@ -146,6 +153,69 @@ object Syncer {
     }
 
     /**
+     * 上传单个包，并在传输期间每秒回调一次进度（tick=true）。
+     *
+     * 阿里云盘走 openlistbridge 的 AAR，`upload` 是阻塞调用、没有字节回调 —— 只能显示
+     * 已耗时 + 包大小（进度条用不确定态）；WebDAV 客户端会通过 onBytes 回报真实字节，
+     * 此时进度条转确定态并显示百分比。
+     */
+    private fun uploadWithProgress(
+        client: CloudClient,
+        pkgPath: String,
+        pkgName: String,
+        pkgSize: Long,
+        remoteDir: String,
+        index: Int,
+        count: Int,
+        onProgress: ((Progress) -> Unit)?,
+    ): kotlin.Result<RemoteObject> {
+        val sent = java.util.concurrent.atomic.AtomicLong(0L)
+        val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+        val startAt = System.currentTimeMillis()
+        val ticker = Thread {
+            while (!finished.get()) {
+                try {
+                    Thread.sleep(1000)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (finished.get()) break
+                onProgress?.invoke(Progress(
+                    message = tickMessage(pkgName, sent.get(), pkgSize, System.currentTimeMillis() - startAt),
+                    current = index,
+                    total = count,
+                    bytesSent = sent.get(),
+                    bytesTotal = pkgSize,
+                    fileName = pkgName,
+                    tick = true,
+                ))
+            }
+        }.apply {
+            isDaemon = true
+            name = "wxhook-sync-tick"
+            start()
+        }
+        return try {
+            kotlinx.coroutines.runBlocking {
+                client.upload(File(pkgPath), "$remoteDir/$pkgName") { written, _ -> sent.set(written) }
+            }
+        } finally {
+            finished.set(true)
+            ticker.interrupt()
+        }
+    }
+
+    private fun tickMessage(name: String, sent: Long, total: Long, elapsedMs: Long): String {
+        val secs = elapsedMs / 1000
+        return if (sent > 0 && total > 0) {
+            val pct = (sent * 100 / total).coerceIn(0, 100)
+            "上传 $name $pct% (${BackupManifest.formatSize(sent)}/${BackupManifest.formatSize(total)}) · ${secs}s"
+        } else {
+            "上传 $name · 已耗时 ${secs}s · 共 ${BackupManifest.formatSize(total)}"
+        }
+    }
+
+    /**
      * Sync archives to cloud storage (增量同步).
      *
      * 只上传本地有但远端没有（或大小不同）的文件。
@@ -244,11 +314,14 @@ object Syncer {
                 kotlinx.coroutines.runBlocking { client.delete("${config.remotePath}/$pkgName") }
             }
 
-            // 上传
-            onProgress?.invoke(Progress("上传 $pkgName (${BackupManifest.formatSize(pkgSize)})...", idx + 1, toUpload.size))
-            val uploadResult = kotlinx.coroutines.runBlocking {
-                client.upload(File(pkgPath), "${config.remotePath}/$pkgName")
-            }
+            // 上传（传输期间每秒回调一次，见 uploadWithProgress）
+            onProgress?.invoke(Progress(
+                "上传 $pkgName (${BackupManifest.formatSize(pkgSize)})...",
+                idx + 1, toUpload.size, 0L, pkgSize, pkgName,
+            ))
+            val uploadResult = uploadWithProgress(
+                client, pkgPath, pkgName, pkgSize, config.remotePath, idx + 1, toUpload.size, onProgress,
+            )
 
             if (uploadResult.isSuccess) {
                 uploaded++

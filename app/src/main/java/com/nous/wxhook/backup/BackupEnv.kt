@@ -24,11 +24,22 @@ object BackupEnv {
     }
 
     fun useZstd(): Boolean = try {
-        val cfg = File(backupDir, "db_config.json")
-        if (cfg.exists()) {
-            val json = JSONObject(backupRead(cfg.absolutePath))
-            json.optString("compression", "zstd") == "zstd"
-        } else true  // 默认 zstd
+        // 设置页的「使用 zstd 压缩」开关写的是 settings_config.json 的 "zstd"，
+        // 而实际压缩实现记录在 db_config.json 的 "compression" —— 两个键都得认，
+        // 否则开关切了不生效（开关写 A，打包读 B）。
+        val settings = try {
+            JSONObject(File(filesDirPath, "settings_config.json").readText())
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        if (settings.has("zstd")) {
+            settings.optBoolean("zstd", true)
+        } else {
+            val cfg = File(backupDir, "db_config.json")
+            if (cfg.exists()) {
+                JSONObject(backupRead(cfg.absolutePath)).optString("compression", "zstd") == "zstd"
+            } else true  // 默认 zstd
+        }
     } catch (e: Exception) {
         Log.w("wxhook:env", "useZstd check failed, defaulting to zstd", e)
         true

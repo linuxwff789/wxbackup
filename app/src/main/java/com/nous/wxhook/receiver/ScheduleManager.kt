@@ -42,7 +42,9 @@ object ScheduleManager {
                 intervalDays = cfg.optInt("backup_schedule_interval_days", 1),
                 action = ACTION_ALARM_BACKUP,
                 requestCode = REQUEST_BACKUP,
-                tag = "备份"
+                tag = "备份",
+                // 「全量备份」开关：以前只镜像到 /data/local/tmp 给 Xposed 看，触发时永远走增量
+                fullBackup = cfg.optBoolean("backup_full_enabled", false),
             )
 
             scheduleAlarm(
@@ -76,6 +78,7 @@ object ScheduleManager {
         action: String,
         requestCode: Int,
         tag: String,
+        fullBackup: Boolean = false,
     ) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
 
@@ -96,6 +99,10 @@ object ScheduleManager {
 
         // 构建 Intent + PendingIntent
         val intent = Intent(action).setPackage(context.packageName)
+        // 定时备份的类型（全量/增量）由设置页开关决定，ScheduleReceiver 读这个 extra
+        if (action == ACTION_ALARM_BACKUP) {
+            intent.putExtra("type", if (fullBackup) "full" else "incremental")
+        }
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         else

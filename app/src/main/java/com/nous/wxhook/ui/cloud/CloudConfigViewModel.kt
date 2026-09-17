@@ -176,7 +176,6 @@ class CloudConfigViewModel(application: Application) : AndroidViewModel(applicat
         val config = try {
             JSONObject(configFile.readText())
         } catch (_: Exception) { JSONObject() }
-        config.put("enabled", true)
         config.put("remote", name)
         config.put("type", "s3")
         config.put("provider", provider)

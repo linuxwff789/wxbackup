@@ -33,6 +33,12 @@ data class ModuleUiState(
     val remoteEnabled: Boolean = false,
     val remotePath: String = "wxhook-backup",
     val statusLoaded: Boolean = false,
+    // 手动同步进度
+    val syncRunning: Boolean = false,
+    /** 0..100；-1 = 不确定（阿里云盘 AAR 没有字节回调） */
+    val syncPercent: Int = -1,
+    val syncTitle: String = "",
+    val syncDetail: String = "",
 )
 
 class ModuleViewModel(application: Application) : AndroidViewModel(application) {
@@ -133,29 +139,69 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun doSync() {
+        if (_uiState.value.syncRunning) {
+            appendLog("⏳ 正在同步中...")
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val remote = _uiState.value.remotePath
+            var ok = false
+            publishSync(running = true, percent = -1, title = "准备同步...", detail = "")
             try {
-                withContext(Dispatchers.Main) { appendLog("☁️ 同步到 $remote...") }
+                appendLog("☁️ 同步到 $remote...")
 
                 val config = Syncer.loadConfig()
                 if (!config.isValid) {
-                    withContext(Dispatchers.Main) { appendLog("☁️ WebDAV未配置") }
+                    appendLog("☁️ WebDAV未配置")
                     return@launch
                 }
                 // Override remotePath from module UI setting
                 val effectiveConfig = config.copy(remotePath = remote)
 
-                val result = Syncer.sync(effectiveConfig) { p ->
-                    appendLog(p.message)
-                }
-                withContext(Dispatchers.Main) {
-                    appendLog("☁️ ${result.message}")
-                }
+                val result = Syncer.sync(effectiveConfig) { p -> onSyncProgress(p) }
+                ok = result.success
+                appendLog("☁️ ${result.message}")
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { appendLog("☁️ 同步失败: ${e.message}") }
+                appendLog("☁️ 同步失败: ${e.message}")
+            } finally {
+                publishSync(
+                    running = false,
+                    percent = if (ok) 100 else -1,
+                    title = if (ok) "同步完成" else "同步结束",
+                    detail = "",
+                )
             }
         }
+    }
+
+    /**
+     * 同步进度：`tick`（每秒刷新的计时/字节进度）只更新进度区，不写日志 ——
+     * 大包上传期间每秒一条日志会把日志框刷满。阶段消息（连接/扫描/上传开始/结果）照旧写日志。
+     */
+    private fun onSyncProgress(p: Syncer.Progress) {
+        val percent = when {
+            p.bytesTotal > 0 && p.bytesSent > 0 -> ((p.bytesSent * 100) / p.bytesTotal).toInt().coerceIn(0, 100)
+            p.total > 0 && p.current > 0 -> (((p.current - 1) * 100) / p.total).coerceIn(0, 100)
+            else -> -1
+        }
+        val detail = buildString {
+            if (p.total > 0) append("第 ${p.current.coerceAtLeast(1)}/${p.total} 个包")
+            if (p.bytesTotal > 0) {
+                if (isNotEmpty()) append(" · ")
+                append("本包 ${com.nous.wxhook.backup.BackupManifest.formatSize(p.bytesTotal)}")
+            }
+        }
+        publishSync(running = true, percent = percent, title = p.message, detail = detail)
+        if (!p.tick) appendLog(p.message)
+    }
+
+    private fun publishSync(running: Boolean, percent: Int, title: String, detail: String) {
+        _uiState.value = _uiState.value.copy(
+            syncRunning = running,
+            syncPercent = percent,
+            syncTitle = title,
+            syncDetail = detail,
+        )
     }
 
     fun rebuildState() {
@@ -359,22 +405,23 @@ class ModuleViewModel(application: Application) : AndroidViewModel(application) 
     private fun loadRemoteConfig() {
         try {
             val cfg = JSONObject(configFile.readText())
-            if (cfg.has("remoteEnabled") || cfg.has("remote")) {
-                _uiState.value = _uiState.value.copy(
-                    remoteEnabled = cfg.optBoolean("remoteEnabled", false),
-                    remotePath = cfg.optString("remote", "wxhook-backup")
-                )
-            } else {
-                // 兼容旧版外部存储路径
-                val oldFile = File("/sdcard/Download/wxhook_backup/remote_config.json")
-                if (oldFile.exists()) {
-                    val oldCfg = JSONObject(oldFile.readText())
-                    _uiState.value = _uiState.value.copy(
-                        remoteEnabled = oldCfg.optBoolean("enabled", false),
-                        remotePath = oldCfg.optString("remote", "wxhook-backup")
-                    )
-                }
-            }
+            // 兼容旧版外部存储路径
+            val legacyFile = File("/sdcard/Download/wxhook_backup/remote_config.json")
+            val legacy = if (!cfg.has("remoteEnabled") && !cfg.has("remote") && legacyFile.exists()) {
+                runCatching { JSONObject(legacyFile.readText()) }.getOrNull()
+            } else null
+            _uiState.value = _uiState.value.copy(
+                // 缺键时与同步服务同源（SyncSettings 默认 true），否则会出现
+                // 「UI 显示关闭、后台照旧上传」这种自相矛盾的状态
+                remoteEnabled = when {
+                    cfg.has("remoteEnabled") -> cfg.optBoolean("remoteEnabled", false)
+                    legacy != null -> legacy.optBoolean("enabled", true)
+                    else -> com.nous.wxhook.sync.SyncSettings.isRemoteEnabled()
+                },
+                remotePath = cfg.optString("remote", "").takeIf { it.isNotBlank() }
+                    ?: legacy?.optString("remote", "wxhook-backup")
+                    ?: "wxhook-backup",
+            )
         } catch (_: Exception) {}
     }
 

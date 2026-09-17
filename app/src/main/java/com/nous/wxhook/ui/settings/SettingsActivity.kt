@@ -257,7 +257,13 @@ class SettingsActivity : AppCompatActivity() {
         val cfg = runCatching { org.json.JSONObject(File(filesDir, "settings_config.json").readText()) }.getOrDefault(org.json.JSONObject())
 
         fun save(k: String, v: Any) {
-            cfg.put(k, v); File(filesDir, "settings_config.json").writeText(cfg.toString())
+            val f = File(filesDir, "settings_config.json")
+            // 每次保存都重新读盘再合并：buildOtherSettings() 时抓的 cfg 是快照，
+            // 整份写回会把期间别的页面（驱动选择 / 云同步开关 / 备份路径）写入的键静默抹掉
+            val fresh = runCatching { org.json.JSONObject(f.readText()) }.getOrDefault(org.json.JSONObject())
+            fresh.put(k, v)
+            cfg.put(k, v)
+            f.writeText(fresh.toString())
             // 更新定时调度
             ScheduleManager.updateAll(this@SettingsActivity)
         }
@@ -278,7 +284,13 @@ class SettingsActivity : AppCompatActivity() {
             })
         }
 
-        fun toggleRow(key: String, label: String, defaultVal: Boolean) {
+        fun toggleRow(
+            key: String,
+            label: String,
+            defaultVal: Boolean,
+            persist: Boolean = true,
+            onToggle: ((Boolean) -> Unit)? = null,
+        ) {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL
                 layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -288,8 +300,11 @@ class SettingsActivity : AppCompatActivity() {
                 text = label; layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
             row.addView(com.google.android.material.switchmaterial.SwitchMaterial(this).apply {
-                isChecked = cfg.optBoolean(key, defaultVal)
-                setOnCheckedChangeListener { _, checked -> save(key, checked) }
+                isChecked = if (persist) cfg.optBoolean(key, defaultVal) else defaultVal
+                setOnCheckedChangeListener { _, checked ->
+                    if (persist) save(key, checked)
+                    onToggle?.invoke(checked)
+                }
             })
             root.addView(row)
         }
@@ -341,7 +356,11 @@ class SettingsActivity : AppCompatActivity() {
         // ═══ 备份设置 ═══
         root.addView(sectionTitle("📂 备份"))
         editRow("backup_path", "备份路径", "/sdcard/Download/wxhook_backup", "")
-        toggleRow("zstd", "使用 zstd 压缩", false)
+        // 压缩开关：实际生效的是 db_config.json 的 compression（BackupEnv.useZstd 读它），
+        // 所以开关必须走 setCompressionUseZstd，光写 settings_config.json 的 "zstd" 没人读
+        toggleRow("zstd", "使用 zstd 压缩", com.nous.wxhook.backup.BackupEnv.useZstd(), persist = false) { checked ->
+            com.nous.wxhook.backup.BackupManifest.setCompressionUseZstd(checked)
+        }
 
         // ═══ 工具 ═══
         root.addView(sectionTitle("🛠 工具"))

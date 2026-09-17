@@ -117,6 +117,13 @@ object BackupManifest {
         } catch (_: Exception) { JSONObject() }
         cfg.put("compression", if (enabled) "zstd" else "gzip")
         BackupEnv.backupWrite(File(BackupEnv.backupDir, DB_CONFIG_FILE).absolutePath, cfg.toString())
+        // 同步设置页的键（settings_config.json 的 "zstd"），否则两处状态会不一致
+        try {
+            val s = File(BackupEnv.filesDirForWrite(), "settings_config.json")
+            val scfg = if (s.exists()) JSONObject(s.readText()) else JSONObject()
+            scfg.put("zstd", enabled)
+            s.writeText(scfg.toString())
+        } catch (_: Exception) {}
     }
 
     // ── Records ──

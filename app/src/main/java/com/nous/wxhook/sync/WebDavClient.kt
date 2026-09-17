@@ -2,11 +2,14 @@ package com.nous.wxhook.sync
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import java.io.File
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
@@ -162,9 +165,9 @@ class WebDavClient(
         }
     }
 
-    override suspend fun upload(local: File, remote: String): Result<RemoteObject> = withContext(Dispatchers.IO) {
+    override suspend fun upload(local: File, remote: String, onProgress: ((uploaded: Long, total: Long) -> Unit)?): Result<RemoteObject> = withContext(Dispatchers.IO) {
         try {
-            val body = local.asRequestBody("application/octet-stream".toMediaType())
+            val body = ProgressRequestBody(local, onProgress)
             val fullUrl = "${url.trimEnd('/')}/$remote"
             val request = Request.Builder()
                 .url(fullUrl)
@@ -238,5 +241,41 @@ class WebDavClient(
 
     override suspend fun getStorageDetails(): Result<Pair<Long, Long>> {
         return Result.failure(Exception("WebDAV storage details not implemented"))
+    }
+}
+
+/**
+ * 流式 PUT body：边写边回报已发送字节（WebDAV 是唯一能拿到真实字节进度的驱动）。
+ * 限流 200ms 一次，避免 759MB 的包刷爆 UI/通知。
+ */
+private class ProgressRequestBody(
+    private val file: File,
+    private val onProgress: ((Long, Long) -> Unit)?,
+) : RequestBody() {
+
+    override fun contentType(): MediaType = "application/octet-stream".toMediaType()
+
+    override fun contentLength(): Long = file.length()
+
+    override fun writeTo(sink: BufferedSink) {
+        val total = file.length()
+        var written = 0L
+        var lastReport = 0L
+        file.inputStream().use { input ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buf)
+                if (read == -1) break
+                sink.write(buf, 0, read)
+                written += read
+                val cb = onProgress ?: continue
+                val now = System.currentTimeMillis()
+                if (now - lastReport >= 200 || written >= total) {
+                    lastReport = now
+                    cb(written, total)
+                }
+            }
+        }
+        onProgress?.invoke(written, total)
     }
 }

@@ -31,7 +31,11 @@ data class SyncResult(
 interface CloudClient {
     suspend fun testConnection(): Result<Unit>
     suspend fun ensureDirectory(path: String): Result<Unit>
-    suspend fun upload(local: File, remote: String): Result<RemoteObject>
+    suspend fun upload(
+        local: File,
+        remote: String,
+        onProgress: ((uploaded: Long, total: Long) -> Unit)? = null,
+    ): Result<RemoteObject>
     suspend fun download(
         remote: String,
         local: File,

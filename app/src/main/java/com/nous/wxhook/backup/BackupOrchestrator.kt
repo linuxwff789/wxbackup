@@ -6,6 +6,7 @@ import android.util.Log
 import com.nous.wxhook.root.RootGateways
 import com.nous.wxhook.root.RootGatewayImpl
 import com.nous.wxhook.storage.WxHookPaths
+import com.nous.wxhook.sync.SyncSettings
 import com.nous.wxhook.sync.Syncer
 import com.nous.wxhook.sync.WebDavClient
 import kotlinx.coroutines.runBlocking
@@ -489,11 +490,8 @@ object BackupOrchestrator {
     fun cloudSync(callback: BackupHookLocal.ProgressCallback?, archivePath: String? = null, tarFiles: List<String> = emptyList()) {
         val config = Syncer.loadConfig()
         if (!config.isValid) return
-        val configFile = File(BackupEnv.backupDir, "remote_config.json")
-        if (configFile.exists()) {
-            val rc = try { JSONObject(BackupEnv.suOut("cat \"${configFile.absolutePath}\" 2>/dev/null").ifBlank { "{}" }) } catch (_: Exception) { JSONObject() }
-            if (!rc.optBoolean("enabled", true)) return
-        }
+        // 开关与设置页同源（SyncSettings 会兼容旧版 /sdcard 的 remote_config.json）
+        if (!SyncSettings.isRemoteEnabled()) return
         // archivePath 未指定时传 null，让 Syncer 走 scanArchives() 兜底扫描全部备份包。
         // 传空列表会让 Syncer 里 `specificArchives?.filter{...} ?: scanArchives()` 的兜底失效，
         // 自动同步永远停在"无备份包可同步"（全量/增量备份后的自动云同步一直是空跑）。

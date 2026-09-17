@@ -109,7 +109,7 @@ class OpenListCloudClient(
         }
     }
 
-    override suspend fun upload(local: File, remotePath: String): Result<RemoteObject> {
+    override suspend fun upload(local: File, remotePath: String, onProgress: ((uploaded: Long, total: Long) -> Unit)?): Result<RemoteObject> {
         return withContext(Dispatchers.IO) {
             try {
                 val h = ensureHandle()
