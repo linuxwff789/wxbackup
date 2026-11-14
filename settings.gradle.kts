@@ -22,3 +22,5 @@ dependencyResolutionManagement {
 rootProject.name = "wxhook"
 include(":app")
 include(":xposed")
+include(":shared")
+include(":notes")

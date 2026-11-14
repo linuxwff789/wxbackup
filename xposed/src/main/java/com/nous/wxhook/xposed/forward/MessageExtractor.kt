@@ -1,0 +1,104 @@
+package com.nous.wxhook.xposed.forward
+
+import de.robv.android.xposed.XposedBridge
+
+/** 反射读取微信 MsgInfo（混淆类名，但 field_* 字段名长期稳定）。 */
+object MessageExtractor {
+
+    private const val TAG = "[wxhook:Extract]"
+
+    data class Extracted(
+        val msgId: Long,
+        val msgSvrId: Long,
+        val type: Int,
+        val createTime: Long,
+        val isSend: Boolean,
+        val talker: String,
+        val content: String,
+        val imgPath: String
+    )
+
+    fun looksLikeMsgInfo(obj: Any?): Boolean {
+        if (obj == null) return false
+        val c = obj.javaClass
+        if (!c.name.startsWith("com.tencent.mm.")) return false
+        var clazz: Class<*>? = c
+        while (clazz != null && clazz != Any::class.java) {
+            for (f in clazz.declaredFields) {
+                if (f.name == "field_msgId" || f.name == "field_talker" || f.name == "field_createTime") return true
+            }
+            clazz = clazz.superclass
+        }
+        return false
+    }
+
+    fun extract(obj: Any): Extracted? {
+        if (!looksLikeMsgInfo(obj)) return null
+        val msgId = (read(obj, "field_msgId", "msgId") as? Number)?.toLong() ?: 0L
+        val msgSvrId = (read(obj, "field_msgSvrId", "msgSvrId") as? Number)?.toLong() ?: 0L
+        val type = (read(obj, "field_type", "type") as? Number)?.toInt() ?: 0
+        val createTime = (read(obj, "field_createTime", "createTime") as? Number)?.toLong() ?: 0L
+        val isSend = ((read(obj, "field_isSend", "isSend") as? Number)?.toInt() ?: 0) == 1
+        val talker = read(obj, "field_talker", "talker") as? String ?: ""
+        val content = read(obj, "field_content", "content") as? String ?: ""
+        val imgPath = read(obj, "field_imgPath", "imgPath") as? String ?: ""
+        return Extracted(msgId, msgSvrId, type, createTime, isSend, talker, content, imgPath)
+    }
+
+    /** 诊断用：打印对象全部字段（首次遇到某类时调用）。 */
+    fun dump(obj: Any): String {
+        val sb = StringBuilder("class=${obj.javaClass.name}\n")
+        var clazz: Class<*>? = obj.javaClass
+        while (clazz != null && clazz != Any::class.java) {
+            for (f in clazz.declaredFields) {
+                f.isAccessible = true
+                val v = try {
+                    f.get(obj)
+                } catch (_: Throwable) {
+                    continue
+                } ?: continue
+                val s = when (v) {
+                    is ByteArray -> "bytes(${v.size})"
+                    is String -> v.take(400)
+                    else -> v.toString().take(200)
+                }
+                sb.append("  ").append(f.name).append('=').append(s).append('\n')
+            }
+            clazz = clazz.superclass
+        }
+        return sb.toString()
+    }
+
+    private fun read(obj: Any, vararg names: String): Any? {
+        // 先精确匹配 field_*，再按后缀匹配
+        var clazz: Class<*>? = obj.javaClass
+        while (clazz != null && clazz != Any::class.java) {
+            for (f in clazz.declaredFields) {
+                if (names.any { f.name == it }) {
+                    f.isAccessible = true
+                    return try {
+                        f.get(obj)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                }
+            }
+            clazz = clazz.superclass
+        }
+        clazz = obj.javaClass
+        while (clazz != null && clazz != Any::class.java) {
+            for (f in clazz.declaredFields) {
+                if (names.any { f.name.endsWith(it) }) {
+                    f.isAccessible = true
+                    return try {
+                        f.get(obj)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                }
+            }
+            clazz = clazz.superclass
+        }
+        return null
+    }
+}

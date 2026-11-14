@@ -59,6 +59,8 @@ android {
 }
 
 dependencies {
+    implementation(project(":shared"))
+
     // Xposed API (compileOnly — provided at runtime by LSPosed)
     compileOnly("de.robv.android.xposed:api:82")
     compileOnly("de.robv.android.xposed:api:82:sources")

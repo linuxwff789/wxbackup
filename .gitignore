@@ -36,3 +36,4 @@ backup_download/
 tools/
 *.apk
 *.zip
+.kotlin/

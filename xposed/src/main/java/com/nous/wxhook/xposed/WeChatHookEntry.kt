@@ -11,11 +11,13 @@ import com.nous.wxhook.xposed.hook.AntiRecallHook
 import com.nous.wxhook.xposed.hook.SettingsEntryHook
 import com.nous.wxhook.xposed.hook.BackupHook
 import com.nous.wxhook.xposed.hook.KeepAliveHook
+import com.nous.wxhook.xposed.forward.ForwardHook
 
 class WeChatHookEntry : IXposedHookLoadPackage {
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (lpparam.packageName != "com.tencent.mm") return
+        if (lpparam.processName != "com.tencent.mm") return
 
         XposedBridge.log("[wxhook] loaded in WeChat (pid=${android.os.Process.myPid()})")
 
@@ -24,6 +26,14 @@ class WeChatHookEntry : IXposedHookLoadPackage {
 
         // Hook 消息拦截
         MessageHook.hook(lpparam)
+
+        // 转发到笔记 App（长按菜单 / 多选）
+        try {
+            ForwardHook.hook(lpparam)
+            XposedBridge.log("[wxhook] ForwardHook done")
+        } catch (e: Exception) {
+            XposedBridge.log("[wxhook] ForwardHook error: $e")
+        }
 
         // Hook 防撤回
         AntiRecallHook.hook(lpparam)

@@ -1,0 +1,339 @@
+package com.nous.wxnotes.data
+
+import android.content.Context
+import android.os.Environment
+import com.nous.wxshared.ForwardProtocol
+import com.nous.wxshared.ForwardProtocol.ForwardBatch
+import com.nous.wxshared.ForwardProtocol.ForwardMessage
+import com.nous.wxshared.WxMessageParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+class NotesRepository(private val context: Context) {
+
+    private val db = NotesDatabase.get(context)
+    private val noteDao = db.noteDao()
+    private val messageDao = db.messageDao()
+    private val tagDao = db.tagDao()
+
+    private val prefs = context.getSharedPreferences("wxnotes", Context.MODE_PRIVATE)
+
+    data class SaveResult(
+        val noteId: Long,
+        val noteTitle: String,
+        val added: Int,
+        val skipped: Int,
+        val created: Boolean
+    )
+
+    /** 把一批转发消息落库；同会话窗口内自动追加到上一篇笔记。 */
+    suspend fun saveBatch(batch: ForwardBatch): SaveResult = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val conv = batch.conversation
+        val talker = conv.talker
+        val talkerTitle = conv.title.ifBlank { talker.ifBlank { "微信消息" } }
+        val windowMs = prefs.getLong(KEY_AGGREGATE_WINDOW, DEFAULT_AGGREGATE_WINDOW) * 60_000L
+
+        // 1. 选出目标笔记
+        val existing = if (talker.isNotBlank()) {
+            noteDao.findAggregateTarget(talker, now - windowMs)
+        } else null
+        val noteId: Long
+        var created = false
+        if (existing != null) {
+            noteId = existing.id
+        } else {
+            noteId = noteDao.insert(
+                NoteEntity(
+                    title = batch.noteTitle.ifBlank { defaultTitle(talkerTitle) },
+                    createdAt = now,
+                    updatedAt = now,
+                    auto = true,
+                    talker = talker,
+                    talkerTitle = talkerTitle,
+                    lastMessageTime = now
+                )
+            )
+            created = true
+        }
+
+        // 2. 媒体导入 + 消息落库
+        var added = 0
+        var skipped = 0
+        var lastText = ""
+        var lastTime = 0L
+        batch.messages.forEach { m ->
+            val dedupe = buildString {
+                append(talker).append('|').append(m.effectiveDedupeKey())
+            }
+            val parsed = if (m.text.isBlank()) {
+                WxMessageParser.parse(m.type, m.rawXml, m.subType)
+            } else null
+            val text = m.text.ifBlank { parsed?.text.orEmpty() }
+            val mediaKind = m.mediaKind.takeUnless { it.isBlank() || it == ForwardProtocol.MEDIA_NONE }
+                ?: parsed?.mediaKind.orEmpty()
+            val mediaPath = importMedia(noteId, m, mediaKind)
+
+            val entity = MessageEntity(
+                noteId = noteId,
+                dedupeKey = dedupe,
+                msgId = m.msgId,
+                msgSvrId = m.msgSvrId,
+                talker = talker,
+                talkerTitle = talkerTitle,
+                sender = m.sender,
+                senderName = m.senderName.ifBlank {
+                    if (m.isSend) "我" else talkerTitle
+                },
+                type = m.type,
+                subType = if (m.subType != 0) m.subType else parsed?.subType ?: 0,
+                createTime = m.createTime,
+                isSend = m.isSend,
+                text = text,
+                rawXml = m.rawXml.take(if (prefs.getBoolean(KEY_KEEP_RAW, true)) Int.MAX_VALUE else 0),
+                mediaKind = mediaKind,
+                mediaPath = mediaPath,
+                fileName = m.fileName.ifBlank { parsed?.fileName.orEmpty() },
+                fileSize = m.fileSize.takeIf { it > 0 } ?: parsed?.fileSize ?: 0,
+                durationMs = m.durationMs.takeIf { it > 0 } ?: parsed?.durationMs ?: 0
+            )
+            val row = messageDao.insertIgnore(entity)
+            if (row == -1L) skipped++ else {
+                added++
+                if (m.createTime * 1000 >= lastTime) {
+                    lastTime = m.createTime * 1000
+                    lastText = text
+                }
+            }
+        }
+
+        // 3. 更新笔记元数据
+        val note = noteDao.get(noteId) ?: return@withContext SaveResult(noteId, "", added, skipped, created)
+        val count = messageDao.countByNote(noteId)
+        val preview = lastText.replace(Regex("\\s+"), " ").trim().take(140)
+        noteDao.update(
+            note.copy(
+                messageCount = count,
+                preview = if (preview.isNotBlank()) preview else note.preview,
+                updatedAt = now,
+                lastMessageTime = maxOf(note.lastMessageTime, lastTime, now),
+                talkerTitle = if (note.talkerTitle.isBlank()) talkerTitle else note.talkerTitle
+            )
+        )
+        SaveResult(noteId, note.title, added, skipped, created)
+    }
+
+    /** 保存单条消息（第三方 App / 调试用）。 */
+    suspend fun saveSingle(message: ForwardMessage, conversation: ForwardProtocol.Conversation): SaveResult =
+        saveBatch(ForwardBatch(conversation = conversation, messages = listOf(message)))
+
+    private suspend fun importMedia(noteId: Long, m: ForwardMessage, kind: String): String {
+        if (m.localPath.isBlank()) return ""
+        val src = File(m.localPath)
+        if (!src.exists() || !src.canRead() || !src.isFile) return m.localPath
+        val fileName = src.name.ifBlank { "media_${System.currentTimeMillis()}" }
+        val dir = File(File(context.filesDir, "media"), noteId.toString())
+        if (!dir.exists() && !dir.mkdirs()) return m.localPath
+        val dst = uniqueFile(dir, fileName)
+        return try {
+            src.copyTo(dst, overwrite = true)
+            dst.absolutePath
+        } catch (_: Throwable) {
+            m.localPath
+        }
+    }
+
+    private fun uniqueFile(dir: File, name: String): File {
+        var f = File(dir, name)
+        if (!f.exists()) return f
+        val dot = name.lastIndexOf('.')
+        val base = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ""
+        var i = 1
+        while (f.exists()) {
+            f = File(dir, "$base-$i$ext")
+            i++
+        }
+        return f
+    }
+
+    private fun defaultTitle(talkerTitle: String): String {
+        val day = SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date())
+        return "$talkerTitle · $day"
+    }
+
+    // ── 观察 ───────────────────────────────────────────────────────
+
+    fun observeNotes(q: String) = noteDao.observeAll(q)
+    fun observeNote(noteId: Long) = noteDao.observe(noteId)
+    fun observeMessages(noteId: Long) = messageDao.observeByNote(noteId)
+    fun observeTags(noteId: Long) = tagDao.observeTagsOf(noteId)
+    fun observeAllTags() = tagDao.observeWithCount()
+    fun observeNotesWithTag(tagId: Long) = tagDao.observeNotesWithTag(tagId)
+
+    // ── 笔记编辑 ───────────────────────────────────────────────────
+
+    suspend fun updateNote(note: NoteEntity) = withContext(Dispatchers.IO) {
+        noteDao.update(note.copy(updatedAt = System.currentTimeMillis()))
+    }
+
+    suspend fun deleteNote(noteId: Long) = withContext(Dispatchers.IO) {
+        messageDao.deleteByNote(noteId)
+        noteDao.delete(noteId)
+    }
+
+    suspend fun createManualNote(title: String): Long = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        noteDao.insert(NoteEntity(title = title, createdAt = now, updatedAt = now, auto = false))
+    }
+
+    suspend fun renameNote(noteId: Long, title: String) = withContext(Dispatchers.IO) {
+        noteDao.get(noteId)?.let { noteDao.update(it.copy(title = title, updatedAt = System.currentTimeMillis())) }
+    }
+
+    suspend fun setArchived(noteId: Long, archived: Boolean) = withContext(Dispatchers.IO) {
+        noteDao.get(noteId)?.let { noteDao.update(it.copy(archived = archived, updatedAt = System.currentTimeMillis())) }
+    }
+
+    suspend fun setPinned(noteId: Long, pinned: Boolean) = withContext(Dispatchers.IO) {
+        noteDao.get(noteId)?.let { noteDao.update(it.copy(pinned = pinned, updatedAt = System.currentTimeMillis())) }
+    }
+
+    // ── 标签 ───────────────────────────────────────────────────────
+
+    suspend fun addTag(noteId: Long, name: String) = withContext(Dispatchers.IO) {
+        val clean = name.trim().trimStart('#')
+        if (clean.isBlank()) return@withContext
+        val existing = tagDao.findByName(clean)
+        val id = existing?.id ?: tagDao.insert(TagEntity(name = clean))
+        if (id > 0) tagDao.link(NoteTagCrossRef(noteId, id))
+    }
+
+    suspend fun removeTag(noteId: Long, tagId: Long) = withContext(Dispatchers.IO) {
+        tagDao.unlink(noteId, tagId)
+    }
+
+    suspend fun deleteTag(tagId: Long) = withContext(Dispatchers.IO) {
+        tagDao.unlinkAll(tagId)
+        tagDao.delete(tagId)
+    }
+
+    suspend fun tagsOf(noteId: Long): List<TagEntity> = tagDao.observeTagsOf(noteId).first()
+
+    // ── 导出 ───────────────────────────────────────────────────────
+
+    /**
+     * 导出为 Obsidian 风格 Markdown：
+     * - frontmatter（title/tags/source/created/updated/message_count）
+     * - 用户正文
+     * - 聊天记录时间线 + 媒体相对路径
+     */
+    suspend fun exportMarkdown(noteId: Long): File? = withContext(Dispatchers.IO) {
+        val note = noteDao.get(noteId) ?: return@withContext null
+        val messages = messageDao.getByNote(noteId)
+        val tags = tagsOf(noteId)
+        val now = Date()
+        val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(now)
+        val slug = sanitize(note.title).ifBlank { "note" } + "_" + ts
+
+        val baseDir = exportRoot() ?: return@withContext null
+        val noteDir = File(baseDir, slug)
+        val mediaDir = File(noteDir, "media")
+        if (!mediaDir.exists()) mediaDir.mkdirs()
+
+        val sb = StringBuilder()
+        val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
+        sb.appendLine("---")
+        sb.appendLine("title: \"${note.title.replace("\"", "\\\"")}\"")
+        sb.appendLine("created: ${iso.format(Date(note.createdAt))}")
+        sb.appendLine("updated: ${iso.format(Date(note.updatedAt))}")
+        sb.appendLine("source: 微信")
+        if (note.talkerTitle.isNotBlank()) sb.appendLine("conversation: \"${note.talkerTitle}\"")
+        if (tags.isNotEmpty()) sb.appendLine("tags: [${tags.joinToString(", ") { it.name }}]")
+        sb.appendLine("message_count: ${messages.size}")
+        sb.appendLine("---")
+        sb.appendLine()
+        sb.appendLine("# ${note.title}")
+        sb.appendLine()
+        if (note.body.isNotBlank()) {
+            sb.appendLine(note.body)
+            sb.appendLine()
+        }
+        sb.appendLine("---")
+        sb.appendLine()
+        sb.appendLine("## 聊天记录")
+        sb.appendLine()
+
+        val dayFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+        var lastDay = ""
+        messages.forEach { m ->
+            val timeMs = if (m.createTime > 0) m.createTime * 1000 else note.createdAt
+            val day = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(timeMs))
+            if (day != lastDay) {
+                sb.appendLine("### $day")
+                sb.appendLine()
+                lastDay = day
+            }
+            val who = if (m.isSend) "我" else m.senderName.ifBlank { note.talkerTitle }
+            sb.appendLine("**${dayFmt.format(Date(timeMs))} · $who**")
+            sb.appendLine()
+            when {
+                m.mediaKind == ForwardProtocol.MEDIA_IMAGE && m.mediaPath.isNotBlank() -> {
+                    val rel = copyMediaToExport(m.mediaPath, mediaDir)
+                    if (rel != null) sb.appendLine("![]($rel)") else sb.appendLine(m.text.ifBlank { "[图片]" })
+                }
+                m.mediaPath.isNotBlank() -> {
+                    val rel = copyMediaToExport(m.mediaPath, mediaDir)
+                    if (rel != null) {
+                        val label = m.fileName.ifBlank { m.text.ifBlank { "附件" } }
+                        sb.appendLine("[$label]($rel)")
+                    } else {
+                        sb.appendLine(m.text.ifBlank { "[附件]" })
+                    }
+                }
+                else -> sb.appendLine(m.text.ifBlank { WxMessageParser.typeName(m.type) })
+            }
+            sb.appendLine()
+        }
+
+        val out = File(noteDir, "${sanitize(note.title).ifBlank { "note" }}.md")
+        out.writeText(sb.toString())
+        out
+    }
+
+    private fun copyMediaToExport(path: String, mediaDir: File): String? {
+        val src = File(path)
+        if (!src.exists() || !src.canRead()) return null
+        return try {
+            val dst = uniqueFile(mediaDir, src.name)
+            src.copyTo(dst, overwrite = true)
+            "media/${dst.name}"
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun exportRoot(): File? {
+        val public = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "wxnotes/exports")
+        if (public.exists() || public.mkdirs()) return public
+        val fallback = File(File(context.filesDir, "exports"), "").apply { mkdirs() }
+        return if (fallback.exists()) fallback else null
+    }
+
+    private fun sanitize(name: String): String = name
+        .replace(Regex("[\\\\/:*?\"<>|\\n\\r\\t]"), "_")
+        .trim()
+        .take(60)
+
+    companion object {
+        const val KEY_AGGREGATE_WINDOW = "aggregate_window_min"
+        const val DEFAULT_AGGREGATE_WINDOW = 30L
+        const val KEY_KEEP_RAW = "keep_raw_xml"
+        const val KEY_AUTO_NOTIFY = "auto_notify"
+    }
+}
