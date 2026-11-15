@@ -290,16 +290,15 @@ object MultiSelectHook {
             return emptySet()
         }
         return try {
-            val mgr = readField(ctx, "f35820c")
+            val helper = de.robv.android.xposed.XposedHelpers::class.java
+            val mgr = de.robv.android.xposed.XposedHelpers.getObjectField(ctx, "f35820c")
             XposedBridge.log("$TAG ids mgr=${mgr?.javaClass?.name}")
             if (mgr == null) return emptySet()
             val cls = Class.forName("wl5.z", false, ctx.javaClass.classLoader)
-            val comp = mgr.javaClass.methods.firstOrNull {
-                it.name == "a" && it.parameterCount == 1 && it.parameterTypes[0] == Class::class.java
-            }?.invoke(mgr, cls)
+            val comp = de.robv.android.xposed.XposedHelpers.callMethod(mgr, "a", cls)
             XposedBridge.log("$TAG ids comp=${comp?.javaClass?.name}")
             if (comp == null) return emptySet()
-            val w = readField(comp, "W")
+            val w = de.robv.android.xposed.XposedHelpers.getObjectField(comp, "W")
             XposedBridge.log("$TAG ids w=${w?.javaClass?.name} size=${(w as? Collection<*>)?.size}")
             val col = w as? Collection<*> ?: return emptySet()
             val ids = col.mapNotNull { (readField(it, "f149692d") as? Number)?.toLong() }.toSet()
