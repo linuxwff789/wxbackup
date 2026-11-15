@@ -62,13 +62,15 @@ object WxMessageParser {
 
     fun parse(type: Int, content: String?, forcedSubType: Int = 0): Parsed {
         val raw = content.orEmpty()
-        return when (type) {
-            TYPE_TEXT -> Parsed(TYPE_TEXT, forcedSubType, raw.ifBlank { "" })
+        // 微信 8.0.79 对部分消息用新编码（如文件 0x41000001），按 content 结构反推真实类型
+        val effectiveType = if (type in 1..10002) type else inferType(raw)
+        return when (effectiveType) {
+            TYPE_TEXT -> Parsed(effectiveType, forcedSubType, raw.ifBlank { "" })
 
             TYPE_IMAGE -> {
                 val img = findFirst(raw, "img")
                 Parsed(
-                    type = TYPE_IMAGE, subType = forcedSubType,
+                    type = effectiveType, subType = forcedSubType,
                     text = "[图片]",
                     mediaKind = ForwardProtocol.MEDIA_IMAGE,
                     fileSize = img?.attr("length")?.toLongOrNull() ?: 0,
@@ -81,7 +83,7 @@ object WxMessageParser {
                 val len = v?.attr("voicelength")?.toLongOrNull() ?: 0
                 val trans = findFirst(raw, "voicetrans")?.text?.trim().orEmpty()
                 Parsed(
-                    type = TYPE_VOICE, subType = forcedSubType,
+                    type = effectiveType, subType = forcedSubType,
                     text = if (trans.isNotBlank()) "[语音] $trans" else "[语音] ${formatDuration(len)}",
                     desc = trans,
                     mediaKind = ForwardProtocol.MEDIA_VOICE,
@@ -94,7 +96,7 @@ object WxMessageParser {
                 val v = findFirst(raw, "videomsg")
                 val len = v?.attr("playlength")?.toLongOrNull() ?: 0
                 Parsed(
-                    type = TYPE_VIDEO, subType = forcedSubType,
+                    type = effectiveType, subType = forcedSubType,
                     text = "[视频]",
                     mediaKind = ForwardProtocol.MEDIA_VIDEO,
                     fileSize = v?.attr("length")?.toLongOrNull() ?: 0,
@@ -104,7 +106,7 @@ object WxMessageParser {
             }
 
             TYPE_EMOJI -> Parsed(
-                type = TYPE_EMOJI, subType = forcedSubType,
+                type = effectiveType, subType = forcedSubType,
                 text = "[动画表情]",
                 mediaKind = ForwardProtocol.MEDIA_EMOJI,
                 mediaHint = findFirst(raw, "emoji")?.attr("cdnurl").orEmpty()
@@ -116,7 +118,7 @@ object WxMessageParser {
                 val poi = loc?.attr("poiname").orEmpty()
                 val name = listOf(poi, label).firstOrNull { it.isNotBlank() }.orEmpty()
                 Parsed(
-                    type = TYPE_LOCATION, subType = forcedSubType,
+                    type = effectiveType, subType = forcedSubType,
                     text = "[位置] $name".trim(),
                     desc = label
                 )
@@ -126,7 +128,7 @@ object WxMessageParser {
                 val node = findFirst(raw, "msg")
                 val nick = node?.attr("nickname").orEmpty()
                 Parsed(
-                    type = TYPE_CARD, subType = forcedSubType,
+                    type = effectiveType, subType = forcedSubType,
                     text = "[名片] $nick".trim(),
                     desc = node?.attr("username").orEmpty()
                 )
@@ -136,17 +138,29 @@ object WxMessageParser {
 
             TYPE_APP -> parseApp(raw, forcedSubType)
 
-            TYPE_VOIP -> Parsed(TYPE_VOIP, forcedSubType, "[语音通话]")
+            TYPE_VOIP -> Parsed(effectiveType, forcedSubType, "[语音通话]")
 
             TYPE_SYSTEM, TYPE_NOTICE -> {
                 val plain = stripXml(raw)
-                Parsed(TYPE_SYSTEM, forcedSubType, plain.ifBlank { "[系统消息]" })
+                Parsed(effectiveType, forcedSubType, plain.ifBlank { "[系统消息]" })
             }
 
-            TYPE_REVOKE -> Parsed(TYPE_REVOKE, forcedSubType, "[消息已撤回]")
+            TYPE_REVOKE -> Parsed(effectiveType, forcedSubType, "[消息已撤回]")
 
             else -> Parsed(type, forcedSubType, stripXml(raw).ifBlank { "[消息 type=$type]" })
         }
+    }
+
+    fun inferType(raw: String): Int = when {
+        raw.isBlank() -> TYPE_TEXT
+        raw.contains("<appmsg", true) -> TYPE_APP
+        raw.contains("<voicemsg", true) -> TYPE_VOICE
+        raw.contains("<videomsg", true) -> TYPE_VIDEO
+        raw.contains("<img", true) -> TYPE_IMAGE
+        raw.contains("<emoji", true) -> TYPE_EMOJI
+        raw.contains("<location", true) -> TYPE_LOCATION
+        raw.contains("<msg", true) -> TYPE_APP
+        else -> TYPE_TEXT
     }
 
     // ── 应用消息（type=49） ─────────────────────────────────────────

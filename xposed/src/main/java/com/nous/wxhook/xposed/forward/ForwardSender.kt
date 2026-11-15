@@ -29,6 +29,14 @@ object ForwardSender {
             return false
         }
 
+        // 诊断：首次转发时把 MsgInfo 字段打进日志（便于适配媒体路径/新类型编码）
+        if (dumped.add(ex.talker + "#" + ex.msgId)) {
+            val dump = MessageExtractor.dump(msgInfo)
+            dump.lineSequence().take(70).forEach { line ->
+                XposedBridge.log("$TAG MSGDUMP $line")
+            }
+        }
+
         val isGroup = ex.talker.endsWith("@chatroom")
         var content = ex.content
         var sender = ""
@@ -44,9 +52,13 @@ object ForwardSender {
         val parsed = WxMessageParser.parse(ex.type, content)
         var mediaKind = parsed.mediaKind
         var mediaUrl = ""
-        val localMedia = ex.imgPath
-        if (localMedia.isNotBlank() && File(localMedia).isFile) {
-            MediaServer.urlFor(localMedia)?.let { mediaUrl = it }
+        val type = parsed.type
+        val candidates = listOf(ex.imgPath, ex.fileFullPath)
+            .filter { it.isNotBlank() }
+        val localMedia = candidates.firstOrNull { File(it).isFile }
+            ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
+        if (localMedia != null) {
+            MediaServer.uriFor(localMedia)?.let { mediaUrl = it }
             if (mediaKind == ForwardProtocol.MEDIA_NONE) mediaKind = guessKind(localMedia)
         }
 
@@ -54,7 +66,7 @@ object ForwardSender {
         val fwd = ForwardMessage(
             msgId = ex.msgId,
             msgSvrId = ex.msgSvrId,
-            type = ex.type,
+            type = type,
             subType = parsed.subType,
             createTime = createTime,
             isSend = ex.isSend,
@@ -112,6 +124,23 @@ object ForwardSender {
         )
         toast(ctx, "已保存到笔记：${parsed.text.take(24)}")
         return true
+    }
+
+    private val dumped = HashSet<String>()
+
+    /** 本地路径拿不到时，按文件名在微信数据目录里兜底查找（下载过的文件/图片）。 */
+    private fun findMediaFile(name: String, kind: String): String? {
+        if (name.isBlank()) return null
+        val roots = listOf(
+            "/data/data/com.tencent.mm/MicroMsg/Download",
+            "/data/data/com.tencent.mm/MicroMsg/attachment",
+            "/data/data/com.tencent.mm/MicroMsg"
+        )
+        roots.forEach { root ->
+            val f = File(root, name)
+            if (f.isFile) return f.absolutePath
+        }
+        return null
     }
 
     private fun guessKind(path: String): String {

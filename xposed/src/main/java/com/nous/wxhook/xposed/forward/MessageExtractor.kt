@@ -15,7 +15,9 @@ object MessageExtractor {
         val isSend: Boolean,
         val talker: String,
         val content: String,
-        val imgPath: String
+        val imgPath: String,
+        val fileFullPath: String,
+        val fileName: String
     )
 
     fun looksLikeMsgInfo(obj: Any?): Boolean {
@@ -44,7 +46,9 @@ object MessageExtractor {
         val talker = read(obj, "field_talker", "talker") as? String ?: ""
         val content = read(obj, "field_content", "content") as? String ?: ""
         val imgPath = read(obj, "field_imgPath", "imgPath") as? String ?: ""
-        return Extracted(msgId, msgSvrId, type, createTime, isSend, talker, content, imgPath)
+        val fileFullPath = read(obj, "field_fileFullPath", "fileFullPath") as? String ?: ""
+        val fileName = read(obj, "field_fileName", "fileName") as? String ?: ""
+        return Extracted(msgId, msgSvrId, type, createTime, isSend, talker, content, imgPath, fileFullPath, fileName)
     }
 
     /** 诊断用：打印对象全部字段（首次遇到某类时调用）。 */
