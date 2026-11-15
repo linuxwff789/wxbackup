@@ -22,21 +22,45 @@ class BatchReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ForwardProtocol.ACTION_RECEIVE_BATCH) return
+        // 批次可能较大，写盘不能占主线程；且 WorkManager 初始化放在广播 finish 之后
+        val pending = goAsync()
+        var path: String? = null
+        try {
+            path = handle(context, intent)
+        } catch (_: Throwable) {
+        } finally {
+            pending.finish()
+        }
+        if (path != null) {
+            val p = path
+            Thread({ enqueue(context, p) }, "wxnotes-batch-wm").start()
+        }
+    }
+
+    private fun enqueue(context: Context, path: String) {
+        try {
+            val request = OneTimeWorkRequestBuilder<ImportWorker>()
+                .setInputData(workDataOf(ImportWorker.KEY_PATH to path))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
+                .build()
+            WorkManager.getInstance(context).enqueue(request)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun handle(context: Context, intent: Intent): String? {
         val json = intent.getStringExtra(ForwardProtocol.EXTRA_BATCH_JSON)
             ?: intent.getStringExtra(ForwardProtocol.EXTRA_JSON_PATH)?.let { p ->
                 runCatching { File(p).readText() }.getOrNull()
             }
-            ?: return
-        val batch = ForwardProtocol.ForwardBatch.fromJson(json) ?: return
+            ?: return null
+        val batch = ForwardProtocol.ForwardBatch.fromJson(json) ?: return null
 
         val dir = File(context.filesDir, "imports").apply { mkdirs() }
         val file = File(dir, "${batch.batchId}.json")
-        runCatching { file.writeText(json) }.getOrElse { return }
-
-        val request = OneTimeWorkRequestBuilder<ImportWorker>()
-            .setInputData(workDataOf(ImportWorker.KEY_PATH to file.absolutePath))
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
-            .build()
-        WorkManager.getInstance(context).enqueue(request)
+        return runCatching {
+            file.writeText(json)
+            file.absolutePath
+        }.getOrNull()
     }
 }
