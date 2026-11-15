@@ -79,8 +79,11 @@ object ForwardProbe {
                     hookedMethods++
                     XposedBridge.log(
                         "$TAG hooked ${c.name}.${m.name}(" +
-                            m.parameterTypes.joinToString { it.simpleName } + ")"
+                            m.parameterTypes.joinToString { it.name } + ")"
                     )
+                    if (m.name == "onCreateMMMenu") {
+                        m.parameterTypes.forEach { inspectMenuType(it) }
+                    }
                 } catch (e: Throwable) {
                     XposedBridge.log("$TAG hook fail ${c.name}.${m.name}: ${e.message}")
                 }
@@ -95,48 +98,133 @@ object ForwardProbe {
             XposedBridge.log(
                 "$TAG HIT $key args=" + param.args.joinToString(", ") { it?.javaClass?.name ?: "null" }
             )
-            param.args.forEach { a ->
-                if (MessageExtractor.looksLikeMsgInfo(a)) {
-                    val dump = MessageExtractor.dump(a)
-                    dump.lineSequence().chunked(12).forEach { lines ->
-                        XposedBridge.log("$TAG DUMP " + lines.joinToString("\n"))
-                    }
-                }
+            param.args.forEach { a -> dumpMsgIfAny("ARG", a) }
+            dumpMsgIfAny("OWNER", param.thisObject)
+            if (method.name == "onCreateMMMenu") {
+                inspectMenuInstance(param.args.firstOrNull())
             }
         }
 
         when (method.name) {
             "onCreateMMMenu" -> {
-                val menu = param.args.firstOrNull { it is Menu } as? Menu ?: return
-                val msg = param.args.firstOrNull { MessageExtractor.looksLikeMsgInfo(it) } ?: currentMsg
-                if (msg != null) {
-                    currentMsg = msg
-                    if (menu.findItem(ITEM_ID) == null) {
-                        try {
-                            menu.add(Menu.NONE, ITEM_ID, 0, TITLE)
-                            XposedBridge.log("$TAG menu item added by ${clazz.name}")
-                        } catch (e: Throwable) {
-                            XposedBridge.log("$TAG menu.add failed: ${e.message}")
-                        }
-                    }
-                }
+                val menuObj = param.args.firstOrNull() ?: return
+                val msg = param.args.firstOrNull { MessageExtractor.looksLikeMsgInfo(it) }
+                    ?: findMsgIn(param.thisObject)
+                    ?: currentMsg
+                if (msg != null) currentMsg = msg
+                addMenuItem(menuObj, clazz)
             }
 
             "onMMMenuItemSelected" -> {
-                val item = param.args.firstOrNull { it is MenuItem } as? MenuItem ?: return
-                val title = item.title?.toString().orEmpty()
-                if (item.itemId == ITEM_ID || title == TITLE) {
+                val item = param.args.firstOrNull { it is MenuItem } as? MenuItem
+                val title = item?.title?.toString().orEmpty()
+                val index = (param.args.getOrNull(1) as? Number)?.toInt()
+                if (item?.itemId == ITEM_ID || title == TITLE) {
                     val msg = currentMsg
+                        ?: findMsgIn(param.thisObject)
                         ?: param.args.firstOrNull { MessageExtractor.looksLikeMsgInfo(it) }
                     if (msg != null) {
                         ForwardSender.forward(ctx, msg)
                     } else {
-                        XposedBridge.log("$TAG menu clicked but no MsgInfo")
+                        XposedBridge.log("$TAG menu clicked but no MsgInfo (owner=${param.thisObject?.javaClass?.name})")
                     }
                     param.result = true
                 }
             }
         }
+    }
+
+    private fun inspectMenuType(type: Class<*>) {
+        try {
+            XposedBridge.log(
+                "$TAG menuType=${type.name} isMenu=${Menu::class.java.isAssignableFrom(type)} " +
+                    "super=${type.superclass?.name} ifaces=${type.interfaces.joinToString { it.name }}"
+            )
+            val methods = type.declaredMethods
+                .filter { it.name.contains("add", true) || it.name.contains("item", true) || it.name.contains("menu", true) }
+                .joinToString(", ") { m -> "${m.name}(${m.parameterTypes.joinToString { it.simpleName }})" }
+            XposedBridge.log("$TAG menuMethods: ${methods.take(1800)}")
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG inspectMenuType fail: ${e.message}")
+        }
+    }
+
+    private fun inspectMenuInstance(obj: Any?) {
+        if (obj == null) return
+        try {
+            val methods = obj.javaClass.declaredMethods
+                .filter { it.name.contains("add", true) || it.name.contains("item", true) }
+                .joinToString(", ") { m -> "${m.name}(${m.parameterTypes.joinToString { it.simpleName }})" }
+            XposedBridge.log("$TAG menuInstance=${obj.javaClass.name} addMethods: ${methods.take(1800)}")
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun addMenuItem(menuObj: Any, clazz: Class<*>) {
+        // 1. 标准 Menu 接口
+        if (menuObj is Menu) {
+            try {
+                if (menuObj.findItem(ITEM_ID) == null) {
+                    menuObj.add(Menu.NONE, ITEM_ID, 0, TITLE)
+                    XposedBridge.log("$TAG menu item added (Menu) by ${clazz.name}")
+                }
+            } catch (e: Throwable) {
+                XposedBridge.log("$TAG Menu.add failed: ${e.message}")
+            }
+            return
+        }
+        // 2. 微信自定义菜单：反射查找 add 类方法
+        val candidates = listOf(
+            Triple("add", arrayOf<Class<*>>(Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!, CharSequence::class.java), arrayOf<Any>(0, ITEM_ID, 0, TITLE)),
+            Triple("add", arrayOf<Class<*>>(Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!, String::class.java), arrayOf<Any>(0, ITEM_ID, 0, TITLE)),
+            Triple("add", arrayOf<Class<*>>(Int::class.javaPrimitiveType!!, CharSequence::class.java), arrayOf<Any>(ITEM_ID, TITLE)),
+            Triple("add", arrayOf<Class<*>>(Int::class.javaPrimitiveType!!, String::class.java), arrayOf<Any>(ITEM_ID, TITLE)),
+            Triple("addTextOptionMenu", arrayOf<Class<*>>(Int::class.javaPrimitiveType!!, String::class.java), arrayOf<Any>(ITEM_ID, TITLE)),
+            Triple("addTextOptionMenu", arrayOf<Class<*>>(Int::class.javaPrimitiveType!!, CharSequence::class.java, Any::class.java), arrayOfNulls<Any>(3).also { it[0] = ITEM_ID; it[1] = TITLE })
+        )
+        for ((name, types, args) in candidates) {
+            try {
+                val m = menuObj.javaClass.getMethod(name, *types)
+                m.invoke(menuObj, *args)
+                XposedBridge.log("$TAG menu item added via ${name}(${types.joinToString { it.simpleName }})")
+                return
+            } catch (_: Throwable) {
+            }
+        }
+        // 3. 打印所有方法，便于下轮适配
+        val all = menuObj.javaClass.declaredMethods.joinToString(", ") { m ->
+            "${m.name}(${m.parameterTypes.joinToString { it.simpleName }})"
+        }
+        XposedBridge.log("$TAG menu add failed, methods: ${all.take(1800)}")
+    }
+
+    private fun dumpMsgIfAny(tag: String, obj: Any?) {
+        if (obj == null) return
+        val found = findMsgIn(obj)
+        if (found != null) {
+            val dump = MessageExtractor.dump(found)
+            dump.lineSequence().chunked(12).forEach { lines ->
+                XposedBridge.log("$TAG DUMP[$tag] " + lines.joinToString("\n"))
+            }
+        }
+    }
+
+    private fun findMsgIn(obj: Any?): Any? {
+        if (obj == null) return null
+        if (MessageExtractor.looksLikeMsgInfo(obj)) return obj
+        var clazz: Class<*>? = obj.javaClass
+        while (clazz != null && clazz != Any::class.java) {
+            for (f in clazz.declaredFields) {
+                try {
+                    f.isAccessible = true
+                    val v = f.get(obj) ?: continue
+                    if (MessageExtractor.looksLikeMsgInfo(v)) return v
+                } catch (_: Throwable) {
+                }
+            }
+            clazz = clazz.superclass
+        }
+        return null
     }
 
     /** 枚举 BaseDexClassLoader 里所有 dex 的类名。 */
