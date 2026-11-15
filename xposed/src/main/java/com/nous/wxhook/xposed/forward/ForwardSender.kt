@@ -89,12 +89,23 @@ object ForwardSender {
 
         // 原图没落盘：先给缩略图，再自动打开预览触发微信下载原图，下载完自动更新
         if (autoFetchOriginal && localMedia == null && mediaKind == ForwardProtocol.MEDIA_IMAGE &&
-            parsed.mediaMd5.length >= 8 && mediaBase64.isNotEmpty()
+            parsed.mediaMd5.length >= 8
         ) {
-            OriginalFetcher.schedule(
-                ctx, view, parsed.mediaMd5, ex.msgId, ex.msgSvrId, ex.talker,
-                talkerTitle, ex.isSend, createTime, type, parsed.fileName
-            )
+            val md5 = parsed.mediaMd5
+            WxDownloader.downloadImage(ctx, ex.talker, ex.msgId, ex.msgSvrId, md5) { file ->
+                if (file != null) {
+                    WxDownloader.publishUpdate(
+                        ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
+                        createTime, type, parsed.fileName, file
+                    )
+                } else if (view != null && mediaBase64.isNotEmpty()) {
+                    // 无感下载失败才退回打开预览
+                    OriginalFetcher.schedule(
+                        ctx, view, md5, ex.msgId, ex.msgSvrId, ex.talker,
+                        talkerTitle, ex.isSend, createTime, type, parsed.fileName
+                    )
+                }
+            }
         }
         val fwd = ForwardMessage(
             msgId = ex.msgId,
@@ -292,6 +303,16 @@ object ForwardSender {
                 if (mediaKind == ForwardProtocol.MEDIA_NONE) mediaKind = guessKind(localMedia)
             }
             val createTime = if (ex.createTime > 10_000_000_000L) ex.createTime / 1000 else ex.createTime
+            if (localMedia == null && mediaKind == ForwardProtocol.MEDIA_IMAGE && parsed.mediaMd5.length >= 8) {
+                WxDownloader.downloadImage(ctx, ex.talker, ex.msgId, ex.msgSvrId, parsed.mediaMd5) { file ->
+                    if (file != null) {
+                        WxDownloader.publishUpdate(
+                            ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
+                            createTime, parsed.type, parsed.fileName, file
+                        )
+                    }
+                }
+            }
             val fwd = ForwardMessage(
                 msgId = ex.msgId,
                 msgSvrId = ex.msgSvrId,
