@@ -36,6 +36,7 @@ object ForwardProbe {
 
     private val dumped = HashSet<String>()
     private var currentMsg: Any? = null
+    private var lastOwner: Any? = null
     private var lastView: android.view.View? = null
     private var ctx: Context? = null
 
@@ -235,18 +236,29 @@ object ForwardProbe {
                     XposedBridge.hookMethod(m, object : XC_MethodHook() {
                         override fun beforeHookedMethod(param: MethodHookParam) {
                             try {
-                                lastView = param.args[1] as? android.view.View
+                                val menu = param.args.getOrNull(0)
+                                lastView = param.args.getOrNull(1) as? android.view.View
+                                lastOwner = param.thisObject
+                                val ctxArg = param.args.getOrNull(2)
                                 val tag = lastView?.tag
-                                val found = findMsgDeep(tag, 0)
-                                XposedBridge.log(
-                                    "$TAG ViewMenuBuild ${c.name}.${m.name} view=${lastView?.javaClass?.name} " +
-                                        "tag=${tag?.javaClass?.name} msgDeep=${found?.javaClass?.name}"
-                                )
-                                if (found != null) currentMsg = found
-                                if (tag != null && dumped.add("tag:" + c.name + "#" + m.name)) {
-                                    deepDump("TAG", tag, 0)
+                                val fromTag = findMsgDeep(tag, 0)
+                                val fromOwner = findMsgIn(param.thisObject)
+                                val fromCtx = findMsgDeep(ctxArg, 0) ?: findCurrentMsg(ctxArg)
+                                val msg = fromTag ?: fromOwner ?: fromCtx ?: currentMsg
+                                if (msg != null) currentMsg = msg
+                                if (dumped.add("viewmenu:" + c.name + "#" + m.name)) {
+                                    XposedBridge.log(
+                                        "$TAG ViewMenuBuild ${c.name}.${m.name} view=${lastView?.javaClass?.name} " +
+                                            "tag=${tag?.javaClass?.name} fromTag=${fromTag?.javaClass?.name} " +
+                                            "fromOwner=${fromOwner?.javaClass?.name} fromCtx=${fromCtx?.javaClass?.name} " +
+                                            "msg=${msg?.javaClass?.name}"
+                                    )
+                                    if (tag != null && msg == null) deepDump("TAG", tag, 0)
+                                    if (ctxArg != null && msg == null) deepDump("CTX", ctxArg, 0)
                                 }
-                            } catch (_: Throwable) {
+                                if (menu != null) addMenuItem(menu, c, msg)
+                            } catch (e: Throwable) {
+                                XposedBridge.log("$TAG ViewMenuBuild err: ${e.message}")
                             }
                         }
                     })
