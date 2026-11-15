@@ -136,7 +136,7 @@ object ForwardProbe {
                         ?: findCurrentMsg(param.thisObject)
                         ?: param.args.firstOrNull { MessageExtractor.looksLikeMsgInfo(it) }
                     if (msg != null) {
-                        ForwardSender.forward(ctx, msg)
+                        ForwardSender.forward(ctx, msg, lastView)
                     } else {
                         XposedBridge.log("$TAG menu clicked but no MsgInfo (owner=${param.thisObject?.javaClass?.name})")
                     }
@@ -185,7 +185,7 @@ object ForwardProbe {
                 if (msg != null && item != null) {
                     item.setOnMenuItemClickListener {
                         XposedBridge.log("$TAG menu item clicked (listener)")
-                        ForwardSender.forward(ctx, msg)
+                        ForwardSender.forward(ctx, msg, lastView)
                         true
                     }
                 }

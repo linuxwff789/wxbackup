@@ -57,7 +57,9 @@ object WxMessageParser {
         /** 引用消息原文 */
         val quoteText: String = "",
         /** 微信 XML 里给出的本地/远程资源线索 */
-        val mediaHint: String = ""
+        val mediaHint: String = "",
+        /** 图片/视频的 md5（用于拼微信缓存路径） */
+        val mediaMd5: String = ""
     )
 
     fun parse(type: Int, content: String?, forcedSubType: Int = 0): Parsed {
@@ -74,7 +76,8 @@ object WxMessageParser {
                     text = "[图片]",
                     mediaKind = ForwardProtocol.MEDIA_IMAGE,
                     fileSize = img?.attr("length")?.toLongOrNull() ?: 0,
-                    mediaHint = img?.attr("cdnbigimgurl").orEmpty()
+                    mediaHint = img?.attr("cdnbigimgurl").orEmpty(),
+                    mediaMd5 = img?.attr("md5").orEmpty()
                 )
             }
 

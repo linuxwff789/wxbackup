@@ -19,7 +19,7 @@ object ForwardSender {
     private const val TAG = "[wxhook:Fwd]"
     const val TARGET_PKG = "com.nous.wxnotes"
 
-    fun forward(ctx: Context?, msgInfo: Any): Boolean {
+    fun forward(ctx: Context?, msgInfo: Any, view: android.view.View? = null): Boolean {
         val ex = MessageExtractor.extract(msgInfo) ?: run {
             XposedBridge.log("$TAG extract failed: ${msgInfo.javaClass.name}")
             return false
@@ -58,6 +58,14 @@ object ForwardSender {
             .filter { it.isNotBlank() }
         val localMedia = candidates.firstOrNull { File(it).isFile }
             ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
+            ?: findImageByMd5(parsed.mediaMd5)
+        if (localMedia == null && mediaKind == ForwardProtocol.MEDIA_IMAGE) {
+            // 原图没下载时，直接抓聊天窗口里已显示的缩略图
+            captureImageFromView(view)?.let { bytes ->
+                mediaBase64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                XposedBridge.log("$TAG captured thumbnail from view: ${bytes.size} bytes")
+            }
+        }
         if (localMedia != null) {
             val file = File(localMedia)
             if (file.length() in 1..MAX_INLINE_BYTES) {
@@ -143,6 +151,72 @@ object ForwardSender {
 
     /** Binder 单次 ~1MB，base64 后约 1.33 倍；500KB 原文安全 */
     private const val MAX_INLINE_BYTES = 500 * 1024L
+
+    /** 图片大图已下载时，路径是 image2/<md5[0:2]>/<md5[2:4]>/<md5>.jpg。 */
+    private fun findImageByMd5(md5: String): String? {
+        if (md5.length < 4) return null
+        val root = File("/data/data/com.tencent.mm/MicroMsg")
+        val dirs = root.listFiles() ?: return null
+        dirs.forEach { dir ->
+            if (!dir.isDirectory) return@forEach
+            val base = File(dir, "image2/${md5.substring(0, 2)}/${md5.substring(2, 4)}")
+            if (!base.isDirectory) return@forEach
+            listOf("jpg", "png", "gif", "webp", "heic").forEach { ext ->
+                val f = File(base, "$md5.$ext")
+                if (f.isFile) return f.absolutePath
+            }
+            base.listFiles()?.firstOrNull { it.name.startsWith(md5) }?.let { return it.absolutePath }
+        }
+        return null
+    }
+
+    /** 从消息 item view 里找图片控件并压成 JPEG（排除头像小图）。 */
+    private fun captureImageFromView(view: android.view.View?): ByteArray? {
+        val iv = findBigImageView(view, 0) ?: return null
+        val d = iv.drawable ?: return null
+        val bmp = try {
+            when (d) {
+                is android.graphics.drawable.BitmapDrawable -> d.bitmap
+                else -> {
+                    val w = d.intrinsicWidth.takeIf { it > 0 } ?: 200
+                    val h = d.intrinsicHeight.takeIf { it > 0 } ?: 200
+                    android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888).also {
+                        val c = android.graphics.Canvas(it)
+                        d.setBounds(0, 0, w, h)
+                        d.draw(c)
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            null
+        } ?: return null
+        return try {
+            val out = java.io.ByteArrayOutputStream()
+            var q = 88
+            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, q, out)
+            while (out.size() > MAX_INLINE_BYTES && q > 40) {
+                out.reset()
+                q -= 12
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, q, out)
+            }
+            out.toByteArray()
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun findBigImageView(v: android.view.View?, depth: Int): android.widget.ImageView? {
+        if (v == null || depth > 7) return null
+        if (v is android.widget.ImageView && v.drawable != null &&
+            v.width >= 120 && v.height >= 120
+        ) return v
+        if (v is android.view.ViewGroup) {
+            for (i in 0 until v.childCount) {
+                findBigImageView(v.getChildAt(i), depth + 1)?.let { return it }
+            }
+        }
+        return null
+    }
 
     /** 本地路径拿不到时，按文件名在微信数据目录里兜底查找（下载过的文件/图片）。 */
     private fun findMediaFile(name: String, kind: String): String? {
