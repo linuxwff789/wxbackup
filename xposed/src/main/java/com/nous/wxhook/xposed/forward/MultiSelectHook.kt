@@ -310,7 +310,26 @@ object MultiSelectHook {
     }
 
     private fun findQuickComponent(act: Activity): Any? {
-        // 多选操作时 probe 已经缓存了组件实例，不要递归遍历 Activity 字段（很慢）
+        // 优先从当前会话的 ChattingContext 里取组件实例（缓存实例可能是旧会话的，z 为空）
+        try {
+            val ctx = findObjectByClass(act, "cm5.d", 3, HashSet())
+            if (ctx != null) {
+                val mgr = readField(ctx, "f35820c")
+                if (mgr != null) {
+                    val a1Cls = Class.forName("com.tencent.mm.ui.chatting.component.a1", false, act.classLoader)
+                    val a = mgr.javaClass.methods.firstOrNull {
+                        it.name == "a" && it.parameterCount == 1 && it.parameterTypes[0] == Class::class.java
+                    }
+                    val inst = a?.invoke(mgr, a1Cls)
+                    if (inst != null) {
+                        XposedBridge.log("$TAG quick from context: ${inst.javaClass.name}")
+                        return inst
+                    }
+                }
+            }
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG quick from context failed: ${e.message}")
+        }
         return ForwardProbe.quickInstance
     }
 
