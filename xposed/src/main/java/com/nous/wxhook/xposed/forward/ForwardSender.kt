@@ -112,6 +112,13 @@ object ForwardSender {
                         ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
                         createTime, type, parsed.fileName, file
                     )
+                } else if (parsed.mediaHint.isNotBlank() && parsed.aesKey.length >= 32) {
+                    WxDownloader.downloadImageByCdn(ctx, parsed.mediaHint, parsed.aesKey, parsed.mediaMd5) { f2 ->
+                        if (f2 != null) WxDownloader.publishUpdate(
+                            ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
+                            createTime, type, parsed.fileName, f2
+                        )
+                    }
                 } else if (view != null && mediaBase64.isNotEmpty()) {
                     // 无感下载失败才退回打开预览
                     OriginalFetcher.schedule(
@@ -336,6 +343,13 @@ object ForwardSender {
                             ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
                             createTime, parsed.type, parsed.fileName, file
                         )
+                    } else if (parsed.mediaHint.isNotBlank() && parsed.aesKey.length >= 32) {
+                        WxDownloader.downloadImageByCdn(ctx, parsed.mediaHint, parsed.aesKey, parsed.mediaMd5) { f2 ->
+                            if (f2 != null) WxDownloader.publishUpdate(
+                                ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
+                                createTime, parsed.type, parsed.fileName, f2
+                            )
+                        }
                     }
                 }
             }

@@ -61,7 +61,9 @@ object WxMessageParser {
         /** 图片/视频的 md5（用于拼微信缓存路径） */
         val mediaMd5: String = "",
         /** 文件消息的 attachid（用于调用微信文件下载服务） */
-        val attachId: String = ""
+        val attachId: String = "",
+        /** 图片 CDN 下载的 AES key（hex） */
+        val aesKey: String = ""
     )
 
     fun parse(type: Int, content: String?, forcedSubType: Int = 0): Parsed {
@@ -79,7 +81,8 @@ object WxMessageParser {
                     mediaKind = ForwardProtocol.MEDIA_IMAGE,
                     fileSize = img?.attr("length")?.toLongOrNull() ?: 0,
                     mediaHint = img?.attr("cdnbigimgurl").orEmpty(),
-                    mediaMd5 = img?.attr("md5").orEmpty()
+                    mediaMd5 = img?.attr("md5").orEmpty(),
+                    aesKey = img?.attr("aeskey").orEmpty()
                 )
             }
 

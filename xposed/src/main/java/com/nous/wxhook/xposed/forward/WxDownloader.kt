@@ -83,6 +83,7 @@ object WxDownloader {
             if (imgId <= 0) {
                 XposedBridge.log("$TAG imgId invalid, abort")
                 downloading.remove(key)
+                onDone(null)
                 return false
             }
             val v0 = Class.forName("com.tencent.mm.modelbase.v0", false, loader)
@@ -126,6 +127,67 @@ object WxDownloader {
             XposedBridge.log("$TAG enqueue failed: " + sw.toString().take(1500))
             false
         }
+    }
+
+    /** 不依赖 ImgInfo：直接走消息里的 cdnbigimgurl + aeskey 下载原图。 */
+    fun downloadImageByCdn(
+        ctx: Context?,
+        url: String,
+        aesKey: String,
+        md5: String,
+        onDone: (File?) -> Unit
+    ) {
+        if (ctx == null || url.isBlank()) {
+            onDone(null)
+            return
+        }
+        Thread({
+            var f: File? = null
+            try {
+                val full = if (url.startsWith("http")) url else "https://$url"
+                XposedBridge.log("$TAG cdn fetch ${full.take(90)} key=${aesKey.take(8)}…")
+                val conn = java.net.URL(full).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 15000
+                conn.readTimeout = 40000
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) MicroMessenger/8.0.79")
+                conn.setRequestProperty("Accept", "*/*")
+                conn.instanceFollowRedirects = true
+                val code = conn.responseCode
+                val raw = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                    ?.use { it.readBytes() } ?: ByteArray(0)
+                if (raw.isEmpty()) {
+                    XposedBridge.log("$TAG cdn empty http=$code")
+                } else {
+                    val data = if (aesKey.length >= 32) aesDecrypt(raw, aesKey) else raw
+                    val ext = when {
+                        data.size > 2 && data[0] == 0xFF.toByte() && data[1] == 0xD8.toByte() -> "jpg"
+                        data.size > 8 && data[0] == 0x89.toByte() && data[1] == 0x50.toByte() -> "png"
+                        data.size > 3 && data[0] == 'G'.code.toByte() && data[1] == 'I'.code.toByte() -> "gif"
+                        data.size > 12 && data.toString(Charsets.ISO_8859_1).startsWith("RIFF") -> "webp"
+                        else -> "jpg"
+                    }
+                    val out = File(ctx.cacheDir, "wxdl_${md5.ifBlank { System.currentTimeMillis().toString() }}.$ext")
+                    out.writeBytes(data)
+                    f = out
+                    XposedBridge.log("$TAG cdn saved ${out.name} raw=${raw.size} dec=${data.size} http=$code")
+                }
+            } catch (e: Throwable) {
+                XposedBridge.log("$TAG cdn failed: ${e.message}")
+            }
+            onDone(f)
+        }, "wxnotes-cdn").apply { isDaemon = true }.start()
+    }
+
+    private fun aesDecrypt(data: ByteArray, hexKey: String): ByteArray {
+        val key = ByteArray(hexKey.length / 2) { i ->
+            ((Character.digit(hexKey[i * 2], 16) shl 4) or Character.digit(hexKey[i * 2 + 1], 16)).toByte()
+        }
+        val cipher = javax.crypto.Cipher.getInstance("AES/ECB/PKCS5Padding")
+        cipher.init(
+            javax.crypto.Cipher.DECRYPT_MODE,
+            javax.crypto.spec.SecretKeySpec(key, "AES")
+        )
+        return cipher.doFinal(data)
     }
 
     /** 文件/附件：调微信 AppAttach 服务触发下载，轮询 attachment 目录。 */

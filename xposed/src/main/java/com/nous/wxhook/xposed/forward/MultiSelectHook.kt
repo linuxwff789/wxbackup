@@ -200,6 +200,7 @@ object MultiSelectHook {
             .mapNotNull { readField(quick, it) }
             .filter { MessageExtractor.looksLikeMsgInfo(it) }
         dumpFields(quick)
+        dumpFields(ctxObj)
         if (singles.isNotEmpty()) {
             val detail = singles.mapNotNull { m ->
                 runCatching {
