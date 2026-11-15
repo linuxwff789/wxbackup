@@ -58,57 +58,79 @@ object MultiSelectHook {
 
     private fun inject(group: ViewGroup) {
         try {
-            if (group.findViewWithTag<View>(BTN_TAG) != null) return
+            val parent = group.parent as? ViewGroup
+            val holder = parent ?: group
+            if (holder.findViewWithTag<View>(BTN_TAG) != null) return
+
             val ctx = group.context
             val sample = (0 until group.childCount)
                 .map { group.getChildAt(it) }
                 .filterIsInstance<TextView>()
                 .firstOrNull()
-            val btn = TextView(ctx).apply {
+            val textColor = sample?.currentTextColor ?: Color.WHITE
+
+            val row = LinearLayout(ctx).apply {
                 tag = BTN_TAG
-                text = "笔记"
+                orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
-                setTextColor(sample?.currentTextColor ?: Color.WHITE)
-                textSize = sample?.textSize?.let {
-                    it / ctx.resources.displayMetrics.scaledDensity
-                } ?: 14f
+                setBackgroundColor(0xF0202020.toInt())
+            }
+            val btn = TextView(ctx).apply {
+                text = "保存所选到笔记"
+                gravity = Gravity.CENTER
+                setTextColor(textColor)
+                textSize = 14f
                 isClickable = true
                 isFocusable = true
-                setPadding(dp(ctx, 8), 0, dp(ctx, 8), 0)
-                sample?.background?.constantState?.newDrawable()?.let {
-                    it.setColorFilter(Color.TRANSPARENT, PorterDuff.Mode.SRC_ATOP)
-                    background = it
-                }
+                setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
                 setOnClickListener { v ->
+                    XposedBridge.log("$TAG row button clicked")
                     val act = findActivity(ctx)
                     if (act == null) {
                         toast(ctx, "找不到聊天界面")
-                        return@setOnClickListener
+                    } else {
+                        saveSelected(act)
                     }
-                    saveSelected(act)
                 }
             }
-            val lp: ViewGroup.LayoutParams = if (group is LinearLayout) {
+            row.addView(
+                btn,
                 LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                ).apply { gravity = Gravity.CENTER }
-            } else {
-                ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
                 )
-            }
-            group.addView(btn, lp)
-            XposedBridge.log(
-                "$TAG button injected, childCount=${group.childCount} children=" +
-                    (0 until group.childCount).joinToString(",") { i ->
-                        val c = group.getChildAt(i)
-                        val t = (c as? TextView)?.text?.toString() ?: ""
-                        val lpInfo = c.layoutParams?.let { "w=${it.width},wt=${(it as? LinearLayout.LayoutParams)?.weight}" } ?: "?"
-                        "${c.javaClass.simpleName}($t;$lpInfo)"
-                    }
             )
+
+            val rowH = dp(ctx, 42)
+            val index = parent?.indexOfChild(group) ?: -1
+            val lp: ViewGroup.LayoutParams = when (holder) {
+                is LinearLayout -> LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, rowH
+                )
+                is android.widget.FrameLayout -> android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, rowH, Gravity.BOTTOM
+                ).apply { bottomMargin = group.height }
+                else -> ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, rowH)
+            }
+            if (index >= 0) holder.addView(row, index, lp) else holder.addView(row, lp)
+
+            // 跟随多选栏的可见性
+            row.visibility = group.visibility
+            group.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                row.visibility = group.visibility
+                if (holder is android.widget.FrameLayout) {
+                    (row.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let {
+                        it.bottomMargin = group.height
+                        row.layoutParams = it
+                    }
+                }
+            }
+            group.post {
+                XposedBridge.log(
+                    "$TAG row added parent=${parent?.javaClass?.name} groupH=${group.height} " +
+                        "row=${row.width}x${row.height} vis=${row.visibility}"
+                )
+            }
         } catch (e: Throwable) {
             XposedBridge.log("$TAG inject failed: ${e.message}")
         }
