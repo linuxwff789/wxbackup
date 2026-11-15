@@ -35,14 +35,6 @@ object ForwardSender {
             return false
         }
 
-        // 诊断：首次转发时把 MsgInfo 字段打进日志（便于适配媒体路径/新类型编码）
-        if (dumped.add(ex.talker + "#" + ex.msgId)) {
-            val dump = MessageExtractor.dump(msgInfo)
-            dump.lineSequence().take(70).forEach { line ->
-                XposedBridge.log("$TAG MSGDUMP $line")
-            }
-        }
-
         val isGroup = ex.talker.endsWith("@chatroom")
         var content = ex.content
         var sender = ""
@@ -180,8 +172,6 @@ object ForwardSender {
         return true
     }
 
-    private val dumped = HashSet<String>()
-
     /** Binder 单次 ~1MB，base64 后约 1.33 倍；500KB 原文安全 */
     private const val MAX_INLINE_BYTES = 500 * 1024L
 
@@ -198,47 +188,57 @@ object ForwardSender {
     ): Boolean {
         if (ctx == null || !file.isFile) return false
         return try {
-            val bytes = file.readBytes()
-            val chunkSize = ForwardProtocol.CHUNK_SIZE
-            val total = (bytes.size + chunkSize - 1) / chunkSize
+            val len = file.length()
+            if (len <= 0) return false
+            val chunkSize = ForwardProtocol.CHUNK_SIZE.toLong()
+            val total = ((len + chunkSize - 1) / chunkSize).toInt()
             val transferId = java.util.UUID.randomUUID().toString()
-            XposedBridge.log("$TAG sending chunks: ${bytes.size} bytes / $total pieces -> $transferId")
-            for (i in 0 until total) {
-                val start = i * chunkSize
-                val end = minOf(start + chunkSize, bytes.size)
-                val data = android.util.Base64.encodeToString(
-                    bytes.copyOfRange(start, end), android.util.Base64.NO_WRAP
-                )
-                val chunk = ForwardProtocol.MediaChunk(
-                    transferId = transferId,
-                    dedupeKey = dedupeKey,
-                    msgSvrId = msg.msgSvrId,
-                    msgId = msg.msgId,
-                    talker = conversation.talker,
-                    talkerTitle = conversation.title,
-                    isGroup = conversation.isGroup,
-                    type = msg.type,
-                    subType = msg.subType,
-                    createTime = msg.createTime,
-                    isSend = msg.isSend,
-                    sender = msg.sender,
-                    senderName = msg.senderName,
-                    text = msg.text,
-                    rawXml = "",
-                    mediaKind = msg.mediaKind,
-                    fileName = msg.fileName.ifBlank { file.name },
-                    fileSize = bytes.size.toLong(),
-                    durationMs = msg.durationMs,
-                    index = i,
-                    total = total,
-                    data = data
-                )
-                val intent = Intent(ForwardProtocol.ACTION_RECEIVE_CHUNK).apply {
-                    setPackage(TARGET_PKG)
-                    putExtra(ForwardProtocol.EXTRA_CHUNK_JSON, chunk.encode())
-                    addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+            XposedBridge.log("$TAG sending chunks: $len bytes / $total pieces -> $transferId")
+            java.io.FileInputStream(file).use { input ->
+                for (i in 0 until total) {
+                    val start = i * chunkSize
+                    val size = minOf(chunkSize, len - start).toInt()
+                    if (size <= 0) break
+                    val buf = ByteArray(size)
+                    var read = 0
+                    while (read < size) {
+                        val n = input.read(buf, read, size - read)
+                        if (n < 0) break
+                        read += n
+                    }
+                    if (read <= 0) break
+                    val data = android.util.Base64.encodeToString(buf, android.util.Base64.NO_WRAP)
+                    val chunk = ForwardProtocol.MediaChunk(
+                        transferId = transferId,
+                        dedupeKey = dedupeKey,
+                        msgSvrId = msg.msgSvrId,
+                        msgId = msg.msgId,
+                        talker = conversation.talker,
+                        talkerTitle = conversation.title,
+                        isGroup = conversation.isGroup,
+                        type = msg.type,
+                        subType = msg.subType,
+                        createTime = msg.createTime,
+                        isSend = msg.isSend,
+                        sender = msg.sender,
+                        senderName = msg.senderName,
+                        text = msg.text,
+                        rawXml = "",
+                        mediaKind = msg.mediaKind,
+                        fileName = msg.fileName.ifBlank { file.name },
+                        fileSize = len,
+                        durationMs = msg.durationMs,
+                        index = i,
+                        total = total,
+                        data = data
+                    )
+                    val intent = Intent(ForwardProtocol.ACTION_RECEIVE_CHUNK).apply {
+                        setPackage(TARGET_PKG)
+                        putExtra(ForwardProtocol.EXTRA_CHUNK_JSON, chunk.encode())
+                        addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+                    }
+                    ctx.sendBroadcast(intent)
                 }
-                ctx.sendBroadcast(intent)
             }
             true
         } catch (e: Throwable) {

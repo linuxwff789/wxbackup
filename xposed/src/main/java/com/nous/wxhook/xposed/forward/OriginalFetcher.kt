@@ -93,7 +93,7 @@ object OriginalFetcher {
             val target = findClickable(view, 0)
             XposedBridge.log("$TAG open preview via ${target?.javaClass?.name}")
             runCatching { target?.performClick() }
-        }, 350)
+        }, 900)
     }
 
     private fun findClickable(v: View?, depth: Int): View? {

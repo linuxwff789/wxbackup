@@ -115,6 +115,18 @@ object MultiSelectHook {
     }
 
     private fun saveSelected(act: Activity) {
+        // 选中列表/文件读取/广播全部放后台，避免卡微信 UI
+        Thread({
+            try {
+                doSaveSelected(act)
+            } catch (e: Throwable) {
+                XposedBridge.log("$TAG saveSelected error: ${e.message}")
+                toast(act, "保存失败：${e.message}")
+            }
+        }, "wxnotes-save").start()
+    }
+
+    private fun doSaveSelected(act: Activity) {
         try {
             val quick = findQuickComponent(act)
             val list = resolveSelected(quick)
@@ -208,8 +220,8 @@ object MultiSelectHook {
     }
 
     private fun findQuickComponent(act: Activity): Any? {
-        ForwardProbe.quickInstance?.let { return it }
-        return findObjectByClass(act, "com.tencent.mm.ui.chatting.component.a1", 4, HashSet())
+        // 多选操作时 probe 已经缓存了组件实例，不要递归遍历 Activity 字段（很慢）
+        return ForwardProbe.quickInstance
     }
 
     private fun findObjectByClass(root: Any?, target: String, depth: Int, seen: MutableSet<Int>): Any? {
