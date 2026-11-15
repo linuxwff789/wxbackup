@@ -84,7 +84,11 @@ object MessageExtractor {
         var p = path
         if (p.endsWith("hd")) p = p.dropLast(2)
         val idx = p.lastIndexOf("/th_")
-        if (idx < 0) return path
+        if (idx < 0) {
+            val abs = findUnderMicroMsg(p)
+            XposedBridge.log("$TAG imgPath raw=$path -> ${abs ?: path}")
+            return abs ?: path
+        }
         val base = p.substring(0, idx)
         val name = p.substring(idx + 4)
         val candidates = listOf(
@@ -92,17 +96,27 @@ object MessageExtractor {
             "$base/$name.webp", "$base/$name"
         )
         for (c in candidates) {
-            if (existsUnderMicroMsg(c)) return c
+            val abs = findUnderMicroMsg(c)
+            if (abs != null) {
+                XposedBridge.log("$TAG imgPath raw=$path -> original=$abs")
+                return abs
+            }
         }
-        return path
+        val absThumb = findUnderMicroMsg(p)
+        XposedBridge.log("$TAG imgPath raw=$path -> thumb=${absThumb ?: path}")
+        return absThumb ?: path
     }
 
-    private fun existsUnderMicroMsg(rel: String): Boolean {
+    private fun findUnderMicroMsg(rel: String): String? {
         return try {
             val root = java.io.File("/data/data/com.tencent.mm/MicroMsg")
-            root.listFiles()?.any { d -> java.io.File(d, rel).isFile } == true
+            root.listFiles()?.forEach { d ->
+                val f = java.io.File(d, rel)
+                if (f.isFile) return f.absolutePath
+            }
+            null
         } catch (_: Throwable) {
-            false
+            null
         }
     }
 
