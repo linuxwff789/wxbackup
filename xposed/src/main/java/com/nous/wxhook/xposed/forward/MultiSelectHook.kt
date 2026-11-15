@@ -290,12 +290,9 @@ object MultiSelectHook {
             return emptySet()
         }
         return try {
-            val helper = de.robv.android.xposed.XposedHelpers::class.java
-            val mgr = de.robv.android.xposed.XposedHelpers.getObjectField(ctx, "f35820c")
-            XposedBridge.log("$TAG ids mgr=${mgr?.javaClass?.name}")
-            if (mgr == null) return emptySet()
             val cls = Class.forName("wl5.z", false, ctx.javaClass.classLoader)
-            val comp = de.robv.android.xposed.XposedHelpers.callMethod(mgr, "a", cls)
+            // cm5.d 有公开方法 a(Class)（内部转发给 manager），避免读私有字段
+            val comp = de.robv.android.xposed.XposedHelpers.callMethod(ctx, "a", cls)
             XposedBridge.log("$TAG ids comp=${comp?.javaClass?.name}")
             if (comp == null) return emptySet()
             val w = de.robv.android.xposed.XposedHelpers.getObjectField(comp, "W")
