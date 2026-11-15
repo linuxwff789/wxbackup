@@ -107,8 +107,9 @@ object ForwardSender {
         val thumbOnly = localMedia != null && isThumbnailPath(localMedia)
         XposedBridge.log("$TAG image thumbOnly=$thumbOnly local=$localMedia")
         if (mediaKind == ForwardProtocol.MEDIA_IMAGE && (localMedia == null || thumbOnly) &&
-            parsed.mediaHint.isNotBlank() && parsed.aesKey.length >= 32
+            parsed.mediaHint.isNotBlank()
         ) {
+            XposedBridge.log("$TAG cdn branch hint=${parsed.mediaHint.take(24)} aesLen=${parsed.aesKey.length}")
             val md5 = parsed.mediaMd5.ifBlank { System.currentTimeMillis().toString() }
             val save = File(ctx?.filesDir ?: return false, "cdn_$md5.jpg").absolutePath
             WxDownloader.downloadCdn(ctx, "img_$md5", parsed.mediaHint, parsed.aesKey, 5, save) { f ->
@@ -130,13 +131,6 @@ object ForwardSender {
                         ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
                         createTime, type, parsed.fileName, file
                     )
-                } else if (parsed.mediaHint.isNotBlank() && parsed.aesKey.length >= 32) {
-                    WxDownloader.downloadImageByCdn(ctx, parsed.mediaHint, parsed.aesKey, parsed.mediaMd5) { f2 ->
-                        if (f2 != null) WxDownloader.publishUpdate(
-                            ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
-                            createTime, type, parsed.fileName, f2
-                        )
-                    }
                 } else if (view != null && mediaBase64.isNotEmpty()) {
                     // 无感下载失败才退回打开预览
                     OriginalFetcher.schedule(
@@ -360,8 +354,9 @@ object ForwardSender {
             }
             val thumbOnly = localMedia != null && isThumbnailPath(localMedia)
             if ((localMedia == null || thumbOnly) && mediaKind == ForwardProtocol.MEDIA_IMAGE &&
-                parsed.mediaHint.isNotBlank() && parsed.aesKey.length >= 32
+                parsed.mediaHint.isNotBlank()
             ) {
+                XposedBridge.log("$TAG cdn branch hint=${parsed.mediaHint.take(24)} aesLen=${parsed.aesKey.length}")
                 val md5 = parsed.mediaMd5.ifBlank { System.currentTimeMillis().toString() }
                 val dir = ctx?.filesDir ?: continue
                 val save = File(dir, "cdn_$md5.jpg").absolutePath
