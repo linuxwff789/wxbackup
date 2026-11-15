@@ -109,7 +109,7 @@ interface NoteDao {
             :q = '' OR title LIKE '%' || :q || '%' OR body LIKE '%' || :q || '%'
             OR preview LIKE '%' || :q || '%' OR talkerTitle LIKE '%' || :q || '%'
         )
-        ORDER BY pinned DESC, lastMessageTime DESC
+        ORDER BY pinned DESC, updatedAt DESC
         """
     )
     fun observeAll(q: String): Flow<List<NoteEntity>>

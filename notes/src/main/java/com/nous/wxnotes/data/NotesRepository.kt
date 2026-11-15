@@ -121,7 +121,7 @@ class NotesRepository(private val context: Context) {
                 messageCount = count,
                 preview = if (preview.isNotBlank()) preview else note.preview,
                 updatedAt = now,
-                lastMessageTime = maxOf(note.lastMessageTime, lastTime, now),
+                lastMessageTime = maxOf(note.lastMessageTime, lastTime),
                 talkerTitle = if (note.talkerTitle.isBlank()) talkerTitle else note.talkerTitle
             )
         )
@@ -134,6 +134,10 @@ class NotesRepository(private val context: Context) {
 
     private suspend fun importMedia(noteId: Long, m: ForwardMessage, kind: String): String {
         if (m.localPath.isBlank()) return ""
+        // 插件通过 127.0.0.1 的本地 HTTP 暴露微信私有目录里的媒体
+        if (m.localPath.startsWith("http://127.0.0.1:") || m.localPath.startsWith("http://localhost:")) {
+            return downloadMedia(noteId, m)
+        }
         val src = File(m.localPath)
         if (!src.exists() || !src.canRead() || !src.isFile) return m.localPath
         val fileName = src.name.ifBlank { "media_${System.currentTimeMillis()}" }
@@ -144,6 +148,29 @@ class NotesRepository(private val context: Context) {
             src.copyTo(dst, overwrite = true)
             dst.absolutePath
         } catch (_: Throwable) {
+            m.localPath
+        }
+    }
+
+    private fun downloadMedia(noteId: Long, m: ForwardMessage): String {
+        val dir = File(File(context.filesDir, "media"), noteId.toString())
+        if (!dir.exists() && !dir.mkdirs()) return m.localPath
+        val urlName = m.localPath.substringAfterLast('/').substringBefore('?')
+        val fallback = "media_${System.currentTimeMillis()}"
+        val name = m.fileName.ifBlank { urlName.ifBlank { fallback } }
+        val dst = uniqueFile(dir, name)
+        return try {
+            val conn = java.net.URL(m.localPath).openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 5_000
+            conn.readTimeout = 120_000
+            conn.requestMethod = "GET"
+            conn.inputStream.use { input ->
+                dst.outputStream().use { out -> input.copyTo(out, 64 * 1024) }
+            }
+            conn.disconnect()
+            if (dst.length() > 0) dst.absolutePath else m.localPath
+        } catch (_: Throwable) {
+            runCatching { dst.delete() }
             m.localPath
         }
     }

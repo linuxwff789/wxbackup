@@ -8,6 +8,18 @@
 
 ---
 
+## 📝 微信消息 → 本地笔记
+
+除了备份，仓库里还包含一套「手动挑选消息 → 存成本地笔记」的工具：
+
+- **Xposed 插件**（`:xposed`）：微信长按菜单注入「保存到笔记」，支持单条/多选批量
+- **笔记 App**（`:notes`）：Room 本地知识库，全文搜索、标签、Markdown / Obsidian 导出
+- **协议**（`:shared`）：显式广播 + JSON，第三方 App 可按协议接入
+
+详见 [docs/forward-notes.md](docs/forward-notes.md)。
+
+---
+
 ## 📋 目录
 
 - [功能总览](#-功能总览)
