@@ -1,7 +1,6 @@
 package com.nous.wxnotes.data
 
 import android.content.Context
-import androidx.room.withTransaction
 import android.os.Environment
 import com.nous.wxshared.ForwardProtocol
 import com.nous.wxshared.ForwardProtocol.ForwardBatch
@@ -34,8 +33,6 @@ class NotesRepository(private val context: Context) {
 
     /** 把一批转发消息落库；同会话窗口内自动追加到上一篇笔记。 */
     suspend fun saveBatch(batch: ForwardBatch): SaveResult = withContext(Dispatchers.IO) {
-        // 整个批次一个事务：100 条消息也只提交一次
-        db.withTransaction {
         val now = System.currentTimeMillis()
         val conv = batch.conversation
         val talker = conv.talker
@@ -155,7 +152,7 @@ class NotesRepository(private val context: Context) {
         }
 
         // 3. 更新笔记元数据
-        val note = noteDao.get(noteId) ?: return@withTransaction SaveResult(noteId, "", added, skipped, created)
+        val note = noteDao.get(noteId) ?: return@withContext SaveResult(noteId, "", added, skipped, created)
         val count = messageDao.countByNote(noteId)
         val preview = lastText.replace(Regex("\\s+"), " ").trim().take(140)
         noteDao.update(
@@ -168,7 +165,6 @@ class NotesRepository(private val context: Context) {
             )
         )
         SaveResult(noteId, note.title, added, skipped, created)
-        }
     }
 
     /** 保存单条消息（第三方 App / 调试用）。 */
