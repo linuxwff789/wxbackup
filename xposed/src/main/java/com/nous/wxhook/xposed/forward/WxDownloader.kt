@@ -63,7 +63,7 @@ object WxDownloader {
                 return false
             }
 
-            val imgId = info.javaClass.getField("f479445a").getLong(info)
+            val imgId = fieldLong(info, "f479445a")
             val v0 = Class.forName("com.tencent.mm.modelbase.v0", false, loader)
             val progress = Proxy.newProxyInstance(loader, arrayOf(v0)) { _, method, args ->
                 if (method.name == "Q" && args != null && args.size >= 2) {
@@ -103,6 +103,20 @@ object WxDownloader {
             XposedBridge.log("$TAG enqueue failed: ${e.message}")
             false
         }
+    }
+
+    private fun fieldLong(obj: Any, name: String): Long {
+        var c: Class<*>? = obj.javaClass
+        while (c != null) {
+            try {
+                val f = c.getDeclaredField(name)
+                f.isAccessible = true
+                return f.getLong(obj)
+            } catch (_: Throwable) {
+                c = c.superclass
+            }
+        }
+        return -1L
     }
 
     private fun waitForFile(md5: String, timeoutMs: Long): File? {
