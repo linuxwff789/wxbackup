@@ -30,6 +30,9 @@ object ForwardProtocol {
     const val DEFAULT_OUTBOX_DIR = "/sdcard/Download/wxfwd/outbox"
     const val DEFAULT_MEDIA_DIR = "/sdcard/Download/wxfwd/media"
 
+    /** 插件在微信进程内监听的抽象 LocalSocket 名（媒体传输） */
+    const val MEDIA_SOCKET_NAME = "wxfwd_media"
+
     /** 单个 Binder 事务上限约 1MB；单批最多 100 条，避免超限 */
     const val MAX_MESSAGES_PER_BATCH = 100
 

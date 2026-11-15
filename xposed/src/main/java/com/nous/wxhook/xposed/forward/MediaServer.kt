@@ -1,5 +1,7 @@
 package com.nous.wxhook.xposed.forward
 
+import android.net.LocalServerSocket
+import android.net.LocalSocket
 import de.robv.android.xposed.XposedBridge
 import java.io.File
 import java.io.InputStream
@@ -24,6 +26,10 @@ object MediaServer {
     private const val PREFIX = "/m/"
 
     private var server: ServerSocket? = null
+    private var localServer: LocalServerSocket? = null
+
+    /** notes App 通过抽象 Unix socket 取文件（不受后台网络限制） */
+    const val SOCKET_NAME = com.nous.wxshared.ForwardProtocol.MEDIA_SOCKET_NAME
 
     @Volatile
     var port: Int = 0
@@ -59,21 +65,43 @@ object MediaServer {
                 start()
             }
             XposedBridge.log("$TAG listening on 127.0.0.1:$port")
+
+            val ls = LocalServerSocket(SOCKET_NAME)
+            localServer = ls
+            Thread({
+                while (true) {
+                    val socket = try {
+                        ls.accept()
+                    } catch (_: Throwable) {
+                        break
+                    }
+                    Thread({ handleLocal(socket) }, "wxfwd-lss-conn").apply {
+                        isDaemon = true
+                        start()
+                    }
+                }
+            }, "wxfwd-lss").apply {
+                isDaemon = true
+                start()
+            }
+            XposedBridge.log("$TAG local socket @$SOCKET_NAME ready token=$token")
         } catch (e: Throwable) {
             XposedBridge.log("$TAG start failed: ${e.message}")
         }
     }
 
-    fun urlFor(path: String): String? {
+    fun urlFor(path: String): String? = uriFor(path)
+
+    /** 生成给接收端的媒体 URI（抽象 LocalSocket，优先级高于 HTTP）。 */
+    fun uriFor(path: String): String? {
         if (path.isBlank()) return null
         ensureStarted()
-        if (port == 0) return null
         val encoded = try {
             URLEncoder.encode(path, "UTF-8")
         } catch (_: Throwable) {
             return null
         }
-        return "http://127.0.0.1:$port$PREFIX$token/$encoded"
+        return "lss://$token/$encoded"
     }
 
     private fun handle(socket: Socket) {
@@ -116,6 +144,39 @@ object MediaServer {
             out.flush()
         } catch (_: Throwable) {
             // 连接中断无所谓
+        } finally {
+            try {
+                socket.close()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    /** 自定义协议：一行 "GET <token>/<urlencoded-path>\n"，回 "OK <len>\n"+bytes 或 "ERR xxx\n" */
+    private fun handleLocal(socket: LocalSocket) {
+        try {
+            socket.soTimeout = 20_000
+            val input = socket.inputStream
+            val line = readLine(input) ?: return
+            val path = line.trim().removePrefix("GET ").trim()
+            val expected = "$token/"
+            val out = socket.outputStream
+            if (!path.startsWith(expected)) {
+                out.write("ERR forbidden\n".toByteArray())
+                out.flush()
+                return
+            }
+            val realPath = URLDecoder.decode(path.removePrefix(expected), "UTF-8")
+            val file = File(realPath)
+            if (!file.isFile || !file.canRead()) {
+                out.write("ERR not found\n".toByteArray())
+                out.flush()
+                return
+            }
+            out.write("OK ${file.length()}\n".toByteArray())
+            file.inputStream().use { it.copyTo(out, 64 * 1024) }
+            out.flush()
+        } catch (_: Throwable) {
         } finally {
             try {
                 socket.close()

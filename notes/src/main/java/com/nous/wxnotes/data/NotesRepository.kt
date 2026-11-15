@@ -135,6 +135,9 @@ class NotesRepository(private val context: Context) {
     private suspend fun importMedia(noteId: Long, m: ForwardMessage, kind: String): String {
         if (m.localPath.isBlank()) return ""
         // 插件通过 127.0.0.1 的本地 HTTP 暴露微信私有目录里的媒体
+        if (m.localPath.startsWith("lss://")) {
+            return downloadViaLocalSocket(noteId, m)
+        }
         if (m.localPath.startsWith("http://127.0.0.1:") || m.localPath.startsWith("http://localhost:")) {
             return downloadMedia(noteId, m)
         }
@@ -150,6 +153,67 @@ class NotesRepository(private val context: Context) {
         } catch (_: Throwable) {
             m.localPath
         }
+    }
+
+    /** 通过抽象 LocalSocket 从微信进程取媒体（后台也能用，不受 loopback 网络限制）。 */
+    private fun downloadViaLocalSocket(noteId: Long, m: ForwardMessage): String {
+        val dir = File(File(context.filesDir, "media"), noteId.toString())
+        if (!dir.exists() && !dir.mkdirs()) return m.localPath
+        val rest = m.localPath.removePrefix("lss://")
+        val token = rest.substringBefore('/')
+        val encoded = rest.substringAfter('/', "")
+        if (token.isBlank() || encoded.isBlank()) return m.localPath
+        val decodedName = runCatching {
+            java.net.URLDecoder.decode(encoded.substringAfterLast('/'), "UTF-8")
+        }.getOrDefault("")
+        val name = m.fileName.ifBlank { decodedName.ifBlank { "media_${System.currentTimeMillis()}" } }
+        val dst = uniqueFile(dir, name)
+        var socket: android.net.LocalSocket? = null
+        return try {
+            socket = android.net.LocalSocket()
+            socket.connect(
+                android.net.LocalSocketAddress(
+                    ForwardProtocol.MEDIA_SOCKET_NAME,
+                    android.net.LocalSocketAddress.Namespace.ABSTRACT
+                )
+            )
+            socket.soTimeout = 20_000
+            socket.outputStream.write("GET $token/$encoded\n".toByteArray())
+            socket.outputStream.flush()
+            val input = java.io.BufferedInputStream(socket.inputStream)
+            val header = readLine(input) ?: throw IllegalStateException("no header")
+            if (!header.startsWith("OK ")) throw IllegalStateException(header)
+            val len = header.substring(3).trim().toLong()
+            dst.outputStream().use { out ->
+                var remaining = len
+                val buf = ByteArray(64 * 1024)
+                while (remaining > 0) {
+                    val n = input.read(buf, 0, minOf(buf.size.toLong(), remaining).toInt())
+                    if (n <= 0) break
+                    out.write(buf, 0, n)
+                    remaining -= n
+                }
+                if (remaining > 0) throw IllegalStateException("short read $remaining")
+            }
+            if (dst.length() > 0) dst.absolutePath else m.localPath
+        } catch (e: Throwable) {
+            android.util.Log.e("wxnotes", "localsocket media failed: ${m.localPath}", e)
+            runCatching { dst.delete() }
+            m.localPath
+        } finally {
+            runCatching { socket?.close() }
+        }
+    }
+
+    private fun readLine(input: java.io.InputStream): String? {
+        val sb = StringBuilder()
+        while (true) {
+            val b = input.read()
+            if (b < 0) return if (sb.isEmpty()) null else sb.toString()
+            if (b == '\n'.code) break
+            if (b != '\r'.code) sb.append(b.toChar())
+        }
+        return sb.toString()
     }
 
     private fun downloadMedia(noteId: Long, m: ForwardMessage): String {
@@ -169,7 +233,8 @@ class NotesRepository(private val context: Context) {
             }
             conn.disconnect()
             if (dst.length() > 0) dst.absolutePath else m.localPath
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            android.util.Log.e("wxnotes", "download media failed: ${m.localPath}", e)
             runCatching { dst.delete() }
             m.localPath
         }
