@@ -92,6 +92,7 @@ object ForwardProbe {
             }
         }
         hookViewMenuBuilders(candidates, loader)
+        probeMultiSelect(loader)
         XposedBridge.log("$TAG done classes=$hookedClasses methods=$hookedMethods")
     }
 
@@ -269,6 +270,75 @@ object ForwardProbe {
             }
         }
         XposedBridge.log("$TAG viewMenuHooks=$n")
+    }
+
+    /** 多选模式探针：选中列表 + 底部「转发」入口。 */
+    private fun probeMultiSelect(loader: ClassLoader) {
+        // 8.0.79 anchors: chat_quick_select = component.a1
+        try {
+            val c = Class.forName("com.tencent.mm.ui.chatting.component.a1", false, loader)
+            XposedBridge.log("$TAG QUICK class=${c.name}")
+            c.declaredMethods.forEach { m ->
+                XposedBridge.log("$TAG QUICK_M ${m.name}(${m.parameterTypes.joinToString { it.simpleName }}) -> ${m.returnType.simpleName}")
+                if (m.parameterCount == 0 && java.util.List::class.java.isAssignableFrom(m.returnType)) {
+                    try {
+                        XposedBridge.hookMethod(m, object : XC_MethodHook() {
+                            override fun afterHookedMethod(p: MethodHookParam) {
+                                val list = p.result as? List<*> ?: return
+                                if (list.isNotEmpty()) {
+                                    XposedBridge.log("$TAG QUICK_SELECTED ${m.name} size=${list.size} first=${list.firstOrNull()?.javaClass?.name}")
+                                    if (dumped.add("quick:" + m.name)) {
+                                        list.take(3).forEach { deepDump("QUICK", it, 0) }
+                                    }
+                                }
+                            }
+                        })
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG QUICK class not found: ${e.message}")
+        }
+
+        // 多选底部操作栏：点「转发」时读取选中列表
+        try {
+            val bar = Class.forName("com.tencent.mm.ui.chatting.ChattingFooterMoreBtnBar", false, loader)
+            XposedBridge.log("$TAG FOOTER class=${bar.name}")
+            bar.declaredMethods
+                .filter { it.name == "onClick" || it.name == "performClick" }
+                .forEach { m ->
+                    try {
+                        XposedBridge.hookMethod(m, object : XC_MethodHook() {
+                            override fun beforeHookedMethod(p: MethodHookParam) {
+                                try {
+                                    val v = p.args.firstOrNull() as? android.view.View
+                                    val text = collectText(v).take(60)
+                                    XposedBridge.log("$TAG FOOTER_CLICK ${m.name} text=$text")
+                                } catch (_: Throwable) {
+                                }
+                            }
+                        })
+                    } catch (_: Throwable) {
+                    }
+                }
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG FOOTER class not found: ${e.message}")
+        }
+    }
+
+    private fun collectText(v: android.view.View?): String {
+        if (v == null) return ""
+        val sb = StringBuilder()
+        fun walk(x: android.view.View, depth: Int) {
+            if (depth > 3) return
+            when (x) {
+                is android.widget.TextView -> sb.append(x.text).append(' ')
+                is android.view.ViewGroup -> for (i in 0 until x.childCount) walk(x.getChildAt(i), depth + 1)
+            }
+        }
+        walk(v, 0)
+        return sb.toString()
     }
 
     /** 递归 3 层找 MsgInfo（微信把消息塞在 View tag 或嵌套对象里）。 */
