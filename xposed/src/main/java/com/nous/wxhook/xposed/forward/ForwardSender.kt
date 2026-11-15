@@ -19,7 +19,7 @@ object ForwardSender {
     private const val TAG = "[wxhook:Fwd]"
     const val TARGET_PKG = "com.nous.wxnotes"
 
-    fun forward(ctx: Context?, msgInfo: Any, view: android.view.View? = null): Boolean {
+    fun forward(ctx: Context?, msgInfo: Any, view: android.view.View? = null, talkerTitle: String = ""): Boolean {
         val ex = MessageExtractor.extract(msgInfo) ?: run {
             XposedBridge.log("$TAG extract failed: ${msgInfo.javaClass.name}")
             return false
@@ -106,7 +106,7 @@ object ForwardSender {
             pluginVersion = "1.0.0",
             conversation = Conversation(
                 talker = ex.talker,
-                title = ex.talker,
+                title = talkerTitle.ifBlank { ex.talker },
                 isGroup = isGroup
             ),
             messages = listOf(fwd)
@@ -141,7 +141,8 @@ object ForwardSender {
 
         XposedBridge.log(
             "$TAG forwarded type=${ex.type} sub=${parsed.subType} msgId=${ex.msgId} " +
-                "talker=${ex.talker} media=$mediaKind url=${mediaUrl.take(80)} ok=$delivered"
+                "talker=${ex.talker} title=${talkerTitle.take(24)} media=$mediaKind " +
+                "b64=${mediaBase64.length} url=${mediaUrl.take(60)} ok=$delivered"
         )
         toast(ctx, "已保存到笔记：${parsed.text.take(24)}")
         return true

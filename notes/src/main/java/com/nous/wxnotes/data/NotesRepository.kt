@@ -38,6 +38,12 @@ class NotesRepository(private val context: Context) {
         val talker = conv.talker
         val talkerTitle = conv.title.ifBlank { talker.ifBlank { "微信消息" } }
         val windowMs = prefs.getLong(KEY_AGGREGATE_WINDOW, DEFAULT_AGGREGATE_WINDOW) * 60_000L
+        val firstText = batch.messages
+            .firstOrNull { it.type == WxMessageParser.TYPE_TEXT && it.text.isNotBlank() }
+            ?.text
+            ?.replace(Regex("\\s+"), " ")
+            ?.trim()
+            ?.take(28)
 
         // 1. 选出目标笔记
         val existing = if (talker.isNotBlank()) {
@@ -47,10 +53,18 @@ class NotesRepository(private val context: Context) {
         var created = false
         if (existing != null) {
             noteId = existing.id
+            // 之前只拿到 wxid，这次插件给了真实昵称就更新
+            if (isRealName(talkerTitle) && existing.talkerTitle != talkerTitle) {
+                noteDao.update(existing.copy(talkerTitle = talkerTitle, updatedAt = now))
+            }
+            // 标题还是默认的「会话 · 日期」时，用第一条文字消息替换
+            if (firstText != null && existing.auto && isDefaultTitle(existing.title, existing.talkerTitle)) {
+                noteDao.update(existing.copy(title = firstText, updatedAt = now))
+            }
         } else {
             noteId = noteDao.insert(
                 NoteEntity(
-                    title = batch.noteTitle.ifBlank { defaultTitle(talkerTitle) },
+                    title = batch.noteTitle.ifBlank { firstText ?: defaultTitle(talkerTitle) },
                     createdAt = now,
                     updatedAt = now,
                     auto = true,
@@ -281,6 +295,12 @@ class NotesRepository(private val context: Context) {
         }
         return f
     }
+
+    private fun isRealName(name: String): Boolean =
+        name.isNotBlank() && !name.endsWith("@chatroom") && !name.startsWith("wxid_")
+
+    private fun isDefaultTitle(title: String, talkerTitle: String): Boolean =
+        talkerTitle.isNotBlank() && title.startsWith("$talkerTitle · ")
 
     private fun defaultTitle(talkerTitle: String): String {
         val day = SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date())

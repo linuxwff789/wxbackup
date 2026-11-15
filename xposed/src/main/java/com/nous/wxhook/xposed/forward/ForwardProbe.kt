@@ -38,6 +38,7 @@ object ForwardProbe {
     private var currentMsg: Any? = null
     private var lastOwner: Any? = null
     private var lastView: android.view.View? = null
+    private var lastChatTitle: String = ""
     private var ctx: Context? = null
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam, context: Context?) {
@@ -136,7 +137,7 @@ object ForwardProbe {
                         ?: findCurrentMsg(param.thisObject)
                         ?: param.args.firstOrNull { MessageExtractor.looksLikeMsgInfo(it) }
                     if (msg != null) {
-                        ForwardSender.forward(ctx, msg, lastView)
+                        ForwardSender.forward(ctx, msg, lastView, currentChatTitle(lastView).ifBlank { lastChatTitle })
                     } else {
                         XposedBridge.log("$TAG menu clicked but no MsgInfo (owner=${param.thisObject?.javaClass?.name})")
                     }
@@ -185,7 +186,7 @@ object ForwardProbe {
                 if (msg != null && item != null) {
                     item.setOnMenuItemClickListener {
                         XposedBridge.log("$TAG menu item clicked (listener)")
-                        ForwardSender.forward(ctx, msg, lastView)
+                        ForwardSender.forward(ctx, msg, lastView, currentChatTitle(lastView).ifBlank { lastChatTitle })
                         true
                     }
                 }
@@ -258,6 +259,7 @@ object ForwardProbe {
                                     if (ctxArg != null && msg == null) deepDump("CTX", ctxArg, 0)
                                 }
                                 if (menu != null) addMenuItem(menu, c, msg)
+                                lastChatTitle = currentChatTitle(lastView)
                             } catch (e: Throwable) {
                                 XposedBridge.log("$TAG ViewMenuBuild err: ${e.message}")
                             }
@@ -325,6 +327,22 @@ object ForwardProbe {
         } catch (e: Throwable) {
             XposedBridge.log("$TAG FOOTER class not found: ${e.message}")
         }
+    }
+
+    private fun currentChatTitle(view: android.view.View?): String {
+        try {
+            var c: android.content.Context? = view?.context
+            var guard = 0
+            while (c is android.content.ContextWrapper && guard++ < 8) {
+                if (c is android.app.Activity) {
+                    val t = c.title?.toString()?.trim().orEmpty()
+                    if (t.isNotEmpty()) return t
+                }
+                c = c.baseContext
+            }
+        } catch (_: Throwable) {
+        }
+        return ""
     }
 
     private fun collectText(v: android.view.View?): String {
