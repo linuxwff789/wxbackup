@@ -393,6 +393,13 @@ object ForwardProbe {
                             m.parameterTypes.joinToString { it.name } + ") -> ${m.returnType.name}"
                     )
                 }
+                // MsgInfo 所有方法名（查找 getImgPath/getFileFullPath 等）
+                if (cn == "com.tencent.mm.storage.e9") {
+                    XposedBridge.log(
+                        "$TAG MSGMETHODS " +
+                            c.declaredMethods.joinToString(",") { it.name }.take(3000)
+                    )
+                }
                 // MsgInfo 里的字段也打出来（文件路径字段）
                 if (cn == "com.tencent.mm.storage.e9") {
                     var k: Class<*>? = c
