@@ -38,6 +38,14 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".receive.ChunkReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.nous.wxnotes.action.RECEIVE_CHUNK" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

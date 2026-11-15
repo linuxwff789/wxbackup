@@ -144,7 +144,21 @@ object OriginalFetcher {
             val len = file.length()
             if (len <= 0) return
             if (len > MAX_BYTES) {
-                XposedBridge.log("$TAG original too big ($len), keep thumbnail md5=${p.md5}")
+                val msg = ForwardMessage(
+                    msgId = p.msgId, msgSvrId = p.msgSvrId,
+                    type = if (p.type > 0) p.type else 3,
+                    createTime = p.createTime, isSend = p.isSend,
+                    text = "[图片]", mediaKind = ForwardProtocol.MEDIA_IMAGE,
+                    fileName = p.fileName.ifBlank { file.name }, fileSize = len
+                )
+                val ok = ForwardSender.sendChunks(
+                    act,
+                    Conversation(p.talker, p.talkerTitle.ifBlank { p.talker }, p.talker.endsWith("@chatroom")),
+                    msg,
+                    file,
+                    buildString { append(p.talker).append('|').append(msg.effectiveDedupeKey()) }
+                )
+                XposedBridge.log("$TAG published original via chunks md5=${p.md5} size=$len ok=$ok")
                 return
             }
             val b64 = android.util.Base64.encodeToString(file.readBytes(), android.util.Base64.NO_WRAP)

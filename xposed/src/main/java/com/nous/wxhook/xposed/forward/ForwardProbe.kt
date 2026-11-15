@@ -39,6 +39,8 @@ object ForwardProbe {
     private var lastOwner: Any? = null
     private var lastView: android.view.View? = null
     private var lastChatTitle: String = ""
+    @Volatile
+    private var quickInstance: Any? = null
     private var ctx: Context? = null
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam, context: Context?) {
@@ -281,8 +283,23 @@ object ForwardProbe {
         try {
             val c = Class.forName("com.tencent.mm.ui.chatting.component.a1", false, loader)
             XposedBridge.log("$TAG QUICK class=${c.name}")
+            dumpQuickFields(c)
             c.declaredMethods.forEach { m ->
                 XposedBridge.log("$TAG QUICK_M ${m.name}(${m.parameterTypes.joinToString { it.simpleName }}) -> ${m.returnType.simpleName}")
+                if (m.parameterCount == 0) {
+                    try {
+                        XposedBridge.hookMethod(m, object : XC_MethodHook() {
+                            override fun afterHookedMethod(p: MethodHookParam) {
+                                quickInstance = p.thisObject
+                                val lists = listFields(p.thisObject)
+                                if (lists.isNotEmpty()) {
+                                    XposedBridge.log("$TAG QUICK_LISTS ${m.name}: " + lists.joinToString { it.first + "=" + it.second })
+                                }
+                            }
+                        })
+                    } catch (_: Throwable) {
+                    }
+                }
                 if (m.parameterCount == 0 && java.util.List::class.java.isAssignableFrom(m.returnType)) {
                     try {
                         XposedBridge.hookMethod(m, object : XC_MethodHook() {
@@ -303,6 +320,8 @@ object ForwardProbe {
         } catch (e: Throwable) {
             XposedBridge.log("$TAG QUICK class not found: ${e.message}")
         }
+
+        hookFooterClicks()
 
         // 多选底部操作栏：点「转发」时读取选中列表
         try {
@@ -344,6 +363,109 @@ object ForwardProbe {
         } catch (_: Throwable) {
         }
         return ""
+    }
+
+    /** 打印多选组件的所有字段类型（找 List 字段）。 */
+    private fun dumpQuickFields(c: Class<*>) {
+        val sb = StringBuilder("$TAG QUICK_FIELDS ${c.name}: ")
+        var k: Class<*>? = c
+        var depth = 0
+        while (k != null && k != Any::class.java && depth < 3) {
+            k.declaredFields.forEach { f ->
+                sb.append(f.name).append(':').append(f.type.simpleName).append(' ')
+            }
+            k = k.superclass
+            depth++
+        }
+        XposedBridge.log(sb.take(1600).toString())
+    }
+
+    /** 找出对象里 List/Set 字段的大小和元素类型。 */
+    private fun listFields(obj: Any?): List<Pair<String, String>> {
+        if (obj == null) return emptyList()
+        val out = ArrayList<Pair<String, String>>()
+        var k: Class<*>? = obj.javaClass
+        var depth = 0
+        while (k != null && k != Any::class.java && depth < 3) {
+            k.declaredFields.forEach { f ->
+                try {
+                    f.isAccessible = true
+                    val v = f.get(obj)
+                    if (v is Collection<*>) {
+                        val first = v.firstOrNull()
+                        out.add(f.name to "size=${v.size},first=${first?.javaClass?.name}")
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+            k = k.superclass
+            depth++
+        }
+        return out
+    }
+
+    /** 取多选组件里选中的消息列表（元素是 MsgInfo 的那个 List 字段）。 */
+    private fun selectedMessages(): List<Any> {
+        val inst = quickInstance ?: return emptyList()
+        var k: Class<*>? = inst.javaClass
+        var depth = 0
+        while (k != null && k != Any::class.java && depth < 3) {
+            k.declaredFields.forEach { f ->
+                try {
+                    f.isAccessible = true
+                    val v = f.get(inst)
+                    if (v is Collection<*>) {
+                        val msgs = v.filterNotNull().filter { MessageExtractor.looksLikeMsgInfo(it) }
+                        if (msgs.isNotEmpty()) return msgs
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+            k = k.superclass
+            depth++
+        }
+        return emptyList()
+    }
+
+    /** 全局点击探针：点在多选底部栏「转发」上时，接管为保存所选消息。 */
+    private fun hookFooterClicks() {
+        try {
+            XposedBridge.hookAllMethods(android.view.View::class.java, "performClick", object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    try {
+                        val v = param.thisObject as? android.view.View ?: return
+                        if (!inFooter(v)) return
+                        val text = collectText(v)
+                        if (!text.contains("转发")) return
+                        val list = selectedMessages()
+                        XposedBridge.log("$TAG FOOTER_FORWARD text=$text selected=${list.size}")
+                        if (list.isEmpty()) return
+                        param.result = true
+                        val title = currentChatTitle(v)
+                        // 从 Activity 的会话名兜底
+                        val chatTitle = title.ifBlank { lastChatTitle }
+                        list.forEach { m ->
+                            ForwardSender.forward(ctx, m, null, chatTitle, autoFetchOriginal = false)
+                        }
+                        XposedBridge.log("$TAG batch saved ${list.size} messages")
+                    } catch (_: Throwable) {
+                    }
+                }
+            })
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun inFooter(v: android.view.View?): Boolean {
+        var cur: android.view.View? = v
+        var depth = 0
+        while (cur != null && depth < 6) {
+            if (cur.javaClass.name.contains("ChattingFooterMoreBtnBar")) return true
+            val parent = cur.parent
+            cur = if (parent is android.view.View) parent else null
+            depth++
+        }
+        return false
     }
 
     private fun collectText(v: android.view.View?): String {

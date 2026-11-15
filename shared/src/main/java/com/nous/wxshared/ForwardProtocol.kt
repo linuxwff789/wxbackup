@@ -36,6 +36,11 @@ object ForwardProtocol {
     /** 单个 Binder 事务上限约 1MB；单批最多 100 条，避免超限 */
     const val MAX_MESSAGES_PER_BATCH = 100
 
+    /** 大媒体分片广播：每片 base64 后控制在 ~500KB，避免超过 Binder 1MB */
+    const val ACTION_RECEIVE_CHUNK = "com.nous.wxnotes.action.RECEIVE_CHUNK"
+    const val EXTRA_CHUNK_JSON = "chunk_json"
+    const val CHUNK_SIZE = 360 * 1024
+
     /** 广播发送方包名（微信） */
     const val SOURCE_WECHAT = "com.tencent.mm"
 
@@ -46,6 +51,92 @@ object ForwardProtocol {
     const val MEDIA_FILE = "file"
     const val MEDIA_EMOJI = "emoji"
     const val MEDIA_LINK = "link"
+
+    /**
+     * 大媒体分片。接收方按 transferId 落盘，收齐后合并，
+     * 再按 dedupeKey 更新对应消息的媒体。
+     */
+    data class MediaChunk(
+        val transferId: String,
+        val dedupeKey: String,
+        val msgSvrId: Long = 0,
+        val msgId: Long = 0,
+        val talker: String = "",
+        val talkerTitle: String = "",
+        val isGroup: Boolean = false,
+        val type: Int = 0,
+        val subType: Int = 0,
+        val createTime: Long = 0,
+        val isSend: Boolean = false,
+        val sender: String = "",
+        val senderName: String = "",
+        val text: String = "",
+        val rawXml: String = "",
+        val mediaKind: String = "",
+        val fileName: String = "",
+        val fileSize: Long = 0,
+        val durationMs: Long = 0,
+        val index: Int = 0,
+        val total: Int = 0,
+        val data: String = ""
+    ) {
+        fun encode(): String = JSONObject()
+            .put("transferId", transferId)
+            .put("dedupeKey", dedupeKey)
+            .put("msgSvrId", msgSvrId)
+            .put("msgId", msgId)
+            .put("talker", talker)
+            .put("talkerTitle", talkerTitle)
+            .put("isGroup", isGroup)
+            .put("type", type)
+            .put("subType", subType)
+            .put("createTime", createTime)
+            .put("isSend", isSend)
+            .put("sender", sender)
+            .put("senderName", senderName)
+            .put("text", text)
+            .put("rawXml", rawXml)
+            .put("mediaKind", mediaKind)
+            .put("fileName", fileName)
+            .put("fileSize", fileSize)
+            .put("durationMs", durationMs)
+            .put("index", index)
+            .put("total", total)
+            .put("data", data)
+            .toString()
+
+        companion object {
+            fun decode(s: String): MediaChunk? = try {
+                val o = JSONObject(s)
+                MediaChunk(
+                    transferId = o.optString("transferId"),
+                    dedupeKey = o.optString("dedupeKey"),
+                    msgSvrId = o.optLong("msgSvrId", 0),
+                    msgId = o.optLong("msgId", 0),
+                    talker = o.optString("talker"),
+                    talkerTitle = o.optString("talkerTitle"),
+                    isGroup = o.optBoolean("isGroup", false),
+                    type = o.optInt("type", 0),
+                    subType = o.optInt("subType", 0),
+                    createTime = o.optLong("createTime", 0),
+                    isSend = o.optBoolean("isSend", false),
+                    sender = o.optString("sender"),
+                    senderName = o.optString("senderName"),
+                    text = o.optString("text"),
+                    rawXml = o.optString("rawXml"),
+                    mediaKind = o.optString("mediaKind"),
+                    fileName = o.optString("fileName"),
+                    fileSize = o.optLong("fileSize", 0),
+                    durationMs = o.optLong("durationMs", 0),
+                    index = o.optInt("index", 0),
+                    total = o.optInt("total", 0),
+                    data = o.optString("data")
+                )
+            } catch (_: Throwable) {
+                null
+            }
+        }
+    }
 
     data class Conversation(
         val talker: String,

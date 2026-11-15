@@ -19,7 +19,13 @@ object ForwardSender {
     private const val TAG = "[wxhook:Fwd]"
     const val TARGET_PKG = "com.nous.wxnotes"
 
-    fun forward(ctx: Context?, msgInfo: Any, view: android.view.View? = null, talkerTitle: String = ""): Boolean {
+    fun forward(
+        ctx: Context?,
+        msgInfo: Any,
+        view: android.view.View? = null,
+        talkerTitle: String = "",
+        autoFetchOriginal: Boolean = true
+    ): Boolean {
         val ex = MessageExtractor.extract(msgInfo) ?: run {
             XposedBridge.log("$TAG extract failed: ${msgInfo.javaClass.name}")
             return false
@@ -53,6 +59,7 @@ object ForwardSender {
         var mediaKind = parsed.mediaKind
         var mediaUrl = ""
         var mediaBase64 = ""
+        var chunkSource: File? = null
         val type = parsed.type
         val candidates = listOf(ex.imgPath, ex.fileFullPath)
             .filter { it.isNotBlank() }
@@ -77,7 +84,11 @@ object ForwardSender {
                 }
             }
             if (mediaBase64.isEmpty()) {
-                MediaServer.uriFor(localMedia)?.let { mediaUrl = it }
+                if (file.length() > MAX_INLINE_BYTES) {
+                    chunkSource = file
+                } else {
+                    MediaServer.uriFor(localMedia)?.let { mediaUrl = it }
+                }
             }
             if (mediaKind == ForwardProtocol.MEDIA_NONE) mediaKind = guessKind(localMedia)
         }
@@ -85,7 +96,7 @@ object ForwardSender {
         val createTime = if (ex.createTime > 10_000_000_000L) ex.createTime / 1000 else ex.createTime
 
         // 原图没落盘：先给缩略图，再自动打开预览触发微信下载原图，下载完自动更新
-        if (localMedia == null && mediaKind == ForwardProtocol.MEDIA_IMAGE &&
+        if (autoFetchOriginal && localMedia == null && mediaKind == ForwardProtocol.MEDIA_IMAGE &&
             parsed.mediaMd5.length >= 8 && mediaBase64.isNotEmpty()
         ) {
             OriginalFetcher.schedule(
@@ -146,6 +157,17 @@ object ForwardSender {
         } catch (_: Throwable) {
         }
 
+        // 大媒体走分片广播（不受 Binder 1MB 和跨进程限制）
+        chunkSource?.let { file ->
+            sendChunks(
+                ctx,
+                batch.conversation,
+                fwd,
+                file,
+                buildString { append(ex.talker).append('|').append(fwd.effectiveDedupeKey()) }
+            )
+        }
+
         // 媒体服务器保活
         MediaServer.ensureStarted()
 
@@ -162,6 +184,68 @@ object ForwardSender {
 
     /** Binder 单次 ~1MB，base64 后约 1.33 倍；500KB 原文安全 */
     private const val MAX_INLINE_BYTES = 500 * 1024L
+
+    /**
+     * 把大媒体切成 ~360KB 的分片广播，接收端落盘合并后更新消息。
+     * 无需 root / 网络 / LocalSocket 权限。
+     */
+    fun sendChunks(
+        ctx: Context?,
+        conversation: Conversation,
+        msg: ForwardMessage,
+        file: File,
+        dedupeKey: String
+    ): Boolean {
+        if (ctx == null || !file.isFile) return false
+        return try {
+            val bytes = file.readBytes()
+            val chunkSize = ForwardProtocol.CHUNK_SIZE
+            val total = (bytes.size + chunkSize - 1) / chunkSize
+            val transferId = java.util.UUID.randomUUID().toString()
+            XposedBridge.log("$TAG sending chunks: ${bytes.size} bytes / $total pieces -> $transferId")
+            for (i in 0 until total) {
+                val start = i * chunkSize
+                val end = minOf(start + chunkSize, bytes.size)
+                val data = android.util.Base64.encodeToString(
+                    bytes.copyOfRange(start, end), android.util.Base64.NO_WRAP
+                )
+                val chunk = ForwardProtocol.MediaChunk(
+                    transferId = transferId,
+                    dedupeKey = dedupeKey,
+                    msgSvrId = msg.msgSvrId,
+                    msgId = msg.msgId,
+                    talker = conversation.talker,
+                    talkerTitle = conversation.title,
+                    isGroup = conversation.isGroup,
+                    type = msg.type,
+                    subType = msg.subType,
+                    createTime = msg.createTime,
+                    isSend = msg.isSend,
+                    sender = msg.sender,
+                    senderName = msg.senderName,
+                    text = msg.text,
+                    rawXml = "",
+                    mediaKind = msg.mediaKind,
+                    fileName = msg.fileName.ifBlank { file.name },
+                    fileSize = bytes.size.toLong(),
+                    durationMs = msg.durationMs,
+                    index = i,
+                    total = total,
+                    data = data
+                )
+                val intent = Intent(ForwardProtocol.ACTION_RECEIVE_CHUNK).apply {
+                    setPackage(TARGET_PKG)
+                    putExtra(ForwardProtocol.EXTRA_CHUNK_JSON, chunk.encode())
+                    addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+                }
+                ctx.sendBroadcast(intent)
+            }
+            true
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG sendChunks failed: ${e.message}")
+            false
+        }
+    }
 
     /** 图片大图已下载时，路径是 image2/<md5[0:2]>/<md5[2:4]>/<md5>.jpg。 */
     private fun findImageByMd5(md5: String): String? {
