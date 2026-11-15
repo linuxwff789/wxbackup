@@ -100,6 +100,10 @@ object ForwardProbe {
             )
             param.args.forEach { a -> dumpMsgIfAny("ARG", a) }
             dumpMsgIfAny("OWNER", param.thisObject)
+            dumpOwnerFields(key, param.thisObject)
+            dumpFields("MENU", param.args.firstOrNull())
+            val foundCtx = findChattingContext(param.thisObject)
+            XposedBridge.log("$TAG ctx[$key]=${foundCtx?.javaClass?.name}")
             if (method.name == "onCreateMMMenu") {
                 inspectMenuInstance(param.args.firstOrNull())
             }
@@ -110,9 +114,10 @@ object ForwardProbe {
                 val menuObj = param.args.firstOrNull() ?: return
                 val msg = param.args.firstOrNull { MessageExtractor.looksLikeMsgInfo(it) }
                     ?: findMsgIn(param.thisObject)
+                    ?: findCurrentMsg(param.thisObject)
                     ?: currentMsg
                 if (msg != null) currentMsg = msg
-                addMenuItem(menuObj, clazz)
+                addMenuItem(menuObj, clazz, msg)
             }
 
             "onMMMenuItemSelected" -> {
@@ -122,6 +127,7 @@ object ForwardProbe {
                 if (item?.itemId == ITEM_ID || title == TITLE) {
                     val msg = currentMsg
                         ?: findMsgIn(param.thisObject)
+                        ?: findCurrentMsg(param.thisObject)
                         ?: param.args.firstOrNull { MessageExtractor.looksLikeMsgInfo(it) }
                     if (msg != null) {
                         ForwardSender.forward(ctx, msg)
@@ -160,13 +166,22 @@ object ForwardProbe {
         }
     }
 
-    private fun addMenuItem(menuObj: Any, clazz: Class<*>) {
+    private fun addMenuItem(menuObj: Any, clazz: Class<*>, msg: Any? = null) {
         // 1. 标准 Menu 接口
         if (menuObj is Menu) {
             try {
-                if (menuObj.findItem(ITEM_ID) == null) {
-                    menuObj.add(Menu.NONE, ITEM_ID, 0, TITLE)
-                    XposedBridge.log("$TAG menu item added (Menu) by ${clazz.name}")
+                var item = menuObj.findItem(ITEM_ID)
+                if (item == null) {
+                    item = menuObj.add(Menu.NONE, ITEM_ID, 0, TITLE)
+                    XposedBridge.log("$TAG menu item added (Menu) by ${clazz.name} msg=${msg != null}")
+                }
+                // 直接设置点击监听，避免依赖微信的 id 分发
+                if (msg != null && item != null) {
+                    item.setOnMenuItemClickListener {
+                        XposedBridge.log("$TAG menu item clicked (listener)")
+                        ForwardSender.forward(ctx, msg)
+                        true
+                    }
                 }
             } catch (e: Throwable) {
                 XposedBridge.log("$TAG Menu.add failed: ${e.message}")
@@ -196,6 +211,90 @@ object ForwardProbe {
             "${m.name}(${m.parameterTypes.joinToString { it.simpleName }})"
         }
         XposedBridge.log("$TAG menu add failed, methods: ${all.take(1800)}")
+    }
+
+    private fun dumpFields(tag: String, obj: Any?) {
+        if (obj == null) return
+        try {
+            val sb = StringBuilder("$TAG $tag ${obj.javaClass.name}: ")
+            var c: Class<*>? = obj.javaClass
+            var depth = 0
+            while (c != null && c != Any::class.java && depth < 4) {
+                c.declaredFields.forEach { f ->
+                    sb.append(f.name).append(':').append(f.type.simpleName).append(' ')
+                }
+                c = c.superclass
+                depth++
+            }
+            XposedBridge.log(sb.take(1600).toString())
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun dumpOwnerFields(key: String, owner: Any?) {
+        if (owner == null) return
+        val sb = StringBuilder("$TAG OWNER_FIELDS $key -> ${owner.javaClass.name}: ")
+        try {
+            var c: Class<*>? = owner.javaClass
+            var depth = 0
+            while (c != null && c != Any::class.java && depth < 3) {
+                c.declaredFields.forEach { f ->
+                    sb.append(f.name).append(':').append(f.type.simpleName).append(' ')
+                }
+                c = c.superclass
+                depth++
+            }
+        } catch (_: Throwable) {
+        }
+        XposedBridge.log(sb.take(2000).toString())
+    }
+
+    private fun findChattingContext(owner: Any?): Any? {
+        if (owner == null) return null
+        if (owner.javaClass.name.contains("ChattingContext")) return owner
+        // 方法
+        try {
+            owner.javaClass.methods
+                .filter {
+                    it.parameterCount == 0 && (it.name == "getChattingContext" || it.name == "getChattingContextRef")
+                }
+                .forEach { m ->
+                    val v = runCatching { m.invoke(owner) }.getOrNull()
+                    if (v != null && v.javaClass.name.contains("ChattingContext")) return v
+                }
+        } catch (_: Throwable) {
+        }
+        // 字段
+        var c: Class<*>? = owner.javaClass
+        while (c != null && c != Any::class.java) {
+            for (f in c.declaredFields) {
+                try {
+                    f.isAccessible = true
+                    val v = f.get(owner) ?: continue
+                    if (v.javaClass.name.contains("ChattingContext")) return v
+                } catch (_: Throwable) {
+                }
+            }
+            c = c.superclass
+        }
+        return null
+    }
+
+    private fun findCurrentMsg(owner: Any?): Any? {
+        val c = findChattingContext(owner) ?: owner ?: return null
+        val names = listOf("getCurrentMsgInfo", "getMsgInfo", "getCurrentMsg", "getSelectedMsgInfo")
+        for (name in names) {
+            try {
+                val m = c.javaClass.methods.firstOrNull { it.name == name && it.parameterCount == 0 } ?: continue
+                val v = runCatching { m.invoke(c) }.getOrNull()
+                if (MessageExtractor.looksLikeMsgInfo(v)) {
+                    XposedBridge.log("$TAG got msg via ${c.javaClass.name}.$name()")
+                    return v
+                }
+            } catch (_: Throwable) {
+            }
+        }
+        return null
     }
 
     private fun dumpMsgIfAny(tag: String, obj: Any?) {
