@@ -50,12 +50,6 @@ object MultiSelectHook {
                     if (group.javaClass.name.contains("ChattingFooterMoreBtnBar")) inject(group)
                 }
             })
-            XposedBridge.hookAllMethods(ViewGroup::class.java, "onLayout", object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val group = param.thisObject as? ViewGroup ?: return
-                    if (group.javaClass.name.contains("ChattingFooterMoreBtnBar")) inject(group)
-                }
-            })
             XposedBridge.log("$TAG installed on ${cls.name}")
         } catch (e: Throwable) {
             XposedBridge.log("$TAG install failed: ${e.message}")
@@ -122,25 +116,95 @@ object MultiSelectHook {
 
     private fun saveSelected(act: Activity) {
         try {
-            var list = ForwardProbe.selectedMessages()
-            if (list.isEmpty()) {
-                val quick = findQuickComponent(act)
-                list = selectedFrom(quick)
-            }
-            XposedBridge.log("$TAG saveSelected size=${list.size}")
+            val quick = findQuickComponent(act)
+            val list = resolveSelected(quick)
+            XposedBridge.log("$TAG saveSelected size=${list.size} quick=${quick?.javaClass?.name}")
             if (list.isEmpty()) {
                 toast(act, "没有选中消息")
                 return
             }
             val title = act.title?.toString()?.trim().orEmpty()
-            list.forEach { m ->
-                ForwardSender.forward(act, m, null, title, autoFetchOriginal = false)
-            }
-            toast(act, "已保存 ${list.size} 条到笔记")
+            val n = ForwardSender.forwardList(act, list, title)
+            toast(act, "已保存 $n 条到笔记")
         } catch (e: Throwable) {
             XposedBridge.log("$TAG saveSelected error: ${e.message}")
             toast(act, "保存失败：${e.message}")
         }
+    }
+
+    /** 依次尝试：Collection<MsgInfo> → 单条 MsgInfo 字段 → ChattingContext.getSelectedList。 */
+    private fun resolveSelected(quick: Any?): List<Any> {
+        if (quick == null) return emptyList()
+
+        // 1) 组件字段里的消息集合
+        var k: Class<*>? = quick.javaClass
+        var depth = 0
+        while (k != null && k != Any::class.java && depth < 3) {
+            for (f in k.declaredFields) {
+                try {
+                    f.isAccessible = true
+                    val v = f.get(quick) ?: continue
+                    if (v is Collection<*>) {
+                        val msgs = v.filterNotNull().filter { MessageExtractor.looksLikeMsgInfo(it) }
+                        if (msgs.isNotEmpty()) {
+                            XposedBridge.log("$TAG selected from field ${f.name} size=${msgs.size}")
+                            return msgs
+                        }
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+            k = k.superclass
+            depth++
+        }
+
+        // 2) 单个 MsgInfo 字段（q/r/s/t/u 是 e9 类型）
+        val singles = ArrayList<Any>()
+        listOf("q", "r", "s", "t", "u").forEach { name ->
+            readField(quick, name)?.let { if (MessageExtractor.looksLikeMsgInfo(it)) singles.add(it) }
+        }
+        if (singles.isNotEmpty()) {
+            XposedBridge.log("$TAG selected from single fields size=${singles.size}")
+            return singles
+        }
+
+        // 3) ChattingContext.getSelectedList()
+        val ctxObj = readField(quick, "d")
+        XposedBridge.log("$TAG quick.d=${ctxObj?.javaClass?.name}")
+        if (ctxObj != null) {
+            listOf(
+                "getSelectedList", "getSelectedMsgList", "getCheckedList",
+                "getCheckedMsgList", "getMultiSelectList"
+            ).forEach { name ->
+                try {
+                    val m = ctxObj.javaClass.methods.firstOrNull {
+                        it.name == name && it.parameterCount == 0
+                    } ?: return@forEach
+                    val v = m.invoke(ctxObj)
+                    if (v is Collection<*>) {
+                        val msgs = v.filterNotNull().filter { MessageExtractor.looksLikeMsgInfo(it) }
+                        XposedBridge.log("$TAG ${name} size=${v.size} msgs=${msgs.size}")
+                        if (msgs.isNotEmpty()) return msgs
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+        }
+        return emptyList()
+    }
+
+    private fun readField(obj: Any?, name: String): Any? {
+        var k: Class<*>? = obj?.javaClass ?: return null
+        while (k != null && k != Any::class.java) {
+            try {
+                val f = k.getDeclaredField(name)
+                f.isAccessible = true
+                return f.get(obj)
+            } catch (_: Throwable) {
+                k = k.superclass
+            }
+        }
+        return null
     }
 
     private fun findQuickComponent(act: Activity): Any? {

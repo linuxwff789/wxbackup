@@ -247,6 +247,106 @@ object ForwardSender {
         }
     }
 
+    /**
+     * 多选批量：所有消息打包成一个批次（同一篇笔记），媒体按预算内嵌，超出走分片。
+     */
+    fun forwardList(ctx: Context?, list: List<Any>, talkerTitle: String): Int {
+        if (ctx == null || list.isEmpty()) return 0
+        val entries = ArrayList<Triple<String, ForwardMessage, File?>>()
+        var inlineBudget = 600 * 1024
+
+        for (msgInfo in list) {
+            val ex = MessageExtractor.extract(msgInfo) ?: continue
+            if (ex.talker.isBlank()) continue
+            val isGroup = ex.talker.endsWith("@chatroom")
+            var content = ex.content
+            var sender = ""
+            if (isGroup) {
+                val m = Regex("^([A-Za-z0-9_-]{4,64}):\\s*").find(content)
+                if (m != null) {
+                    sender = m.groupValues[1]
+                    content = content.substring(m.range.last + 1)
+                }
+            }
+            val parsed = WxMessageParser.parse(ex.type, content)
+            var mediaKind = parsed.mediaKind
+            var mediaBase64 = ""
+            var chunkFile: File? = null
+            val localMedia = listOf(ex.imgPath, ex.fileFullPath)
+                .filter { it.isNotBlank() }
+                .firstOrNull { File(it).isFile }
+                ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
+                ?: findImageByMd5(parsed.mediaMd5)
+            if (localMedia != null) {
+                val file = File(localMedia)
+                if (file.length() in 1..MAX_INLINE_BYTES && file.length() * 4 / 3 <= inlineBudget) {
+                    try {
+                        mediaBase64 = android.util.Base64.encodeToString(
+                            file.readBytes(), android.util.Base64.NO_WRAP
+                        )
+                        inlineBudget -= mediaBase64.length
+                    } catch (_: Throwable) {
+                    }
+                }
+                if (mediaBase64.isEmpty()) chunkFile = file
+                if (mediaKind == ForwardProtocol.MEDIA_NONE) mediaKind = guessKind(localMedia)
+            }
+            val createTime = if (ex.createTime > 10_000_000_000L) ex.createTime / 1000 else ex.createTime
+            val fwd = ForwardMessage(
+                msgId = ex.msgId,
+                msgSvrId = ex.msgSvrId,
+                type = parsed.type,
+                subType = parsed.subType,
+                createTime = createTime,
+                isSend = ex.isSend,
+                sender = sender,
+                senderName = "",
+                text = parsed.text,
+                rawXml = content.take(200_000),
+                mediaKind = mediaKind,
+                fileName = parsed.fileName,
+                fileSize = parsed.fileSize,
+                durationMs = parsed.durationMs,
+                mediaBase64 = mediaBase64
+            )
+            entries.add(Triple(ex.talker, fwd, chunkFile))
+        }
+        if (entries.isEmpty()) return 0
+
+        val talker = entries.first().first
+        val title = talkerTitle.ifBlank { talker }
+        val conv = Conversation(talker, title, talker.endsWith("@chatroom"))
+        val batch = ForwardBatch(
+            pluginVersion = "1.0.2",
+            conversation = conv,
+            messages = entries.map { it.second }
+        )
+        try {
+            val intent = Intent(ForwardProtocol.ACTION_RECEIVE_BATCH).apply {
+                setPackage(TARGET_PKG)
+                putExtra(ForwardProtocol.EXTRA_BATCH_JSON, batch.encode())
+                putExtra(ForwardProtocol.EXTRA_SOURCE, ForwardProtocol.SOURCE_WECHAT)
+                addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+            }
+            ctx.sendBroadcast(intent)
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG forwardList broadcast failed: ${e.message}")
+        }
+        entries.forEach { (t, msg, chunk) ->
+            chunk?.let {
+                sendChunks(
+                    ctx,
+                    Conversation(t, talkerTitle.ifBlank { t }, t.endsWith("@chatroom")),
+                    msg,
+                    it,
+                    buildString { append(t).append('|').append(msg.effectiveDedupeKey()) }
+                )
+            }
+        }
+        XposedBridge.log("$TAG forwardList size=${entries.size} talker=$talker title=${title.take(24)}")
+        return entries.size
+    }
+
     /** 图片大图已下载时，路径是 image2/<md5[0:2]>/<md5[2:4]>/<md5>.jpg。 */
     private fun findImageByMd5(md5: String): String? {
         if (md5.length < 4) return null
