@@ -31,6 +31,7 @@ object MultiSelectHook {
         if (installed) return
         installed = true
         hookAdapter(loader)
+        XposedBridge.log("$TAG install(): adapter hook step done")
         try {
             val cls = Class.forName(
                 "com.tencent.mm.ui.chatting.ChattingFooterMoreBtnBar",
@@ -396,7 +397,9 @@ object MultiSelectHook {
             })
             XposedBridge.log("$TAG adapter hook installed")
         } catch (e: Throwable) {
-            XposedBridge.log("$TAG adapter hook failed: ${e.message}")
+            val sw = java.io.StringWriter()
+            e.printStackTrace(java.io.PrintWriter(sw))
+            XposedBridge.log("$TAG adapter hook failed: " + sw.toString().take(800))
         }
     }
 
