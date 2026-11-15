@@ -103,8 +103,10 @@ object ForwardSender {
                 }
             }
         }
-        if (autoFetchOriginal && localMedia == null && mediaKind == ForwardProtocol.MEDIA_IMAGE &&
-            parsed.mediaMd5.length >= 8
+        val thumbOnly = localMedia != null && isThumbnailPath(localMedia)
+        XposedBridge.log("$TAG image thumbOnly=$thumbOnly local=$localMedia")
+        if (autoFetchOriginal && (localMedia == null || thumbOnly) &&
+            mediaKind == ForwardProtocol.MEDIA_IMAGE && parsed.mediaMd5.length >= 8
         ) {
             val md5 = parsed.mediaMd5
             WxDownloader.downloadImage(ctx, ex.talker, ex.msgId, ex.msgSvrId, md5) { file ->
@@ -338,7 +340,8 @@ object ForwardSender {
                     }
                 }
             }
-            if (localMedia == null && mediaKind == ForwardProtocol.MEDIA_IMAGE && parsed.mediaMd5.length >= 8) {
+            val thumbOnly = localMedia != null && isThumbnailPath(localMedia)
+            if ((localMedia == null || thumbOnly) && mediaKind == ForwardProtocol.MEDIA_IMAGE && parsed.mediaMd5.length >= 8) {
                 WxDownloader.downloadImage(ctx, ex.talker, ex.msgId, ex.msgSvrId, parsed.mediaMd5) { file ->
                     if (file != null) {
                         WxDownloader.publishUpdate(
@@ -411,6 +414,11 @@ object ForwardSender {
     }
 
     /** 图片大图已下载时，路径是 image2/<md5[0:2]>/<md5[2:4]>/<md5>.jpg。 */
+    private fun isThumbnailPath(path: String): Boolean {
+        val name = File(path).name
+        return name.startsWith("th_") || path.contains("/th_")
+    }
+
     private fun findImageByMd5(md5: String): String? {
         if (md5.length < 4) return null
         val root = File("/data/data/com.tencent.mm/MicroMsg")
