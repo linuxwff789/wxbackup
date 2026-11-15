@@ -21,6 +21,18 @@ import java.util.concurrent.ConcurrentHashMap
 object WxDownloader {
 
     private const val TAG = "[wxhook:DL]"
+
+    /** LSPosed 日志会轮转丢失，关键路径同时写文件。 */
+    @JvmStatic
+    fun fileLog(ctx: Context?, msg: String) {
+        try {
+            val dir = ctx?.filesDir ?: return
+            java.io.File(dir, "wxhook_dl.log").appendText(
+                "${java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())} $msg\n"
+            )
+        } catch (_: Throwable) {
+        }
+    }
     private val downloading = ConcurrentHashMap<String, Boolean>()
 
     /**

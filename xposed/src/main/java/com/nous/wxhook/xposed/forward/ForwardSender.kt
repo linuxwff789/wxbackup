@@ -110,6 +110,7 @@ object ForwardSender {
             parsed.mediaHint.isNotBlank()
         ) {
             XposedBridge.log("$TAG cdn branch hint=${parsed.mediaHint.take(24)} aesLen=${parsed.aesKey.length}")
+            WxDownloader.fileLog(ctx, "cdn branch hint=${parsed.mediaHint.take(24)} aesLen=${parsed.aesKey.length} md5=${parsed.mediaMd5}")
             val md5 = parsed.mediaMd5.ifBlank { System.currentTimeMillis().toString() }
             val save = File(ctx?.filesDir ?: return false, "cdn_$md5.jpg").absolutePath
             WxDownloader.downloadCdn(ctx, "img_$md5", parsed.mediaHint, parsed.aesKey, 5, save) { f ->
@@ -357,6 +358,8 @@ object ForwardSender {
                 parsed.mediaHint.isNotBlank()
             ) {
                 XposedBridge.log("$TAG cdn branch hint=${parsed.mediaHint.take(24)} aesLen=${parsed.aesKey.length}")
+                WxDownloader.fileLog(ctx, "cdn branch hint=${parsed.mediaHint.take(24)} aesLen=${parsed.aesKey.length} md5=${parsed.mediaMd5}")
+            WxDownloader.fileLog(ctx, "cdn branch hint=${parsed.mediaHint.take(24)} aesLen=${parsed.aesKey.length} md5=${parsed.mediaMd5}")
                 val md5 = parsed.mediaMd5.ifBlank { System.currentTimeMillis().toString() }
                 val dir = ctx?.filesDir ?: continue
                 val save = File(dir, "cdn_$md5.jpg").absolutePath
