@@ -195,6 +195,16 @@ object MultiSelectHook {
             ?.toSet()
             .orEmpty()
 
+        val adapterIds = selectedMsgIds(ctxObj)
+        if (adapterIds.isNotEmpty()) {
+            val byId = adapterIds.mapNotNull { msgById(ctxObj, it) }
+            if (byId.isNotEmpty()) {
+                val out = dedupe(byId)
+                XposedBridge.log("$TAG selected from adapter.W size=${out.size} ids=$adapterIds")
+                return out
+            }
+        }
+
         // q/r/s/t/u 里筛出真正被选中的
         val singles = listOf("q", "r", "s", "t", "u")
             .mapNotNull { readField(quick, it) }
@@ -273,7 +283,33 @@ object MultiSelectHook {
     }
 
     /** 用 ChattingContext 里 (long)->MsgInfo 的方法按 msgId 查消息。 */
+    /** 微信真正维护多选状态的是 adapter.k.W（CopyOnWriteArraySet<MsgIdTalker>）。 */
+    private fun selectedMsgIds(ctx: Any?): Set<Long> {
+        if (ctx == null) return emptySet()
+        return try {
+            val mgr = readField(ctx, "f35820c") ?: return emptySet()
+            val cls = Class.forName("wl5.z", false, ctx.javaClass.classLoader)
+            val comp = mgr.javaClass.methods.firstOrNull {
+                it.name == "a" && it.parameterCount == 1 && it.parameterTypes[0] == Class::class.java
+            }?.invoke(mgr, cls) ?: return emptySet()
+            val w = readField(comp, "W") as? Collection<*> ?: return emptySet()
+            w.mapNotNull { (readField(it, "f149692d") as? Number)?.toLong() }.toSet()
+        } catch (_: Throwable) {
+            emptySet()
+        }
+    }
+
     private fun msgById(ctxObj: Any?, id: Long): Any? {
+        // 首选微信自己的查询：oy0.k0.Zi(talker, msgId)
+        runCatching {
+            val talker = ctxObj?.javaClass?.getMethod("x")?.invoke(ctxObj) as? String
+            if (!talker.isNullOrBlank()) {
+                val mi = Class.forName("oy0.k0", false, ctxObj.javaClass.classLoader)
+                    .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
+                    .invoke(null, talker, id)
+                if (MessageExtractor.looksLikeMsgInfo(mi)) return mi
+            }
+        }
         if (ctxObj == null) return null
         val methods = ctxObj.javaClass.methods ?: return null
         for (m in methods) {
