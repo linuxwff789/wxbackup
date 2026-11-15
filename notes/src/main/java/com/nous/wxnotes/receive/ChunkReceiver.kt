@@ -20,6 +20,19 @@ class ChunkReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ForwardProtocol.ACTION_RECEIVE_CHUNK) return
+        // 大文件 Base64 解码 + 写盘不能占用广播主线程，否则会触发「Can't deliver broadcast」被杀
+        val pending = goAsync()
+        Thread({
+            try {
+                handle(context, intent)
+            } catch (_: Throwable) {
+            } finally {
+                pending.finish()
+            }
+        }, "wxnotes-chunk").start()
+    }
+
+    private fun handle(context: Context, intent: Intent) {
         val json = intent.getStringExtra(ForwardProtocol.EXTRA_CHUNK_JSON) ?: return
         val chunk = ForwardProtocol.MediaChunk.decode(json) ?: return
         if (chunk.transferId.isBlank() || chunk.total <= 0) return
