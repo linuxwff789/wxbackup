@@ -56,6 +56,7 @@ object ForwardSender {
         val candidates = listOf(ex.imgPath, ex.fileFullPath)
             .filter { it.isNotBlank() }
         val localMedia = findImageByMd5(parsed.mediaMd5)
+            ?: findImageByMd5(md5FromThumbPath(ex.imgPath) ?: "")
             ?: candidates.firstOrNull { File(it).isFile && !isThumbnailPath(it) }
             ?: findRecentOriginal(parsed.fileSize)
             ?: candidates.firstOrNull { File(it).isFile }
@@ -310,6 +311,7 @@ object ForwardSender {
             var mediaBase64 = ""
             var chunkFile: File? = null
             val localMedia = findImageByMd5(parsed.mediaMd5)
+                ?: findImageByMd5(md5FromThumbPath(ex.imgPath) ?: "")
                 ?: listOf(ex.imgPath, ex.fileFullPath)
                     .filter { it.isNotBlank() }
                     .firstOrNull { File(it).isFile && !isThumbnailPath(it) }
@@ -425,7 +427,7 @@ object ForwardSender {
         if (expectedSize <= 0) return null
         return try {
             val root = File("/data/data/com.tencent.mm/MicroMsg")
-            val cutoff = System.currentTimeMillis() - 15 * 60 * 1000L
+            val cutoff = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
             var best: File? = null
             root.listFiles()?.forEach { d ->
                 val img2 = File(d, "image2")
@@ -443,6 +445,14 @@ object ForwardSender {
         } catch (_: Throwable) {
             null
         }
+    }
+
+    /** 从 th_<md5> 缩略图路径反推 md5。 */
+    private fun md5FromThumbPath(path: String?): String? {
+        if (path.isNullOrBlank()) return null
+        val name = File(path).name
+        if (!name.startsWith("th_")) return null
+        return name.removePrefix("th_").substringBefore('.').takeIf { it.length >= 32 }
     }
 
     private fun isThumbnailPath(path: String): Boolean {
