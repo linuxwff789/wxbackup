@@ -59,7 +59,9 @@ object WxMessageParser {
         /** 微信 XML 里给出的本地/远程资源线索 */
         val mediaHint: String = "",
         /** 图片/视频的 md5（用于拼微信缓存路径） */
-        val mediaMd5: String = ""
+        val mediaMd5: String = "",
+        /** 文件消息的 attachid（用于调用微信文件下载服务） */
+        val attachId: String = ""
     )
 
     fun parse(type: Int, content: String?, forcedSubType: Int = 0): Parsed {
@@ -194,7 +196,8 @@ object WxMessageParser {
                     text = "[文件] $name${if (size > 0) " (${formatSize(size)})" else ""}".trim(),
                     title = name, fileName = name, fileSize = size,
                     mediaKind = ForwardProtocol.MEDIA_FILE,
-                    mediaHint = attach?.childText("cdnattachurl").orEmpty()
+                    mediaHint = attach?.childText("cdnattachurl").orEmpty(),
+                    attachId = attach?.childText("attachid").orEmpty()
                 )
             }
 

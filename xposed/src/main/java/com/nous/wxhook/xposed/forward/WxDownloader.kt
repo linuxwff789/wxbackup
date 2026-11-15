@@ -105,6 +105,69 @@ object WxDownloader {
         }
     }
 
+    /** 文件/附件：调微信 AppAttach 服务触发下载，轮询 attachment 目录。 */
+    fun downloadFile(
+        ctx: Context?,
+        talker: String,
+        attachId: String,
+        fileName: String,
+        expectedSize: Long,
+        onDone: (File?) -> Unit
+    ): Boolean {
+        if (ctx == null || attachId.isBlank()) return false
+        val key = "file|$talker|$attachId"
+        if (downloading.putIfAbsent(key, true) != null) return false
+        return try {
+            val loader = ctx.classLoader
+            val c4 = Class.forName("mp3.c4", false, loader)
+            val inst = Class.forName("pq0.i1", false, loader)
+                .getMethod("v", Class::class.java).invoke(null, c4)
+            val jj = inst!!.javaClass.getMethod("Jj").invoke(inst)
+            val ud = jj!!.javaClass.methods.firstOrNull {
+                it.name == "Ud" && it.parameterCount == 2
+            } ?: throw NoSuchMethodException("Ud(String,String)")
+            ud.invoke(jj, talker, attachId)
+            XposedBridge.log("$TAG enqueued file download attachId=${attachId.take(40)} name=$fileName")
+            Thread({
+                val f = waitForAttachment(fileName, expectedSize, 60_000)
+                downloading.remove(key)
+                XposedBridge.log("$TAG file download result: ${f?.absolutePath} (${f?.length()})")
+                onDone(f)
+            }, "wxnotes-filedl").apply { isDaemon = true }.start()
+            true
+        } catch (e: Throwable) {
+            downloading.remove(key)
+            XposedBridge.log("$TAG file enqueue failed: ${e.message}")
+            false
+        }
+    }
+
+    private fun waitForAttachment(name: String, expectedSize: Long, timeoutMs: Long): File? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            findAttachment(name, expectedSize)?.let { return it }
+            Thread.sleep(500)
+        }
+        return findAttachment(name, expectedSize)
+    }
+
+    private fun findAttachment(name: String, expectedSize: Long): File? {
+        val baseName = name.substringBeforeLast('.', name).ifBlank { name }
+        val root = File("/data/data/com.tencent.mm/MicroMsg")
+        val candidates = ArrayList<File>()
+        root.listFiles()?.forEach { dir ->
+            if (!dir.isDirectory) return@forEach
+            val att = File(dir, "attachment")
+            att.listFiles()?.forEach { f ->
+                if (!f.isFile || f.length() <= 0) return@forEach
+                val nameHit = baseName.length >= 3 && f.name.contains(baseName, ignoreCase = true)
+                val sizeHit = expectedSize > 0 && kotlin.math.abs(f.length() - expectedSize) < 2048
+                if (nameHit || sizeHit) candidates.add(f)
+            }
+        }
+        return candidates.maxByOrNull { it.lastModified() }
+    }
+
     private fun fieldLong(obj: Any, name: String): Long {
         var c: Class<*>? = obj.javaClass
         while (c != null) {
@@ -156,7 +219,8 @@ object WxDownloader {
         createTime: Long,
         type: Int,
         fileName: String,
-        file: File
+        file: File,
+        mediaKind: String = ForwardProtocol.MEDIA_IMAGE
     ) {
         if (ctx == null) return
         try {
@@ -169,7 +233,7 @@ object WxDownloader {
                 createTime = createTime,
                 isSend = isSend,
                 text = "[图片]",
-                mediaKind = ForwardProtocol.MEDIA_IMAGE,
+                mediaKind = mediaKind,
                 fileName = fileName.ifBlank { file.name },
                 fileSize = len
             )
