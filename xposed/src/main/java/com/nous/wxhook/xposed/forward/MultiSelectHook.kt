@@ -293,7 +293,9 @@ object MultiSelectHook {
                 it.name == "a" && it.parameterCount == 1 && it.parameterTypes[0] == Class::class.java
             }?.invoke(mgr, cls) ?: return emptySet()
             val w = readField(comp, "W") as? Collection<*> ?: return emptySet()
-            w.mapNotNull { (readField(it, "f149692d") as? Number)?.toLong() }.toSet()
+            val ids = w.mapNotNull { (readField(it, "f149692d") as? Number)?.toLong() }.toSet()
+            XposedBridge.log("$TAG adapter.W ids=$ids")
+            ids
         } catch (_: Throwable) {
             emptySet()
         }
@@ -307,7 +309,11 @@ object MultiSelectHook {
                 val mi = Class.forName("oy0.k0", false, ctxObj.javaClass.classLoader)
                     .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
                     .invoke(null, talker, id)
-                if (MessageExtractor.looksLikeMsgInfo(mi)) return mi
+                if (MessageExtractor.looksLikeMsgInfo(mi)) {
+                    val got = MessageExtractor.extract(mi)
+                    XposedBridge.log("$TAG msgById want=$id got=${got?.msgId} svr=${got?.msgSvrId} type=${got?.type} talker=$talker")
+                    return mi
+                }
             }
         }
         if (ctxObj == null) return null
