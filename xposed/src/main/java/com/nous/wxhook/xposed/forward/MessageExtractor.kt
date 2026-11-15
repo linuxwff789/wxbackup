@@ -20,16 +20,18 @@ object MessageExtractor {
 
     fun looksLikeMsgInfo(obj: Any?): Boolean {
         if (obj == null) return false
-        val c = obj.javaClass
-        if (!c.name.startsWith("com.tencent.mm.")) return false
-        var clazz: Class<*>? = c
+        // 8.0.79 的类名被混淆到 gl5.*，不能靠包名判断，只看 field_* 字段
+        var clazz: Class<*>? = obj.javaClass
+        var hits = 0
+        var hasId = false
         while (clazz != null && clazz != Any::class.java) {
             for (f in clazz.declaredFields) {
-                if (f.name == "field_msgId" || f.name == "field_talker" || f.name == "field_createTime") return true
+                if (f.name == "field_msgId") { hits++; hasId = true }
+                else if (f.name == "field_talker" || f.name == "field_createTime" || f.name == "field_content") hits++
             }
             clazz = clazz.superclass
         }
-        return false
+        return hasId || hits >= 2
     }
 
     fun extract(obj: Any): Extracted? {

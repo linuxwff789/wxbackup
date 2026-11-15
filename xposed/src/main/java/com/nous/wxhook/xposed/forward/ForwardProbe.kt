@@ -239,7 +239,18 @@ object ForwardProbe {
             var depth = 0
             while (c != null && c != Any::class.java && depth < 3) {
                 c.declaredFields.forEach { f ->
-                    sb.append(f.name).append(':').append(f.type.simpleName).append(' ')
+                    sb.append(f.name).append(':').append(f.type.simpleName)
+                    try {
+                        f.isAccessible = true
+                        val v = f.get(owner)
+                        if (v != null) {
+                            sb.append('=').append(v.javaClass.name)
+                            if (MessageExtractor.looksLikeMsgInfo(v)) sb.append("<<MSG>>")
+                            if (v.javaClass.interfaces.any { it.name.contains("ChattingContext") }) sb.append("<<CTX>>")
+                        }
+                    } catch (_: Throwable) {
+                    }
+                    sb.append(' ')
                 }
                 c = c.superclass
                 depth++
@@ -249,7 +260,47 @@ object ForwardProbe {
         XposedBridge.log(sb.take(2000).toString())
     }
 
-    private fun findChattingContext(owner: Any?): Any? {
+    private fun findChattingContext(owner: Any?): Any? = findChattingContextDeep(owner, 0, HashSet())
+
+    private fun findChattingContextDeep(owner: Any?, depth: Int, seen: MutableSet<Int>): Any? {
+        if (owner == null || depth > 2) return null
+        if (!seen.add(System.identityHashCode(owner))) return null
+        val cls = owner.javaClass
+        if (cls.name.contains("ChattingContext") ||
+            cls.interfaces.any { it.name.contains("ChattingContext") }
+        ) return owner
+        // 方法
+        try {
+            cls.methods
+                .filter {
+                    it.parameterCount == 0 && (it.name == "getChattingContext" || it.name == "getChattingContextRef")
+                }
+                .forEach { m ->
+                    val v = runCatching { m.invoke(owner) }.getOrNull()
+                    if (v != null && (v.javaClass.name.contains("ChattingContext") ||
+                            v.javaClass.interfaces.any { it.name.contains("ChattingContext") })
+                    ) return v
+                }
+        } catch (_: Throwable) {
+        }
+        // 字段（递归）
+        var c: Class<*>? = cls
+        while (c != null && c != Any::class.java) {
+            for (f in c.declaredFields) {
+                try {
+                    f.isAccessible = true
+                    val v = f.get(owner) ?: continue
+                    val found = findChattingContextDeep(v, depth + 1, seen)
+                    if (found != null) return found
+                } catch (_: Throwable) {
+                }
+            }
+            c = c.superclass
+        }
+        return null
+    }
+
+    private fun unusedFindChattingContext(owner: Any?): Any? {
         if (owner == null) return null
         if (owner.javaClass.name.contains("ChattingContext")) return owner
         // 方法
