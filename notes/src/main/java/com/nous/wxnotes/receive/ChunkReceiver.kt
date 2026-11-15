@@ -22,23 +22,42 @@ class ChunkReceiver : BroadcastReceiver() {
         if (intent.action != ForwardProtocol.ACTION_RECEIVE_CHUNK) return
         // 大文件 Base64 解码 + 写盘不能占用广播主线程，否则会触发「Can't deliver broadcast」被杀
         val pending = goAsync()
-        Thread({
-            try {
-                handle(context, intent)
-            } catch (_: Throwable) {
-            } finally {
-                pending.finish()
-            }
-        }, "wxnotes-chunk").start()
+        var transferId: String? = null
+        try {
+            transferId = handle(context, intent)
+        } catch (_: Throwable) {
+        } finally {
+            pending.finish()
+        }
+        // WorkManager 初始化较慢，放到广播 finish 之后，避免拖住广播被系统杀进程
+        if (transferId != null) {
+            val id = transferId
+            Thread({ enqueue(context, id) }, "wxnotes-chunk-wm").start()
+        }
     }
 
-    private fun handle(context: Context, intent: Intent) {
-        val json = intent.getStringExtra(ForwardProtocol.EXTRA_CHUNK_JSON) ?: return
-        val chunk = ForwardProtocol.MediaChunk.decode(json) ?: return
-        if (chunk.transferId.isBlank() || chunk.total <= 0) return
+    private fun enqueue(context: Context, transferId: String) {
+        try {
+            val request = OneTimeWorkRequestBuilder<AssembleChunkWorker>()
+                .setInputData(workDataOf(AssembleChunkWorker.KEY_TRANSFER_ID to transferId))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "assemble-$transferId",
+                ExistingWorkPolicy.KEEP,
+                request
+            )
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun handle(context: Context, intent: Intent): String? {
+        val json = intent.getStringExtra(ForwardProtocol.EXTRA_CHUNK_JSON) ?: return null
+        val chunk = ForwardProtocol.MediaChunk.decode(json) ?: return null
+        if (chunk.transferId.isBlank() || chunk.total <= 0) return null
 
         val dir = File(File(context.filesDir, "imports/chunks"), chunk.transferId)
-        if (!dir.exists() && !dir.mkdirs()) return
+        if (!dir.exists() && !dir.mkdirs()) return null
         try {
             val bytes = android.util.Base64.decode(chunk.data, android.util.Base64.DEFAULT)
             File(dir, "${chunk.index}.part").writeBytes(bytes)
@@ -51,17 +70,8 @@ class ChunkReceiver : BroadcastReceiver() {
                 tmp.delete()
             }
         } catch (_: Throwable) {
-            return
+            return null
         }
-
-        val request = OneTimeWorkRequestBuilder<AssembleChunkWorker>()
-            .setInputData(workDataOf(AssembleChunkWorker.KEY_TRANSFER_ID to chunk.transferId))
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
-            .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            "assemble-${chunk.transferId}",
-            ExistingWorkPolicy.KEEP,
-            request
-        )
+        return chunk.transferId
     }
 }
