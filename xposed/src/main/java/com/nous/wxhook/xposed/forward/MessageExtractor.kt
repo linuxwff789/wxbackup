@@ -45,7 +45,7 @@ object MessageExtractor {
         val isSend = ((read(obj, "field_isSend", "isSend") as? Number)?.toInt() ?: 0) == 1
         val talker = read(obj, "field_talker", "talker") as? String ?: ""
         val content = read(obj, "field_content", "content") as? String ?: ""
-        val imgPath = read(obj, "field_imgPath", "imgPath") as? String ?: ""
+        val imgPath = resolveOriginalImage(read(obj, "field_imgPath", "imgPath") as? String ?: "")
         val fileFullPath = read(obj, "field_fileFullPath", "fileFullPath") as? String ?: ""
         val fileName = read(obj, "field_fileName", "fileName") as? String ?: ""
         return Extracted(msgId, msgSvrId, type, createTime, isSend, talker, content, imgPath, fileFullPath, fileName)
@@ -73,6 +73,37 @@ object MessageExtractor {
             clazz = clazz.superclass
         }
         return sb.toString()
+    }
+
+    /**
+     * 微信把缩略图存成 image2/xx/yy/th_<md5>，原图是同目录 <md5>.jpg。
+     * field_imgPath 通常指向 th_ 缩略图，这里优先换成原图。
+     */
+    private fun resolveOriginalImage(path: String): String {
+        if (path.isBlank()) return path
+        var p = path
+        if (p.endsWith("hd")) p = p.dropLast(2)
+        val idx = p.lastIndexOf("/th_")
+        if (idx < 0) return path
+        val base = p.substring(0, idx)
+        val name = p.substring(idx + 4)
+        val candidates = listOf(
+            "$base/$name.jpg", "$base/$name.png", "$base/$name.gif",
+            "$base/$name.webp", "$base/$name"
+        )
+        for (c in candidates) {
+            if (existsUnderMicroMsg(c)) return c
+        }
+        return path
+    }
+
+    private fun existsUnderMicroMsg(rel: String): Boolean {
+        return try {
+            val root = java.io.File("/data/data/com.tencent.mm/MicroMsg")
+            root.listFiles()?.any { d -> java.io.File(d, rel).isFile } == true
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     private fun read(obj: Any, vararg names: String): Any? {
