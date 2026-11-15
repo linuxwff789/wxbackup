@@ -35,6 +35,46 @@ object ForwardProbe {
     )
 
     private val dumped = HashSet<String>()
+
+    private fun hookImageDownload(loader: ClassLoader) {
+        try {
+            val l0 = de.robv.android.xposed.XposedHelpers.findClass("v61.l0", loader)
+            XposedBridge.hookAllMethods(l0, "W2", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val id = param.result?.let {
+                        runCatching { de.robv.android.xposed.XposedHelpers.getLongField(it, "f479445a") }
+                            .getOrDefault(-1L)
+                    } ?: -1L
+                    XposedBridge.log("$TAG W2 hook talker=${param.args.getOrNull(0)} msgId=${param.args.getOrNull(1)} imgId=$id")
+                }
+            })
+            XposedBridge.hookAllMethods(l0, "k3", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val id = param.result?.let {
+                        runCatching { de.robv.android.xposed.XposedHelpers.getLongField(it, "f479445a") }
+                            .getOrDefault(-1L)
+                    } ?: -1L
+                    XposedBridge.log("$TAG k3 hook talker=${param.args.getOrNull(0)} svr=${param.args.getOrNull(1)} imgId=$id")
+                }
+            })
+            val ui = de.robv.android.xposed.XposedHelpers.findClass("com.tencent.mm.ui.chatting.ImageDownloadUI", loader)
+            XposedBridge.hookAllMethods(ui, "onCreate", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val a = param.thisObject as? android.app.Activity ?: return
+                    val i = a.intent ?: return
+                    XposedBridge.log(
+                        "$TAG ImageDownloadUI msgId=${i.getLongExtra("img_msg_id", 0)} " +
+                            "svr=${i.getLongExtra("img_server_id", 0)} " +
+                            "talker=${i.getStringExtra("img_download_username")} " +
+                            "compress=${i.getIntExtra("img_download_compress_type", 0)}"
+                    )
+                }
+            })
+            XposedBridge.log("$TAG image download hooks installed")
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG image download hook fail: ${e.message}")
+        }
+    }
     private var currentMsg: Any? = null
     private var lastOwner: Any? = null
     private var lastView: android.view.View? = null
@@ -46,6 +86,7 @@ object ForwardProbe {
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam, context: Context?) {
         ctx = context
         val loader = lpparam.classLoader
+        hookImageDownload(loader)
         val t0 = System.currentTimeMillis()
         val names = scanNames(loader)
         XposedBridge.log("$TAG dex classes=${names.size} scan=${System.currentTimeMillis() - t0}ms")
