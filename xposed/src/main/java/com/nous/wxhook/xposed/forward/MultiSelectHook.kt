@@ -285,18 +285,28 @@ object MultiSelectHook {
     /** 用 ChattingContext 里 (long)->MsgInfo 的方法按 msgId 查消息。 */
     /** 微信真正维护多选状态的是 adapter.k.W（CopyOnWriteArraySet<MsgIdTalker>）。 */
     private fun selectedMsgIds(ctx: Any?): Set<Long> {
-        if (ctx == null) return emptySet()
+        if (ctx == null) {
+            XposedBridge.log("$TAG ids ctx=null")
+            return emptySet()
+        }
         return try {
-            val mgr = readField(ctx, "f35820c") ?: return emptySet()
+            val mgr = readField(ctx, "f35820c")
+            XposedBridge.log("$TAG ids mgr=${mgr?.javaClass?.name}")
+            if (mgr == null) return emptySet()
             val cls = Class.forName("wl5.z", false, ctx.javaClass.classLoader)
             val comp = mgr.javaClass.methods.firstOrNull {
                 it.name == "a" && it.parameterCount == 1 && it.parameterTypes[0] == Class::class.java
-            }?.invoke(mgr, cls) ?: return emptySet()
-            val w = readField(comp, "W") as? Collection<*> ?: return emptySet()
-            val ids = w.mapNotNull { (readField(it, "f149692d") as? Number)?.toLong() }.toSet()
+            }?.invoke(mgr, cls)
+            XposedBridge.log("$TAG ids comp=${comp?.javaClass?.name}")
+            if (comp == null) return emptySet()
+            val w = readField(comp, "W")
+            XposedBridge.log("$TAG ids w=${w?.javaClass?.name} size=${(w as? Collection<*>)?.size}")
+            val col = w as? Collection<*> ?: return emptySet()
+            val ids = col.mapNotNull { (readField(it, "f149692d") as? Number)?.toLong() }.toSet()
             XposedBridge.log("$TAG adapter.W ids=$ids")
             ids
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG ids failed: ${e.message}")
             emptySet()
         }
     }
