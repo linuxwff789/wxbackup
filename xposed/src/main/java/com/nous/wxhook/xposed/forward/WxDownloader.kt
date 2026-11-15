@@ -51,7 +51,7 @@ object WxDownloader {
                         .invoke(storage, talker, msgId)
                 }.getOrNull()
             }
-            if (info == null && msgSvrId > 0) {
+            if ((info == null || fieldLong(info, "f479445a") <= 0) && msgSvrId > 0) {
                 info = runCatching {
                     storage!!.javaClass.getMethod("k3", String::class.java, java.lang.Long.TYPE)
                         .invoke(storage, talker, msgSvrId)
