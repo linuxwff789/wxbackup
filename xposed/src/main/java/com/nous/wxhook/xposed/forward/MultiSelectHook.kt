@@ -95,7 +95,10 @@ object MultiSelectHook {
                 }
             }
             val lp: ViewGroup.LayoutParams = if (group is LinearLayout) {
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                ).apply { gravity = Gravity.CENTER }
             } else {
                 ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -103,7 +106,15 @@ object MultiSelectHook {
                 )
             }
             group.addView(btn, lp)
-            XposedBridge.log("$TAG button injected, childCount=${group.childCount}")
+            XposedBridge.log(
+                "$TAG button injected, childCount=${group.childCount} children=" +
+                    (0 until group.childCount).joinToString(",") { i ->
+                        val c = group.getChildAt(i)
+                        val t = (c as? TextView)?.text?.toString() ?: ""
+                        val lpInfo = c.layoutParams?.let { "w=${it.width},wt=${(it as? LinearLayout.LayoutParams)?.weight}" } ?: "?"
+                        "${c.javaClass.simpleName}($t;$lpInfo)"
+                    }
+            )
         } catch (e: Throwable) {
             XposedBridge.log("$TAG inject failed: ${e.message}")
         }
