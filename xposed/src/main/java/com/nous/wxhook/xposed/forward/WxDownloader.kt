@@ -63,6 +63,21 @@ object WxDownloader {
                 return false
             }
 
+            runCatching {
+                val ziCls = Class.forName("oy0.k0", false, loader)
+                val zi = ziCls.getMethod("Zi", String::class.java, java.lang.Long.TYPE)
+                zi.isAccessible = true
+                val mi = zi.invoke(null, talker, msgId)
+                if (mi != null) {
+                    val gid = mi.javaClass.getMethod("getMsgId").invoke(mi)
+                    val gsvr = mi.javaClass.getMethod("getMsgSvrId").invoke(mi)
+                    val gtalk = mi.javaClass.getMethod("getTalker").invoke(mi)
+                    XposedBridge.log("$TAG MsgInfo id=$gid svr=$gsvr talker=$gtalk")
+                } else {
+                    XposedBridge.log("$TAG MsgInfo null (Zi)")
+                }
+            }.onFailure { XposedBridge.log("$TAG Zi failed: ${it.message}") }
+
             val imgId = fieldLong(info, "f479445a")
             XposedBridge.log("$TAG ImgInfo=${info.javaClass.name} imgId=$imgId talker=$talker msgId=$msgId svr=$msgSvrId")
             if (imgId <= 0) {

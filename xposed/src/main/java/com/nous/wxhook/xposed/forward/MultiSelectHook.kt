@@ -199,6 +199,15 @@ object MultiSelectHook {
         val singles = listOf("q", "r", "s", "t", "u")
             .mapNotNull { readField(quick, it) }
             .filter { MessageExtractor.looksLikeMsgInfo(it) }
+        dumpFields(quick)
+        if (singles.isNotEmpty()) {
+            val detail = singles.mapNotNull { m ->
+                runCatching {
+                    MessageExtractor.extract(m)?.let { "${it.msgId}/${it.createTime}/${it.type}" }
+                }.getOrNull()
+            }
+            XposedBridge.log("$TAG singles detail=$detail")
+        }
         val filtered = if (ids.isNotEmpty()) {
             singles.filter { m -> ids.contains(MessageExtractor.extract(m)?.msgId) }
         } else {
@@ -214,6 +223,38 @@ object MultiSelectHook {
         val out = dedupe(byId)
         XposedBridge.log("$TAG selected by id size=${out.size}")
         return out
+    }
+
+    private fun dumpFields(o: Any?) {
+        if (o == null) {
+            XposedBridge.log("$TAG dumpFields quick=null")
+            return
+        }
+        try {
+            var c: Class<*>? = o.javaClass
+            while (c != null && c.name != "java.lang.Object") {
+                c.declaredFields.forEach { f ->
+                    val t = f.type.simpleName
+                    if (t.contains("Set") || t.contains("List") || t.contains("Map") || t.contains("Array")) {
+                        try {
+                            f.isAccessible = true
+                            val v = f.get(o)
+                            val sz = when (v) {
+                                is Collection<*> -> v.size
+                                is Map<*, *> -> v.size
+                                is Array<*> -> v.size
+                                else -> -1
+                            }
+                            XposedBridge.log("$TAG field ${f.name}:$t size=$sz")
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+                c = c.superclass
+            }
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG dumpFields failed: ${e.message}")
+        }
     }
 
     private fun dedupe(list: List<Any>): List<Any> {
