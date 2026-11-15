@@ -30,6 +30,7 @@ object MultiSelectHook {
     fun install(loader: ClassLoader) {
         if (installed) return
         installed = true
+        hookAdapter(loader)
         try {
             val cls = Class.forName(
                 "com.tencent.mm.ui.chatting.ChattingFooterMoreBtnBar",
@@ -285,6 +286,15 @@ object MultiSelectHook {
     /** 用 ChattingContext 里 (long)->MsgInfo 的方法按 msgId 查消息。 */
     /** 微信真正维护多选状态的是 adapter.k.W（CopyOnWriteArraySet<MsgIdTalker>）。 */
     private fun selectedMsgIds(ctx: Any?): Set<Long> {
+        val adapter = cachedAdapter
+        if (adapter != null) {
+            runCatching {
+                val w = de.robv.android.xposed.XposedHelpers.getObjectField(adapter, "W") as? Collection<*>
+                val ids = w?.mapNotNull { (readField(it, "f149692d") as? Number)?.toLong() }?.toSet().orEmpty()
+                XposedBridge.log("$TAG cachedAdapter.W size=${w?.size} ids=$ids")
+                if (ids.isNotEmpty()) return ids
+            }.onFailure { XposedBridge.log("$TAG cachedAdapter.W failed: ${it.message}") }
+        }
         if (ctx == null) {
             XposedBridge.log("$TAG ids ctx=null")
             return emptySet()
@@ -308,7 +318,22 @@ object MultiSelectHook {
     }
 
     private fun msgById(ctxObj: Any?, id: Long): Any? {
-        // 首选微信自己的查询：oy0.k0.Zi(talker, msgId)
+        // 首选 adapter.X0(long)：微信自己按 msgId 取 MsgInfo
+        runCatching {
+            val adapter = cachedAdapter
+            if (adapter != null) {
+                val m = adapter.javaClass.methods.firstOrNull {
+                    it.parameterCount == 1 && it.parameterTypes[0] == java.lang.Long.TYPE
+                } ?: return@runCatching
+                val v = m.invoke(adapter, id)
+                if (MessageExtractor.looksLikeMsgInfo(v)) {
+                    val got = MessageExtractor.extract(v)
+                    XposedBridge.log("$TAG adapter.X0 want=$id got=${got?.msgId} type=${got?.type}")
+                    return v
+                }
+            }
+        }
+        // 其次微信自己的查询：oy0.k0.Zi(talker, msgId)
         runCatching {
             val talker = ctxObj?.javaClass?.getMethod("x")?.invoke(ctxObj) as? String
             if (!talker.isNullOrBlank()) {
@@ -355,6 +380,24 @@ object MultiSelectHook {
             }
         }
         return null
+    }
+
+    @Volatile
+    private var cachedAdapter: Any? = null
+
+    private fun hookAdapter(loader: ClassLoader) {
+        try {
+            val cls = Class.forName("com.tencent.mm.ui.chatting.adapter.k", false, loader)
+            val m = cls.getMethod("getView", Int::class.javaPrimitiveType, android.view.View::class.java, android.view.ViewGroup::class.java)
+            XposedBridge.hookMethod(m, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    cachedAdapter = param.thisObject
+                }
+            })
+            XposedBridge.log("$TAG adapter hook installed")
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG adapter hook failed: ${e.message}")
+        }
     }
 
     private fun findQuickComponent(act: Activity): Any? {
