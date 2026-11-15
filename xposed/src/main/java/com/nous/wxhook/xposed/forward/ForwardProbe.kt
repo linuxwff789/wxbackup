@@ -40,7 +40,7 @@ object ForwardProbe {
     private var lastView: android.view.View? = null
     private var lastChatTitle: String = ""
     @Volatile
-    private var quickInstance: Any? = null
+    internal var quickInstance: Any? = null
     private var ctx: Context? = null
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam, context: Context?) {
@@ -96,6 +96,7 @@ object ForwardProbe {
         }
         hookViewMenuBuilders(candidates, loader)
         OriginalFetcher.install()
+        MultiSelectHook.install(loader)
         probeMultiSelect(loader)
         XposedBridge.log("$TAG done classes=$hookedClasses methods=$hookedMethods")
     }
@@ -405,7 +406,7 @@ object ForwardProbe {
     }
 
     /** 取多选组件里选中的消息列表（元素是 MsgInfo 的那个 List 字段）。 */
-    private fun selectedMessages(): List<Any> {
+    internal fun selectedMessages(): List<Any> {
         val inst = quickInstance ?: return emptyList()
         var k: Class<*>? = inst.javaClass
         var depth = 0
