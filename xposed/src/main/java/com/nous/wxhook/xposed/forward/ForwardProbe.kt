@@ -36,6 +36,7 @@ object ForwardProbe {
 
     private val dumped = HashSet<String>()
     private var currentMsg: Any? = null
+    private var lastView: android.view.View? = null
     private var ctx: Context? = null
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam, context: Context?) {
@@ -89,6 +90,7 @@ object ForwardProbe {
                 }
             }
         }
+        hookViewMenuBuilders(candidates, loader)
         XposedBridge.log("$TAG done classes=$hookedClasses methods=$hookedMethods")
     }
 
@@ -101,6 +103,7 @@ object ForwardProbe {
             param.args.forEach { a -> dumpMsgIfAny("ARG", a) }
             dumpMsgIfAny("OWNER", param.thisObject)
             dumpOwnerFields(key, param.thisObject)
+            deepDump("OWNER", param.thisObject, 0)
             dumpFields("MENU", param.args.firstOrNull())
             val foundCtx = findChattingContext(param.thisObject)
             XposedBridge.log("$TAG ctx[$key]=${foundCtx?.javaClass?.name}")
@@ -126,6 +129,7 @@ object ForwardProbe {
                 val index = (param.args.getOrNull(1) as? Number)?.toInt()
                 if (item?.itemId == ITEM_ID || title == TITLE) {
                     val msg = currentMsg
+                        ?: findMsgDeep(lastView?.tag, 0)
                         ?: findMsgIn(param.thisObject)
                         ?: findCurrentMsg(param.thisObject)
                         ?: param.args.firstOrNull { MessageExtractor.looksLikeMsgInfo(it) }
@@ -211,6 +215,136 @@ object ForwardProbe {
             "${m.name}(${m.parameterTypes.joinToString { it.simpleName }})"
         }
         XposedBridge.log("$TAG menu add failed, methods: ${all.take(1800)}")
+    }
+
+    /** hook 形如 (菜单, View, ...) 的菜单构建方法，记录长按的 item view。 */
+    private fun hookViewMenuBuilders(candidates: List<String>, loader: ClassLoader) {
+        var n = 0
+        candidates.forEach { name ->
+            val c = try { Class.forName(name, false, loader) } catch (_: Throwable) { null } ?: return@forEach
+            val ms = try { c.declaredMethods } catch (_: Throwable) { return@forEach }
+            ms.forEach { m ->
+                val ps = m.parameterTypes
+                if (ps.size < 2) return@forEach
+                if (!android.view.View::class.java.isAssignableFrom(ps[1])) return@forEach
+                if (m.returnType != Void.TYPE && m.returnType != Boolean::class.javaPrimitiveType) return@forEach
+                val canMenu = Menu::class.java.isAssignableFrom(ps[0]) ||
+                    ps[0].name.contains("Menu") || ps[0].name.startsWith("gl5.")
+                if (!canMenu) return@forEach
+                try {
+                    XposedBridge.hookMethod(m, object : XC_MethodHook() {
+                        override fun beforeHookedMethod(param: MethodHookParam) {
+                            try {
+                                lastView = param.args[1] as? android.view.View
+                                val tag = lastView?.tag
+                                val found = findMsgDeep(tag, 0)
+                                XposedBridge.log(
+                                    "$TAG ViewMenuBuild ${c.name}.${m.name} view=${lastView?.javaClass?.name} " +
+                                        "tag=${tag?.javaClass?.name} msgDeep=${found?.javaClass?.name}"
+                                )
+                                if (found != null) currentMsg = found
+                                if (tag != null && dumped.add("tag:" + c.name + "#" + m.name)) {
+                                    deepDump("TAG", tag, 0)
+                                }
+                            } catch (_: Throwable) {
+                            }
+                        }
+                    })
+                    n++
+                    XposedBridge.log("$TAG hookedView ${c.name}.${m.name}(${ps.joinToString { it.simpleName }})")
+                } catch (_: Throwable) {
+                }
+            }
+        }
+        XposedBridge.log("$TAG viewMenuHooks=$n")
+    }
+
+    /** 递归 3 层找 MsgInfo（微信把消息塞在 View tag 或嵌套对象里）。 */
+    private fun findMsgDeep(obj: Any?, depth: Int): Any? {
+        if (obj == null || depth > 3) return null
+        if (MessageExtractor.looksLikeMsgInfo(obj)) return obj
+        var c: Class<*>? = obj.javaClass
+        while (c != null && c != Any::class.java) {
+            for (f in c.declaredFields) {
+                try {
+                    f.isAccessible = true
+                    val v = f.get(obj) ?: continue
+                    findMsgDeep(v, depth + 1)?.let { return it }
+                } catch (_: Throwable) {
+                }
+            }
+            c = c.superclass
+        }
+        return null
+    }
+
+    /** 打印 2 层字段结构 + 尝试无参 getCurrentMsgInfo/getMsgInfo。 */
+    private fun deepDump(tag: String, obj: Any?, depth: Int) {
+        if (obj == null || depth > 1) return
+        try {
+            val cls = obj.javaClass
+            if (MessageExtractor.looksLikeMsgInfo(obj)) {
+                XposedBridge.log("$TAG DEEP[$tag] <<MSG>> ${cls.name}")
+                val dump = MessageExtractor.dump(obj)
+                dump.lineSequence().chunked(12).forEach { lines ->
+                    XposedBridge.log("$TAG DUMP[$tag] " + lines.joinToString("\n"))
+                }
+                return
+            }
+            val calls = cls.methods.filter {
+                it.parameterCount == 0 && (it.name == "getCurrentMsgInfo" || it.name == "getMsgInfo" || it.name == "getCurrentMsg")
+            }
+            calls.forEach { m ->
+                val v = runCatching { m.invoke(obj) }.getOrNull()
+                if (v != null) {
+                    XposedBridge.log("$TAG DEEP[$tag] CALL ${cls.name}.${m.name} -> ${v.javaClass.name} msg=${MessageExtractor.looksLikeMsgInfo(v)}")
+                    if (MessageExtractor.looksLikeMsgInfo(v)) currentMsg = v
+                }
+            }
+            val sb = StringBuilder("$TAG DEEP[$tag] ${cls.name}: ")
+            var c: Class<*>? = cls
+            var d = 0
+            var count = 0
+            while (c != null && c != Any::class.java && d < 3 && count < 25) {
+                for (f in c.declaredFields) {
+                    if (count++ >= 25) break
+                    sb.append(f.name).append(':').append(f.type.simpleName)
+                    try {
+                        f.isAccessible = true
+                        val v = f.get(obj)
+                        if (v != null) {
+                            sb.append('=').append(v.javaClass.name)
+                            if (MessageExtractor.looksLikeMsgInfo(v)) sb.append("<<MSG>>")
+                            if (v is android.view.View) sb.append("<<VIEW>>")
+                        }
+                    } catch (_: Throwable) {
+                    }
+                    sb.append("  ")
+                }
+                c = c.superclass
+                d++
+            }
+            XposedBridge.log(sb.take(2200).toString())
+            // 递归字段值（最多 15 个，跳过基础类型）
+            var c2: Class<*>? = cls
+            var cc = 0
+            while (c2 != null && c2 != Any::class.java && cc < 15) {
+                for (f in c2.declaredFields) {
+                    if (cc >= 15) break
+                    try {
+                        f.isAccessible = true
+                        val v = f.get(obj) ?: continue
+                        if (v is String || v is Number || v is Boolean || v is android.content.Context) continue
+                        if (v.javaClass.name.startsWith("java.")) continue
+                        cc++
+                        deepDump("$tag>${f.name}", v, depth + 1)
+                    } catch (_: Throwable) {
+                    }
+                }
+                c2 = c2.superclass
+            }
+        } catch (_: Throwable) {
+        }
     }
 
     private fun dumpFields(tag: String, obj: Any?) {
