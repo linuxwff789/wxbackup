@@ -97,6 +97,7 @@ object ForwardProbe {
         hookViewMenuBuilders(candidates, loader)
         OriginalFetcher.install()
         MultiSelectHook.install(loader)
+        probeDownloadApi(loader)
         probeMultiSelect(loader)
         XposedBridge.log("$TAG done classes=$hookedClasses methods=$hookedMethods")
     }
@@ -364,6 +365,53 @@ object ForwardProbe {
         } catch (_: Throwable) {
         }
         return ""
+    }
+
+    /** 只读探针：打印微信内部跟图片/文件下载相关的方法。 */
+    private fun probeDownloadApi(loader: ClassLoader) {
+        val classes = listOf(
+            "el5.d",                              // ChattingContext
+            "com.tencent.mm.storage.e9",          // MsgInfo
+            "gp0.j1"                              // MMKernel
+        ) + listOf(
+            "com.tencent.mm.ui.chatting.ImageDownloadUI",
+            "com.tencent.mm.ui.chatting.gallery.ImageGalleryUI",
+            "com.tencent.mm.plugin.priority.model.c2c.img.c"
+        )
+        classes.forEach { cn ->
+            try {
+                val c = Class.forName(cn, false, loader)
+                val ms = c.declaredMethods.filter {
+                    it.name.contains("image", true) || it.name.contains("download", true) ||
+                        it.name.contains("img", true) || it.name.contains("attach", true) ||
+                        it.name.contains("file", true) || it.name.contains("media", true)
+                }
+                XposedBridge.log("$TAG DLCLASS $cn methods=${c.declaredMethods.size} hits=${ms.size}")
+                ms.take(80).forEach { m ->
+                    XposedBridge.log(
+                        "$TAG DL ${c.name}.${m.name}(" +
+                            m.parameterTypes.joinToString { it.name } + ") -> ${m.returnType.name}"
+                    )
+                }
+                // MsgInfo 里的字段也打出来（文件路径字段）
+                if (cn == "com.tencent.mm.storage.e9") {
+                    var k: Class<*>? = c
+                    var d = 0
+                    while (k != null && k != Any::class.java && d < 4) {
+                        k.declaredFields.filter {
+                            it.name.contains("img", true) || it.name.contains("file", true) ||
+                                it.name.contains("path", true)
+                        }.forEach { f ->
+                            XposedBridge.log("$TAG DLFIELD ${k!!.name}.${f.name}:${f.type.name}")
+                        }
+                        k = k.superclass
+                        d++
+                    }
+                }
+            } catch (e: Throwable) {
+                XposedBridge.log("$TAG DLCLASS $cn not found: ${e.message}")
+            }
+        }
     }
 
     /** 打印多选组件的所有字段类型（找 List 字段）。 */
