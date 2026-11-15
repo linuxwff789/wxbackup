@@ -108,6 +108,20 @@ object ForwardSender {
         }
         val thumbOnly = localMedia != null && isThumbnailPath(localMedia)
         XposedBridge.log("$TAG image thumbOnly=$thumbOnly local=$localMedia")
+        if (mediaKind == ForwardProtocol.MEDIA_IMAGE && (localMedia == null || thumbOnly) &&
+            parsed.mediaHint.isNotBlank() && parsed.aesKey.length >= 32
+        ) {
+            val md5 = parsed.mediaMd5.ifBlank { System.currentTimeMillis().toString() }
+            val save = File(ctx?.filesDir ?: return false, "cdn_$md5.jpg").absolutePath
+            WxDownloader.downloadCdn(ctx, "img_$md5", parsed.mediaHint, parsed.aesKey, 5, save) { f ->
+                if (f != null) {
+                    WxDownloader.publishUpdate(
+                        ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
+                        createTime, type, parsed.fileName, f
+                    )
+                }
+            }
+        }
         if (autoFetchOriginal && (localMedia == null || thumbOnly) &&
             mediaKind == ForwardProtocol.MEDIA_IMAGE && parsed.mediaMd5.length >= 8
         ) {
@@ -349,6 +363,21 @@ object ForwardSender {
                 }
             }
             val thumbOnly = localMedia != null && isThumbnailPath(localMedia)
+            if ((localMedia == null || thumbOnly) && mediaKind == ForwardProtocol.MEDIA_IMAGE &&
+                parsed.mediaHint.isNotBlank() && parsed.aesKey.length >= 32
+            ) {
+                val md5 = parsed.mediaMd5.ifBlank { System.currentTimeMillis().toString() }
+                val dir = ctx?.filesDir ?: continue
+                val save = File(dir, "cdn_$md5.jpg").absolutePath
+                WxDownloader.downloadCdn(ctx, "img_$md5", parsed.mediaHint, parsed.aesKey, 5, save) { f ->
+                    if (f != null) {
+                        WxDownloader.publishUpdate(
+                            ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
+                            createTime, parsed.type, parsed.fileName, f
+                        )
+                    }
+                }
+            }
             if ((localMedia == null || thumbOnly) && mediaKind == ForwardProtocol.MEDIA_IMAGE && parsed.mediaMd5.length >= 8) {
                 WxDownloader.downloadImage(ctx, ex.talker, ex.msgId, ex.msgSvrId, parsed.mediaMd5) { file ->
                     if (file != null) {

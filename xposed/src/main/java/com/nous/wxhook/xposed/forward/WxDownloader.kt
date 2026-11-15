@@ -190,6 +190,66 @@ object WxDownloader {
         return cipher.doFinal(data)
     }
 
+    /**
+     * 用微信自己的 CDN 引擎下载并解密媒体（FkWeChat 同款路径）：
+     * CDNTaskInfo -> w12.a.A2() -> s12.d.g().c(task) -> mars cdn
+     */
+    fun downloadCdn(
+        ctx: Context?,
+        fileKey: String,
+        fileId: String,
+        aesKey: String,
+        fileType: Int,
+        savePath: String,
+        onDone: (File?) -> Unit
+    ): Boolean {
+        if (ctx == null || fileId.isBlank()) {
+            onDone(null)
+            return false
+        }
+        return try {
+            val loader = ctx.classLoader
+            val svcCls = Class.forName(
+                "com.tencent.mm.plugin.cdndownloader.service.CDNDownloadService", false, loader
+            )
+            val svc = svcCls.getDeclaredConstructor().newInstance()
+            val aCls = Class.forName("w12.a", false, loader)
+            val binder = aCls.getConstructor(svcCls).newInstance(svc)
+            val infoCls = Class.forName(
+                "com.tencent.mm.plugin.cdndownloader.ipc.CDNTaskInfo", false, loader
+            )
+            val info = infoCls.getConstructor(String::class.java).newInstance(fileKey)
+            de.robv.android.xposed.XposedHelpers.setObjectField(info, "f92137f", fileId)
+            de.robv.android.xposed.XposedHelpers.setObjectField(info, "f92138g", savePath)
+            de.robv.android.xposed.XposedHelpers.setObjectField(info, "f92139h", aesKey)
+            de.robv.android.xposed.XposedHelpers.setIntField(info, "f92141m", fileType)
+            val code = de.robv.android.xposed.XposedHelpers.callMethod(binder, "A2", info) as? Int ?: -1
+            XposedBridge.log("$TAG cdn task enqueued code=$code key=$fileKey file=${fileId.take(48)} type=$fileType")
+            Thread({
+                val f = waitPath(savePath, 60_000)
+                XposedBridge.log("$TAG cdn task result ${f?.absolutePath} (${f?.length()})")
+                onDone(f)
+            }, "wxnotes-cdn-$fileKey").apply { isDaemon = true }.start()
+            code >= 0
+        } catch (e: Throwable) {
+            val sw = java.io.StringWriter()
+            e.printStackTrace(java.io.PrintWriter(sw))
+            XposedBridge.log("$TAG cdn task failed: " + sw.toString().take(1200))
+            onDone(null)
+            false
+        }
+    }
+
+    private fun waitPath(path: String, timeoutMs: Long): File? {
+        val f = File(path)
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (f.isFile && f.length() > 0) return f
+            Thread.sleep(300)
+        }
+        return if (f.isFile && f.length() > 0) f else null
+    }
+
     /** 文件/附件：调微信 AppAttach 服务触发下载，轮询 attachment 目录。 */
     fun downloadFile(
         ctx: Context?,
