@@ -83,6 +83,16 @@ object ForwardSender {
         }
 
         val createTime = if (ex.createTime > 10_000_000_000L) ex.createTime / 1000 else ex.createTime
+
+        // 原图没落盘：先给缩略图，再自动打开预览触发微信下载原图，下载完自动更新
+        if (localMedia == null && mediaKind == ForwardProtocol.MEDIA_IMAGE &&
+            parsed.mediaMd5.length >= 8 && mediaBase64.isNotEmpty()
+        ) {
+            OriginalFetcher.schedule(
+                ctx, view, parsed.mediaMd5, ex.msgId, ex.msgSvrId, ex.talker,
+                talkerTitle, ex.isSend, createTime, type, parsed.fileName
+            )
+        }
         val fwd = ForwardMessage(
             msgId = ex.msgId,
             msgSvrId = ex.msgSvrId,

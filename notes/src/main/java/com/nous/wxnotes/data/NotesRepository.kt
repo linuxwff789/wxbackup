@@ -81,7 +81,7 @@ class NotesRepository(private val context: Context) {
         var skipped = 0
         var lastText = ""
         var lastTime = 0L
-        batch.messages.forEach { m ->
+        for (m in batch.messages) {
             val dedupe = buildString {
                 append(talker).append('|').append(m.effectiveDedupeKey())
             }
@@ -91,6 +91,31 @@ class NotesRepository(private val context: Context) {
             val text = m.text.ifBlank { parsed?.text.orEmpty() }
             val mediaKind = m.mediaKind.takeUnless { it.isBlank() || it == ForwardProtocol.MEDIA_NONE }
                 ?: parsed?.mediaKind.orEmpty()
+            // 已经存过：如果这次带了更完整的媒体（例如自动补全的原图），更新它
+            val existing = messageDao.getByKey(dedupe)
+            if (existing != null) {
+                val newerMedia = m.mediaBase64.isNotBlank() ||
+                    (m.localPath.isNotBlank() && !m.localPath.startsWith("lss://") && !m.localPath.startsWith("http"))
+                val currentMissing = existing.mediaPath.isBlank() || !File(existing.mediaPath).exists()
+                if (newerMedia && currentMissing) {
+                    val newPath = importMedia(noteId, m, mediaKind)
+                    if (newPath.isNotBlank()) {
+                        messageDao.updateMedia(
+                            existing.id,
+                            newPath,
+                            mediaKind,
+                            m.fileName.ifBlank { existing.fileName },
+                            m.fileSize.takeIf { it > 0 } ?: existing.fileSize
+                        )
+                        added++
+                        lastTime = m.createTime * 1000
+                        lastText = m.text.ifBlank { existing.text }
+                    }
+                }
+                skipped++
+                continue
+            }
+
             val mediaPath = importMedia(noteId, m, mediaKind)
 
             val entity = MessageEntity(

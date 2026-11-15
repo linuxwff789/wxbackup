@@ -93,6 +93,7 @@ object ForwardProbe {
             }
         }
         hookViewMenuBuilders(candidates, loader)
+        OriginalFetcher.install()
         probeMultiSelect(loader)
         XposedBridge.log("$TAG done classes=$hookedClasses methods=$hookedMethods")
     }

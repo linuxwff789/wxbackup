@@ -97,6 +97,8 @@ fun NoteDetailScreen(vm: NotesViewModel, noteId: Long, onBack: () -> Unit) {
     var editBody by remember { mutableStateOf(false) }
     var addTagDialog by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var previewImages by remember { mutableStateOf<List<String>>(emptyList()) }
+    var previewIndex by remember { mutableStateOf(0) }
 
     Scaffold(
         topBar = {
@@ -256,7 +258,14 @@ fun NoteDetailScreen(vm: NotesViewModel, noteId: Long, onBack: () -> Unit) {
                     )
                 }
                 items(msgs, key = { it.id }) { m ->
-                    MessageRow(m, n)
+                    MessageRow(m, n) { path ->
+                        val imgs = messages
+                            .filter { it.mediaKind == ForwardProtocol.MEDIA_IMAGE && it.mediaPath.isNotBlank() }
+                            .map { it.mediaPath }
+                        val idx = imgs.indexOf(path).coerceAtLeast(0)
+                        previewImages = imgs
+                        previewIndex = idx
+                    }
                 }
             }
         }
@@ -330,6 +339,14 @@ fun NoteDetailScreen(vm: NotesViewModel, noteId: Long, onBack: () -> Unit) {
         )
     }
 
+    if (previewImages.isNotEmpty()) {
+        ImagePreviewDialog(
+            images = previewImages,
+            startIndex = previewIndex,
+            onDismiss = { previewImages = emptyList() }
+        )
+    }
+
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -371,8 +388,7 @@ private fun dayKey(createTime: Long, fallback: Long): String {
 }
 
 @Composable
-private fun MessageRow(m: MessageEntity, note: NoteEntity) {
-    val context = LocalContext.current
+private fun MessageRow(m: MessageEntity, note: NoteEntity, onImageClick: (String) -> Unit) {
     val mine = m.isSend
     val parsed = remember(m.id) {
         if (m.rawXml.isNotBlank()) WxMessageParser.parse(m.type, m.rawXml, m.subType) else null
@@ -398,7 +414,7 @@ private fun MessageRow(m: MessageEntity, note: NoteEntity) {
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
             ) {
                 Column(modifier = Modifier.padding(10.dp)) {
-                    MessageContent(m, parsed?.url.orEmpty(), note)
+                    MessageContent(m, parsed?.url.orEmpty(), note, onImageClick)
                 }
             }
         }
@@ -406,7 +422,12 @@ private fun MessageRow(m: MessageEntity, note: NoteEntity) {
 }
 
 @Composable
-private fun MessageContent(m: MessageEntity, url: String, note: NoteEntity) {
+private fun MessageContent(
+    m: MessageEntity,
+    url: String,
+    note: NoteEntity,
+    onImageClick: (String) -> Unit
+) {
     val context = LocalContext.current
     when (m.mediaKind) {
         ForwardProtocol.MEDIA_IMAGE -> {
@@ -417,9 +438,7 @@ private fun MessageContent(m: MessageEntity, url: String, note: NoteEntity) {
                     modifier = Modifier
                         .heightIn(max = 260.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable {
-                            openLocalFile(context, m.mediaPath, "image", m.fileName)
-                        },
+                        .clickable { onImageClick(m.mediaPath) },
                     contentScale = ContentScale.Fit
                 )
                 if (m.text.isNotBlank() && m.text != "[图片]") {

@@ -163,6 +163,12 @@ interface MessageDao {
 
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE dedupeKey=:key)")
     suspend fun exists(key: String): Boolean
+
+    @Query("SELECT * FROM messages WHERE dedupeKey=:key LIMIT 1")
+    suspend fun getByKey(key: String): MessageEntity?
+
+    @Query("UPDATE messages SET mediaPath=:path, mediaKind=:kind, fileName=:name, fileSize=:size WHERE id=:id")
+    suspend fun updateMedia(id: Long, path: String, kind: String, name: String, size: Long)
 }
 
 @Dao
