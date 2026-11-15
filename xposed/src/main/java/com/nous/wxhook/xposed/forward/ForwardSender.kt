@@ -52,13 +52,25 @@ object ForwardSender {
         val parsed = WxMessageParser.parse(ex.type, content)
         var mediaKind = parsed.mediaKind
         var mediaUrl = ""
+        var mediaBase64 = ""
         val type = parsed.type
         val candidates = listOf(ex.imgPath, ex.fileFullPath)
             .filter { it.isNotBlank() }
         val localMedia = candidates.firstOrNull { File(it).isFile }
             ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
         if (localMedia != null) {
-            MediaServer.uriFor(localMedia)?.let { mediaUrl = it }
+            val file = File(localMedia)
+            if (file.length() in 1..MAX_INLINE_BYTES) {
+                try {
+                    mediaBase64 = android.util.Base64.encodeToString(
+                        file.readBytes(), android.util.Base64.NO_WRAP
+                    )
+                } catch (_: Throwable) {
+                }
+            }
+            if (mediaBase64.isEmpty()) {
+                MediaServer.uriFor(localMedia)?.let { mediaUrl = it }
+            }
             if (mediaKind == ForwardProtocol.MEDIA_NONE) mediaKind = guessKind(localMedia)
         }
 
@@ -78,7 +90,8 @@ object ForwardSender {
             localPath = mediaUrl,
             fileName = parsed.fileName,
             fileSize = parsed.fileSize,
-            durationMs = parsed.durationMs
+            durationMs = parsed.durationMs,
+            mediaBase64 = mediaBase64
         )
 
         val batch = ForwardBatch(
@@ -127,6 +140,9 @@ object ForwardSender {
     }
 
     private val dumped = HashSet<String>()
+
+    /** Binder 单次 ~1MB，base64 后约 1.33 倍；500KB 原文安全 */
+    private const val MAX_INLINE_BYTES = 500 * 1024L
 
     /** 本地路径拿不到时，按文件名在微信数据目录里兜底查找（下载过的文件/图片）。 */
     private fun findMediaFile(name: String, kind: String): String? {

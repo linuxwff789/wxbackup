@@ -91,6 +91,8 @@ object ForwardProtocol {
         val fileSize: Long = 0,
         val durationMs: Long = 0,
         val thumbPath: String = "",
+        /** 小媒体（≤500KB）直接内嵌，避免跨进程文件传输限制 */
+        val mediaBase64: String = "",
         /** 去重键：优先 msgSvrId，其次 talker+createTime+type+消息指纹 */
         val dedupeKey: String = ""
     ) {
@@ -120,6 +122,7 @@ object ForwardProtocol {
             .put("fileSize", fileSize)
             .put("durationMs", durationMs)
             .put("thumbPath", thumbPath)
+            .put("mediaBase64", mediaBase64)
             .put("dedupeKey", effectiveDedupeKey())
 
         companion object {
@@ -140,6 +143,7 @@ object ForwardProtocol {
                 fileSize = o.optLong("fileSize", 0),
                 durationMs = o.optLong("durationMs", 0),
                 thumbPath = o.optString("thumbPath").orEmpty(),
+                mediaBase64 = o.optString("mediaBase64").orEmpty(),
                 dedupeKey = o.optString("dedupeKey").orEmpty()
             )
         }

@@ -133,6 +133,9 @@ class NotesRepository(private val context: Context) {
         saveBatch(ForwardBatch(conversation = conversation, messages = listOf(message)))
 
     private suspend fun importMedia(noteId: Long, m: ForwardMessage, kind: String): String {
+        if (m.mediaBase64.isNotBlank()) {
+            return saveInlineMedia(noteId, m)
+        }
         if (m.localPath.isBlank()) return ""
         // 插件通过 127.0.0.1 的本地 HTTP 暴露微信私有目录里的媒体
         if (m.localPath.startsWith("lss://")) {
@@ -152,6 +155,31 @@ class NotesRepository(private val context: Context) {
             dst.absolutePath
         } catch (_: Throwable) {
             m.localPath
+        }
+    }
+
+    /** 广播内嵌的小媒体：直接解码落盘（图片/语音/小文件走这条）。 */
+    private fun saveInlineMedia(noteId: Long, m: ForwardMessage): String {
+        val dir = File(File(context.filesDir, "media"), noteId.toString())
+        if (!dir.exists() && !dir.mkdirs()) return ""
+        val name = m.fileName.ifBlank {
+            val ext = when (m.mediaKind) {
+                ForwardProtocol.MEDIA_IMAGE -> ".jpg"
+                ForwardProtocol.MEDIA_VOICE -> ".amr"
+                ForwardProtocol.MEDIA_VIDEO -> ".mp4"
+                else -> ".bin"
+            }
+            "media_${System.currentTimeMillis()}$ext"
+        }
+        val dst = uniqueFile(dir, name)
+        return try {
+            val bytes = android.util.Base64.decode(m.mediaBase64, android.util.Base64.DEFAULT)
+            dst.writeBytes(bytes)
+            dst.absolutePath
+        } catch (e: Throwable) {
+            android.util.Log.e("wxnotes", "inline media failed", e)
+            runCatching { dst.delete() }
+            ""
         }
     }
 
