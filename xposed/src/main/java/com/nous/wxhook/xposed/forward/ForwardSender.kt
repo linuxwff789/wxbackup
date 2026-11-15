@@ -56,6 +56,8 @@ object ForwardSender {
         val candidates = listOf(ex.imgPath, ex.fileFullPath)
             .filter { it.isNotBlank() }
         val localMedia = findImageByMd5(parsed.mediaMd5)
+            ?: candidates.firstOrNull { File(it).isFile && !isThumbnailPath(it) }
+            ?: findRecentOriginal(parsed.fileSize)
             ?: candidates.firstOrNull { File(it).isFile }
             ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
         XposedBridge.log("$TAG local=$localMedia imgPath=${ex.imgPath} md5=${parsed.mediaMd5}")
@@ -310,6 +312,10 @@ object ForwardSender {
             val localMedia = findImageByMd5(parsed.mediaMd5)
                 ?: listOf(ex.imgPath, ex.fileFullPath)
                     .filter { it.isNotBlank() }
+                    .firstOrNull { File(it).isFile && !isThumbnailPath(it) }
+                ?: findRecentOriginal(parsed.fileSize)
+                ?: listOf(ex.imgPath, ex.fileFullPath)
+                    .filter { it.isNotBlank() }
                     .firstOrNull { File(it).isFile }
                 ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
             XposedBridge.log("$TAG local=$localMedia imgPath=${ex.imgPath} md5=${parsed.mediaMd5}")
@@ -414,6 +420,31 @@ object ForwardSender {
     }
 
     /** 图片大图已下载时，路径是 image2/<md5[0:2]>/<md5[2:4]>/<md5>.jpg。 */
+    /** 按“最近修改 + 大小接近”在 image2 里找原图（md5 对不上时兜底）。 */
+    private fun findRecentOriginal(expectedSize: Long): String? {
+        if (expectedSize <= 0) return null
+        return try {
+            val root = File("/data/data/com.tencent.mm/MicroMsg")
+            val cutoff = System.currentTimeMillis() - 15 * 60 * 1000L
+            var best: File? = null
+            root.listFiles()?.forEach { d ->
+                val img2 = File(d, "image2")
+                if (!img2.isDirectory) return@forEach
+                img2.walkTopDown().maxDepth(3).forEach { f ->
+                    if (!f.isFile || !f.name.endsWith(".jpg") || f.name.startsWith("th_")) return@forEach
+                    if (f.lastModified() < cutoff) return@forEach
+                    val diff = kotlin.math.abs(f.length() - expectedSize)
+                    if (diff < 4096 || diff < expectedSize / 50) {
+                        if (best == null || f.lastModified() > best!!.lastModified()) best = f
+                    }
+                }
+            }
+            best?.absolutePath
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     private fun isThumbnailPath(path: String): Boolean {
         val name = File(path).name
         return name.startsWith("th_") || path.contains("/th_")
