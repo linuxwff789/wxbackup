@@ -39,7 +39,7 @@ object ForwardProtocol {
     /** 大媒体分片广播：每片 base64 后控制在 ~500KB，避免超过 Binder 1MB */
     const val ACTION_RECEIVE_CHUNK = "com.nous.wxnotes.action.RECEIVE_CHUNK"
     const val EXTRA_CHUNK_JSON = "chunk_json"
-    const val CHUNK_SIZE = 360 * 1024
+    const val CHUNK_SIZE = 100 * 1024
 
     /** 广播发送方包名（微信） */
     const val SOURCE_WECHAT = "com.tencent.mm"
