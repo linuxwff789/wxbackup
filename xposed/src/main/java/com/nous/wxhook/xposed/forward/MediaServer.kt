@@ -43,7 +43,11 @@ object MediaServer {
 
     @Synchronized
     fun ensureStarted() {
-        if (server != null) return
+        if (server == null) startHttp()
+        if (localServer == null) startLocal()
+    }
+
+    private fun startHttp() {
         try {
             val s = ServerSocket(0, 32, InetAddress.getByName("127.0.0.1"))
             server = s
@@ -65,7 +69,13 @@ object MediaServer {
                 start()
             }
             XposedBridge.log("$TAG listening on 127.0.0.1:$port")
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG http start failed: ${e.message}")
+        }
+    }
 
+    private fun startLocal() {
+        try {
             val ls = LocalServerSocket(SOCKET_NAME)
             localServer = ls
             Thread({
@@ -86,7 +96,7 @@ object MediaServer {
             }
             XposedBridge.log("$TAG local socket @$SOCKET_NAME ready token=$token")
         } catch (e: Throwable) {
-            XposedBridge.log("$TAG start failed: ${e.message}")
+            XposedBridge.log("$TAG local socket start failed: ${e.message}")
         }
     }
 
