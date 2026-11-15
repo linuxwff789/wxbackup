@@ -92,7 +92,7 @@ object ForwardSender {
             parsed.attachId.isNotBlank()
         ) {
             WxDownloader.downloadFile(
-                ctx, ex.talker, parsed.attachId, parsed.fileName, parsed.fileSize
+                ctx, ex.talker, parsed.attachId, parsed.fileName, parsed.fileSize, ex.msgId
             ) { file ->
                 if (file != null) {
                     WxDownloader.publishUpdate(
@@ -319,7 +319,7 @@ object ForwardSender {
             val createTime = if (ex.createTime > 10_000_000_000L) ex.createTime / 1000 else ex.createTime
             if (localMedia == null && mediaKind == ForwardProtocol.MEDIA_FILE && parsed.attachId.isNotBlank()) {
                 WxDownloader.downloadFile(
-                    ctx, ex.talker, parsed.attachId, parsed.fileName, parsed.fileSize
+                    ctx, ex.talker, parsed.attachId, parsed.fileName, parsed.fileSize, ex.msgId
                 ) { file ->
                     if (file != null) {
                         WxDownloader.publishUpdate(

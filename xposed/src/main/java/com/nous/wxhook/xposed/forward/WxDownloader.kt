@@ -64,6 +64,12 @@ object WxDownloader {
             }
 
             val imgId = fieldLong(info, "f479445a")
+            XposedBridge.log("$TAG ImgInfo=${info.javaClass.name} imgId=$imgId talker=$talker msgId=$msgId svr=$msgSvrId")
+            if (imgId <= 0) {
+                XposedBridge.log("$TAG imgId invalid, abort")
+                downloading.remove(key)
+                return false
+            }
             val v0 = Class.forName("com.tencent.mm.modelbase.v0", false, loader)
             val progress = Proxy.newProxyInstance(loader, arrayOf(v0)) { _, method, args ->
                 if (method.name == "Q" && args != null && args.size >= 2) {
@@ -100,7 +106,9 @@ object WxDownloader {
             true
         } catch (e: Throwable) {
             downloading.remove(key)
-            XposedBridge.log("$TAG enqueue failed: ${e.message}")
+            val sw = java.io.StringWriter()
+            e.printStackTrace(java.io.PrintWriter(sw))
+            XposedBridge.log("$TAG enqueue failed: " + sw.toString().take(1500))
             false
         }
     }
@@ -112,6 +120,7 @@ object WxDownloader {
         attachId: String,
         fileName: String,
         expectedSize: Long,
+        msgId: Long,
         onDone: (File?) -> Unit
     ): Boolean {
         if (ctx == null || attachId.isBlank()) return false
@@ -125,8 +134,17 @@ object WxDownloader {
             val jj = inst!!.javaClass.getMethod("Jj").invoke(inst)
             val ud = jj!!.javaClass.methods.firstOrNull {
                 it.name == "Ud" && it.parameterCount == 2
-            } ?: throw NoSuchMethodException("Ud(String,String)")
-            ud.invoke(jj, talker, attachId)
+            } ?: throw NoSuchMethodException("Ud")
+            val p2 = ud.parameterTypes[1]
+            val msgInfo = if (p2.name == "com.tencent.mm.storage.e9" && msgId > 0) {
+                Class.forName("oy0.k0", false, loader)
+                    .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
+                    .invoke(null, talker, msgId)
+            } else if (p2 == String::class.java) {
+                attachId
+            } else null
+            XposedBridge.log("$TAG Ud param2=${p2.name} msgInfo=${msgInfo != null}")
+            ud.invoke(jj, talker, msgInfo)
             XposedBridge.log("$TAG enqueued file download attachId=${attachId.take(40)} name=$fileName")
             Thread({
                 val f = waitForAttachment(fileName, expectedSize, 60_000)
