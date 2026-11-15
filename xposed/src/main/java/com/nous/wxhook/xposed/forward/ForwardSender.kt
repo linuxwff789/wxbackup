@@ -55,9 +55,9 @@ object ForwardSender {
         val type = parsed.type
         val candidates = listOf(ex.imgPath, ex.fileFullPath)
             .filter { it.isNotBlank() }
-        val localMedia = candidates.firstOrNull { File(it).isFile }
+        val localMedia = findImageByMd5(parsed.mediaMd5)
+            ?: candidates.firstOrNull { File(it).isFile }
             ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
-            ?: findImageByMd5(parsed.mediaMd5)
         XposedBridge.log("$TAG local=$localMedia imgPath=${ex.imgPath} md5=${parsed.mediaMd5}")
         if (localMedia == null && mediaKind == ForwardProtocol.MEDIA_IMAGE) {
             // 原图没下载时，直接抓聊天窗口里已显示的缩略图
@@ -305,11 +305,11 @@ object ForwardSender {
             var mediaKind = parsed.mediaKind
             var mediaBase64 = ""
             var chunkFile: File? = null
-            val localMedia = listOf(ex.imgPath, ex.fileFullPath)
-                .filter { it.isNotBlank() }
-                .firstOrNull { File(it).isFile }
+            val localMedia = findImageByMd5(parsed.mediaMd5)
+                ?: listOf(ex.imgPath, ex.fileFullPath)
+                    .filter { it.isNotBlank() }
+                    .firstOrNull { File(it).isFile }
                 ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
-                ?: findImageByMd5(parsed.mediaMd5)
             XposedBridge.log("$TAG local=$localMedia imgPath=${ex.imgPath} md5=${parsed.mediaMd5}")
             if (localMedia != null) {
                 val file = File(localMedia)

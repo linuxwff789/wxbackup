@@ -81,6 +81,18 @@ object MessageExtractor {
      */
     private fun resolveOriginalImage(path: String): String {
         if (path.isBlank()) return path
+        // 微信 8.0 的 field_imgPath 常是伪协议 THUMBNAIL_DIRPATH://th_<md5>
+        if (path.startsWith("THUMBNAIL_DIRPATH://")) {
+            val thumb = path.removePrefix("THUMBNAIL_DIRPATH://")
+            val x = thumb.removePrefix("th_")
+            if (x.length >= 4) {
+                val rel = "image2/${x.substring(0, 2)}/${x.substring(2, 4)}/$thumb"
+                val abs = findUnderMicroMsg(rel)
+                XposedBridge.log("$TAG imgPath raw=$path -> thumb=$abs")
+                if (abs != null) return abs
+            }
+            return path
+        }
         var p = path
         if (p.endsWith("hd")) p = p.dropLast(2)
         val idx = p.lastIndexOf("/th_")
