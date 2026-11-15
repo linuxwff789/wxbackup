@@ -166,80 +166,68 @@ object MultiSelectHook {
         }
     }
 
-    /** 优先完整选中集合 z，其次 ChattingContext.getSelectedList，最后 q/r/s/t/u 单字段。 */
+    /**
+     * 微信 8.0.79 的选中状态在 component.a1.z（HashSet<msgId>），
+     * q/r/s/t/u 只是几个"最近消息"引用，会多出/重复。
+     * 所以以 z 为准，用 z 过滤 q..u 并去重。
+     */
     private fun resolveSelected(quick: Any?): List<Any> {
         if (quick == null) return emptyList()
-
         val ctxObj = readField(quick, "d")
-        XposedBridge.log("$TAG quick.d=${ctxObj?.javaClass?.name}")
+        val z = readField(quick, "z")
+        val zSize = (z as? Collection<*>)?.size ?: -1
+        val zFirst = (z as? Collection<*>)?.firstOrNull()?.javaClass?.name
+        XposedBridge.log("$TAG resolve z=$zSize first=$zFirst ctx=${ctxObj?.javaClass?.name}")
 
-        // 1) 组件里的集合字段（z 是选中集合）
-        var k: Class<*>? = quick.javaClass
-        var depth = 0
-        var best: List<Any> = emptyList()
-        while (k != null && k != Any::class.java && depth < 3) {
-            for (f in k.declaredFields) {
-                try {
-                    f.isAccessible = true
-                    val v = f.get(quick) ?: continue
-                    if (v is Collection<*>) {
-                        val first = v.firstOrNull()
-                        val msgs = v.filterNotNull().filter { MessageExtractor.looksLikeMsgInfo(it) }
-                        XposedBridge.log(
-                            "$TAG collection ${f.name}: size=${v.size} first=${first?.javaClass?.name} msgs=${msgs.size}"
-                        )
-                        if (msgs.size > best.size) best = msgs
-                        if (msgs.isEmpty() && v.isNotEmpty() && first is Number) {
-                            // 选中集合是 msgId
-                            val byId = v.filterIsInstance<Number>().mapNotNull {
-                                msgById(ctxObj, it.toLong())
-                            }
-                            XposedBridge.log("$TAG collection ${f.name} resolved by id: ${byId.size}")
-                            if (byId.size > best.size) best = byId
-                        }
-                    }
-                } catch (_: Throwable) {
-                }
-            }
-            k = k.superclass
-            depth++
-        }
-
-        // 2) ChattingContext.getSelectedList()
-        if (ctxObj != null) {
-            listOf(
-                "getSelectedList", "getSelectedMsgList", "getCheckedList",
-                "getCheckedMsgList", "getMultiSelectList"
-            ).forEach { name ->
-                try {
-                    val m = ctxObj.javaClass.methods.firstOrNull {
-                        it.name == name && it.parameterCount == 0
-                    } ?: return@forEach
-                    val v = m.invoke(ctxObj)
-                    if (v is Collection<*>) {
-                        val msgs = v.filterNotNull().filter { MessageExtractor.looksLikeMsgInfo(it) }
-                        XposedBridge.log("$TAG ${name} size=${v.size} msgs=${msgs.size}")
-                        if (msgs.size > best.size) best = msgs
-                    }
-                } catch (_: Throwable) {
-                }
+        // z 直接存 MsgInfo
+        if (z is Collection<*>) {
+            val msgs = z.filterNotNull().filter { MessageExtractor.looksLikeMsgInfo(it) }
+            if (msgs.isNotEmpty()) {
+                val out = dedupe(msgs)
+                XposedBridge.log("$TAG selected from z(MsgInfo) size=${out.size}")
+                return out
             }
         }
 
-        if (best.isNotEmpty()) {
-            XposedBridge.log("$TAG selected total=${best.size}")
-            return best
-        }
+        // z 存 msgId
+        val ids: Set<Long> = (z as? Collection<*>)
+            ?.mapNotNull { (it as? Number)?.toLong() }
+            ?.toSet()
+            .orEmpty()
 
-        // 3) 单条字段兜底（最多 5 条）
-        val singles = ArrayList<Any>()
-        listOf("q", "r", "s", "t", "u").forEach { name ->
-            readField(quick, name)?.let { if (MessageExtractor.looksLikeMsgInfo(it)) singles.add(it) }
+        // q/r/s/t/u 里筛出真正被选中的
+        val singles = listOf("q", "r", "s", "t", "u")
+            .mapNotNull { readField(quick, it) }
+            .filter { MessageExtractor.looksLikeMsgInfo(it) }
+        val filtered = if (ids.isNotEmpty()) {
+            singles.filter { m -> ids.contains(MessageExtractor.extract(m)?.msgId) }
+        } else {
+            singles
         }
-        if (singles.isNotEmpty()) {
-            XposedBridge.log("$TAG selected from single fields size=${singles.size}")
+        val deduped = dedupe(filtered)
+        XposedBridge.log("$TAG singles=${singles.size} ids=${ids.size} filtered=${deduped.size}")
+
+        if (deduped.isNotEmpty()) return deduped
+
+        // 按 id 查
+        val byId = ids.mapNotNull { msgById(ctxObj, it) }
+        val out = dedupe(byId)
+        XposedBridge.log("$TAG selected by id size=${out.size}")
+        return out
+    }
+
+    private fun dedupe(list: List<Any>): List<Any> {
+        val seen = HashSet<Long>()
+        val out = ArrayList<Any>(list.size)
+        list.forEach { m ->
+            val id = MessageExtractor.extract(m)?.msgId ?: 0L
+            if (id == 0L) {
+                out.add(m)
+            } else if (seen.add(id)) {
+                out.add(m)
+            }
         }
-        return singles
+        return out
     }
 
     /** 用 ChattingContext 里 (long)->MsgInfo 的方法按 msgId 查消息。 */
