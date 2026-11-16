@@ -497,18 +497,17 @@ object WxDownloader {
 
     /** 下载完成后把大图作为同一消息的更新发回笔记端。 */
     /**
-     * 微信 8.x 的 image2/<md5>.jpg 可能是私有 HEVC 容器（文件头 "wxfa"），
+     * 微信 8.x 的 image2/<md5>.jpg 可能是私有 HEVC 容器（文件头 "wxgf"），
      * Android/Coil 均无法解码。此时退回同目录的高清缩略图 th_<stem>hd（标准 JPEG）。
      */
     fun displayable(file: File): File {
         return try {
             val head = ByteArray(4)
             java.io.FileInputStream(file).use { if (it.read(head) != 4) return file }
-            if (head[0] != 'w'.code.toByte() || head[1] != 'x'.code.toByte() ||
-                head[2] != 'f'.code.toByte() || head[3] != 'a'.code.toByte()
-            ) {
-                return file
-            }
+            // 微信自有容器魔数：wxgf（HEVC）/ wxfa
+            val isWx = head[0] == 'w'.code.toByte() && head[1] == 'x'.code.toByte() &&
+                (head[2] == 'g'.code.toByte() || head[2] == 'f'.code.toByte())
+            if (!isWx) return file
             val dir = file.parentFile ?: return file
             val stem = file.name.substringBefore('.')
             listOf("th_${stem}hd", "th_$stem")
