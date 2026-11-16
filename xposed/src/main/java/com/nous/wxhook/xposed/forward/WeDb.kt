@@ -87,8 +87,10 @@ object WeDb {
         val out = ArrayList<Map<String, Any?>>()
         var c: Cursor? = null
         try {
-            c = db!!.javaClass.getMethod("rawQuery", String::class.java, Array<String>::class.java)
-                .invoke(db, sql, args) as? Cursor ?: return emptyList()
+            val m = db!!.javaClass.methods.firstOrNull {
+                it.name == "rawQuery" && it.parameterCount == 2
+            } ?: throw NoSuchMethodException("rawQuery(String,String[])")
+            c = m.invoke(db, sql, args) as? Cursor ?: return emptyList()
             val names = c.columnNames
             while (c.moveToNext()) {
                 val row = HashMap<String, Any?>()
