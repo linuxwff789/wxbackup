@@ -118,6 +118,22 @@ class WxCliReceiver : BroadcastReceiver() {
                 sb.toString()
             }
 
+            "download_original" -> {
+                val svrId = intent.getStringExtra("svrId")?.toLongOrNull() ?: 0L
+                val talker = intent.getStringExtra("talker").orEmpty()
+                if (svrId <= 0 || talker.isBlank()) {
+                    "svrId/talker required"
+                } else {
+                    val started = WxDownloader.downloadOriginal(context, talker, svrId, 0L) { f ->
+                        WxDownloader.fileLog(
+                            context,
+                            "download_original done svr=$svrId -> ${f?.absolutePath}(${f?.length()})"
+                        )
+                    }
+                    "started=$started"
+                }
+            }
+
             "transcode" -> {
                 val path = intent.getStringExtra("path").orEmpty()
                 val src = File(path)

@@ -556,7 +556,7 @@ object ForwardProbe {
                         // 从 Activity 的会话名兜底
                         val chatTitle = title.ifBlank { lastChatTitle }
                         list.forEach { m ->
-                            ForwardSender.forward(ctx, m, null, chatTitle, autoFetchOriginal = false)
+                            ForwardSender.forward(ctx, m, null, chatTitle)
                         }
                         XposedBridge.log("$TAG batch saved ${list.size} messages")
                     } catch (_: Throwable) {
