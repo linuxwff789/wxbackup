@@ -56,8 +56,9 @@ object WeDb {
             if (coreInst == null) return false
 
             val wrapperCls = Class.forName(wrapper, false, ctx.classLoader)
-            val wrapperInst = coreInst.javaClass.fields.firstOrNull {
-                wrapperCls.isAssignableFrom(it.type)
+            // 字段类型可能是 SqliteDB 类本身，也可能是它实现的接口
+            val wrapperInst = coreInst.javaClass.fields.firstOrNull { f ->
+                f.type == wrapperCls || wrapperCls.interfaces.any { it == f.type }
             }?.apply { isAccessible = true }?.get(coreInst)
             WxDownloader.fileLog(
                 ctx,
