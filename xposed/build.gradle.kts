@@ -70,4 +70,7 @@ dependencies {
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // DexKit: 运行时按字符串/特征查找混淆类（WeKit 同款）
+    implementation("org.luckypray:dexkit:2.2.0")
 }

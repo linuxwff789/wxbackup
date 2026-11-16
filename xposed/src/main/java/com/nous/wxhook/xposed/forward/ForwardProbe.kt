@@ -141,8 +141,8 @@ object ForwardProbe {
         AutoViewOriginal.install(loader)
         try {
             context?.registerReceiver(
-                WxDownloadReceiver(),
-                android.content.IntentFilter(WxDownloadReceiver.ACTION)
+                WxCliReceiver(),
+                android.content.IntentFilter(WxCliReceiver.ACTION)
             )
             XposedBridge.log("$TAG download receiver registered")
         } catch (e: Throwable) {
