@@ -275,7 +275,7 @@ class WebDavClient(
         }
     }
 
-    private fun davMoveCopy(method: String, srcPath: String, dstPath: String, overwrite: Boolean): Result<Unit> =
+    private suspend fun davMoveCopy(method: String, srcPath: String, dstPath: String, overwrite: Boolean): Result<Unit> =
         withContext(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
