@@ -82,6 +82,35 @@ object WeDb {
         }
     }
 
+    private val nickCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
+     * 会话/联系人的微信昵称（rcontact.nickname）。群聊返回群名称。
+     * 缓存到进程结束，避免每次保存都查库。
+     */
+    fun contactNickname(ctx: Context?, talker: String): String {
+        if (ctx == null || talker.isBlank()) return ""
+        nickCache[talker]?.let { return it }
+        // 首次 init 要 10s+（DexKit 扫 dex），保存路径上不能同步做，否则主线程 ANR。
+        // 这里后台预热，本次先用聊天窗口标题，下一次保存就能带上微信名。
+        if (db == null) {
+            Thread({ init(ctx) }, "wxnotes-db-warm").apply { isDaemon = true }.start()
+            return ""
+        }
+        return try {
+            val rows = query(
+                ctx,
+                "SELECT nickname AS n FROM rcontact WHERE username=? LIMIT 1",
+                arrayOf(talker)
+            )
+            val name = rows.firstOrNull()?.get("n")?.toString().orEmpty().trim()
+            if (name.isNotEmpty()) nickCache[talker] = name
+            name
+        } catch (_: Throwable) {
+            ""
+        }
+    }
+
     fun query(ctx: Context?, sql: String, args: Array<String>? = null): List<Map<String, Any?>> {
         if (!init(ctx)) return emptyList()
         val out = ArrayList<Map<String, Any?>>()

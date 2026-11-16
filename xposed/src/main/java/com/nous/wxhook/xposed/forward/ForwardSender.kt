@@ -35,6 +35,10 @@ object ForwardSender {
             return false
         }
 
+        // 优先用联系人的微信名（rcontact.nickname），拿不到再回退聊天窗口标题
+        val displayTitle = runCatching { WeDb.contactNickname(ctx, ex.talker) }
+            .getOrDefault("")
+            .ifBlank { talkerTitle }
         val isGroup = ex.talker.endsWith("@chatroom")
         var content = ex.content
         var sender = ""
@@ -102,7 +106,7 @@ object ForwardSender {
             ) { file ->
                 if (file != null) {
                     WxDownloader.publishUpdate(
-                        ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
+                        ctx, ex.talker, displayTitle, ex.isSend, ex.msgId, ex.msgSvrId,
                         createTime, type, parsed.fileName, file, ForwardProtocol.MEDIA_FILE
                     )
                 }
@@ -120,7 +124,7 @@ object ForwardSender {
             WxDownloader.downloadCdn(ctx, "img_$md5", parsed.mediaHint, parsed.aesKey, 5, save) { f ->
                 if (f != null) {
                     WxDownloader.publishUpdate(
-                        ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
+                        ctx, ex.talker, displayTitle, ex.isSend, ex.msgId, ex.msgSvrId,
                         createTime, type, parsed.fileName, f
                     )
                 }
@@ -140,14 +144,14 @@ object ForwardSender {
             fetch { file ->
                 if (file != null) {
                     WxDownloader.publishUpdate(
-                        ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
+                        ctx, ex.talker, displayTitle, ex.isSend, ex.msgId, ex.msgSvrId,
                         createTime, type, parsed.fileName, file
                     )
                 } else if (view != null && mediaBase64.isNotEmpty()) {
                     // 无感下载失败才退回打开预览
                     OriginalFetcher.schedule(
                         ctx, view, parsed.mediaMd5, ex.msgId, ex.msgSvrId, ex.talker,
-                        talkerTitle, ex.isSend, createTime, type, parsed.fileName
+                        displayTitle, ex.isSend, createTime, type, parsed.fileName
                     )
                 }
             }
@@ -175,7 +179,7 @@ object ForwardSender {
             pluginVersion = "1.0.0",
             conversation = Conversation(
                 talker = ex.talker,
-                title = talkerTitle.ifBlank { ex.talker },
+                title = displayTitle.ifBlank { ex.talker },
                 isGroup = isGroup
             ),
             messages = listOf(fwd)
@@ -221,7 +225,7 @@ object ForwardSender {
 
         XposedBridge.log(
             "$TAG forwarded type=${ex.type} sub=${parsed.subType} msgId=${ex.msgId} " +
-                "talker=${ex.talker} title=${talkerTitle.take(24)} media=$mediaKind " +
+                "talker=${ex.talker} title=${displayTitle.take(24)} media=$mediaKind " +
                 "b64=${mediaBase64.length} url=${mediaUrl.take(60)} ok=$delivered"
         )
         toast(ctx, "已保存到笔记：${parsed.text.take(24)}")
@@ -443,7 +447,9 @@ object ForwardSender {
         if (entries.isEmpty()) return 0
 
         val talker = entries.first().first
-        val title = talkerTitle.ifBlank { talker }
+        // 用联系人/群的微信名，拿不到再回退聊天窗口标题
+        val nick = runCatching { WeDb.contactNickname(ctx, talker) }.getOrDefault("")
+        val title = nick.ifBlank { talkerTitle.ifBlank { talker } }
         val conv = Conversation(talker, title, talker.endsWith("@chatroom"))
         val batch = ForwardBatch(
             pluginVersion = "1.0.2",
@@ -465,7 +471,7 @@ object ForwardSender {
             chunk?.let {
                 sendChunks(
                     ctx,
-                    Conversation(t, talkerTitle.ifBlank { t }, t.endsWith("@chatroom")),
+                    Conversation(t, title, t.endsWith("@chatroom")),
                     msg,
                     it,
                     buildString { append(t).append('|').append(msg.effectiveDedupeKey()) }
