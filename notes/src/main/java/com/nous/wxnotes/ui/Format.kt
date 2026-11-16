@@ -45,13 +45,24 @@ fun mimeOf(kind: String, name: String): String {
 
 fun openLocalFile(context: Context, path: String, kind: String, name: String) {
     val file = File(path)
-    if (!file.exists()) return
-    val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-    val intent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(uri, mimeOf(kind, name))
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    if (!file.exists()) {
+        android.widget.Toast.makeText(context, "文件不存在：$path", android.widget.Toast.LENGTH_LONG).show()
+        return
     }
-    runCatching { context.startActivity(intent) }
+    try {
+        val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mimeOf(kind, name))
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(intent)
+    } catch (e: Throwable) {
+        android.widget.Toast.makeText(
+            context,
+            "打开失败：${e.javaClass.simpleName} ${e.message}",
+            android.widget.Toast.LENGTH_LONG
+        ).show()
+    }
 }
 
 fun shareLocalFile(context: Context, file: File, mime: String = "text/markdown") {

@@ -46,6 +46,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -429,6 +430,31 @@ private fun MessageContent(
     onImageClick: (String) -> Unit
 ) {
     val context = LocalContext.current
+    // 媒体还不在本地（插件正在下载原图/附件，或大文件还在传输）
+    if (m.mediaPath.isBlank() && m.mediaKind.isNotBlank() &&
+        m.mediaKind != ForwardProtocol.MEDIA_EMOJI
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(4.dp))
+            Text(
+                when (m.mediaKind) {
+                    ForwardProtocol.MEDIA_IMAGE -> "正在下载原图…"
+                    ForwardProtocol.MEDIA_VIDEO -> "正在下载视频…"
+                    ForwardProtocol.MEDIA_FILE -> "正在下载附件…"
+                    ForwardProtocol.MEDIA_VOICE -> "正在下载语音…"
+                    else -> "媒体处理中…"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (m.text.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(m.text, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        return
+    }
     when (m.mediaKind) {
         ForwardProtocol.MEDIA_IMAGE -> {
             if (m.mediaPath.isNotBlank()) {

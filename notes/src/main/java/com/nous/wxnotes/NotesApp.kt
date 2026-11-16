@@ -16,6 +16,20 @@ class NotesApp : Application() {
         instance = this
         repository = NotesRepository(this)
         createChannels()
+        cleanupInbox()
+    }
+
+    /** 插件写进 files/inbox 的临时文件，导入后删除；这里兜底清理超过 1 小时的残留。 */
+    private fun cleanupInbox() {
+        Thread({
+            runCatching {
+                val dir = java.io.File(filesDir, "inbox")
+                val cutoff = System.currentTimeMillis() - 60 * 60 * 1000L
+                dir.listFiles()?.forEach { f ->
+                    if (f.isFile && f.lastModified() < cutoff) f.delete()
+                }
+            }
+        }, "wxnotes-inbox-clean").apply { isDaemon = true }.start()
     }
 
     private fun createChannels() {
