@@ -353,6 +353,10 @@ fun NoteDetailScreen(vm: NotesViewModel, noteId: Long, onBack: () -> Unit) {
         )
     }
 
+    DisposableEffect(Unit) {
+        onDispose { VoicePlayback.stop() }
+    }
+
     if (previewImages.isNotEmpty()) {
         ImagePreviewDialog(
             images = previewImages,
@@ -682,6 +686,34 @@ private fun PendingMedia(m: MessageEntity) {
 /** 只负责画面：按原始比例测量，宽度由视频自己决定（父容器 wrapContent），气泡才能贴合。 */
 @Composable
 private fun VideoContent(m: MessageEntity) {
+    var failed by remember(m.id) { mutableStateOf(false) }
+    val missingOrBroken = remember(m.id, m.mediaPath) {
+        val f = File(m.mediaPath)
+        !f.isFile || f.length() < MIN_VIDEO_BYTES
+    }
+
+    if (missingOrBroken || failed) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.errorContainer
+        ) {
+            Column(Modifier.padding(10.dp)) {
+                Text(
+                    "视频无法播放",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "文件没下载完整或已过期（微信服务器会清理旧视频），可以在微信里重新保存一次",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+        }
+        return
+    }
+
     androidx.compose.ui.viewinterop.AndroidView(
         factory = { ctx ->
             AspectVideoView(ctx).apply {
@@ -691,11 +723,15 @@ private fun VideoContent(m: MessageEntity) {
                 setMediaController(mc)
             }
         },
+        update = { v -> v.onError = { _, _ -> failed = true } },
         modifier = Modifier
             .heightIn(max = 340.dp)
             .wrapContentSize(Alignment.Center)
     )
 }
+
+/** 小于这个大小基本是微信留下的占位/损坏文件。 */
+private const val MIN_VIDEO_BYTES = 50L * 1024
 
 @Composable
 private fun FullscreenVideoDialog(path: String, onDismiss: () -> Unit) {
@@ -736,40 +772,16 @@ private fun FullscreenVideoDialog(path: String, onDismiss: () -> Unit) {
 @Composable
 private fun VoiceContent(m: MessageEntity) {
     val context = LocalContext.current
-    var playing by remember { mutableStateOf(false) }
-    var player by remember { mutableStateOf<MediaPlayer?>(null) }
-    DisposableEffect(Unit) {
-        onDispose {
-            runCatching { player?.release() }
-            player = null
-        }
-    }
+    val playing = VoicePlayback.playingId == m.id
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
             .clickable {
-                if (playing) {
-                    runCatching { player?.stop() }
-                    runCatching { player?.release() }
-                    player = null
-                    playing = false
-                } else {
-                    if (m.mediaPath.isBlank()) {
-                        Toast.makeText(context, "语音文件未导出", Toast.LENGTH_SHORT).show()
-                        return@clickable
-                    }
-                    runCatching {
-                        val p = MediaPlayer()
-                        p.setDataSource(m.mediaPath)
-                        p.prepare()
-                        p.setOnCompletionListener { playing = false }
-                        p.start()
-                        player = p
-                        playing = true
-                    }.onFailure {
-                        Toast.makeText(context, "无法播放（微信语音可能为 SILK 格式）", Toast.LENGTH_SHORT).show()
-                    }
+                if (m.mediaPath.isBlank()) {
+                    Toast.makeText(context, "语音文件未导出", Toast.LENGTH_SHORT).show()
+                    return@clickable
                 }
+                VoicePlayback.toggle(context, m.id, m.mediaPath)
             }
             .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically

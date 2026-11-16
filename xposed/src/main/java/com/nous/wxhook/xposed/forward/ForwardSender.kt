@@ -672,7 +672,8 @@ object ForwardSender {
                 ?.flatMap { it.listFiles()?.asSequence() ?: emptySequence() }
                 ?.filter { f ->
                     f.isFile && f.name.endsWith(".mp4") &&
-                        f.length() > 1024 &&
+                        // 微信未下载完的视频只有几十字节~几 KB 占位，直接跳过（否则笔记里是黑屏）
+                        f.length() > 50L * 1024 &&
                         f.name.startsWith("NS") &&
                         f.name.contains(stamp) &&
                         (isGroup || !f.name.contains("chatroom"))

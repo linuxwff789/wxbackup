@@ -19,10 +19,17 @@ class AspectVideoView @JvmOverloads constructor(
     var ratio: Float = 0f
         private set
 
+    /** 解码/文件损坏时回调（what, extra）。 */
+    var onError: ((Int, Int) -> Unit)? = null
+
     init {
-        // 注意：VideoView 内部有自己的 mPreparedListener，外部 listener 会在它之后被调用，覆盖是安全的
+        // 注意：VideoView 内部有自己的 mPreparedListener / mErrorListener，外部 listener 会在它之后被调用，覆盖是安全的
         super.setOnPreparedListener { mp ->
             onVideoPrepared(mp)
+        }
+        super.setOnErrorListener { _, what, extra ->
+            onError?.invoke(what, extra)
+            true
         }
     }
 
