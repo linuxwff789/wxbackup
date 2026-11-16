@@ -41,6 +41,27 @@ object WxVoiceTranscoder {
      */
     private fun findDecoder(ctx: Context): File? {
         cachedExe?.let { if (it.isFile) return it }
+        // 1) 模块类自己的 codeSource 指向模块 APK，最可靠（不受包可见性 / SELinux 影响）
+        runCatching {
+            val loc = WxVoiceTranscoder::class.java.protectionDomain?.codeSource?.location
+            WxDownloader.fileLog(ctx, "silk codeSource=$loc")
+            if (loc != null) {
+                val raw = loc.toString()
+                    .removePrefix("jar:")
+                    .removePrefix("file:")
+                    .substringBefore("!/")
+                val apk = File(raw)
+                if (apk.isFile) {
+                    val f = File(apk.parentFile, "lib/arm64/libsilkdec.so")
+                    if (f.isFile) {
+                        cachedExe = f
+                        WxDownloader.fileLog(ctx, "silk decoder(codeSource): ${f.absolutePath}")
+                        return f
+                    }
+                }
+            }
+        }
+        // 2) 按包名查（多半被包可见性挡住）
         runCatching {
             val info = ctx.packageManager.getApplicationInfo("com.nous.wxhook.xposed", 0)
             val f = File(info.nativeLibraryDir, "libsilkdec.so")
