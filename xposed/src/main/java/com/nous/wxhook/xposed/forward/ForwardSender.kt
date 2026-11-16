@@ -64,8 +64,13 @@ object ForwardSender {
             ?: candidates.firstOrNull { File(it).isFile && !isThumbnailPath(it) }
             ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind, parsed.fileSize)
             ?: findVideoFile(ex.createTime, ex.talker.endsWith("@chatroom"))
+            ?: findVoiceFile(ex.createTime)
             ?: candidates.firstOrNull { File(it).isFile })
-            ?.let { WxDownloader.displayable(ctx, File(it)).absolutePath }
+            ?.let { raw ->
+                val f = File(raw)
+                val converted = if (ctx != null && WxVoiceTranscoder.isSilk(f)) WxVoiceTranscoder.transcode(ctx, f) else null
+                (converted ?: WxDownloader.displayable(ctx, f)).absolutePath
+            }
         XposedBridge.log("$TAG local=$localMedia imgPath=${ex.imgPath} md5=${parsed.mediaMd5}")
         if (localMedia == null && mediaKind == ForwardProtocol.MEDIA_IMAGE) {
             // 原图没下载时，直接抓聊天窗口里已显示的缩略图
@@ -341,10 +346,15 @@ object ForwardSender {
                     .firstOrNull { File(it).isFile && !isThumbnailPath(it) }
                 ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind, parsed.fileSize)
                 ?: findVideoFile(ex.createTime, ex.talker.endsWith("@chatroom"))
+            ?: findVoiceFile(ex.createTime)
                 ?: listOf(ex.imgPath, ex.fileFullPath)
                     .filter { it.isNotBlank() }
                     .firstOrNull { File(it).isFile })
-                ?.let { WxDownloader.displayable(ctx, File(it)).absolutePath }
+                ?.let { raw ->
+                val f = File(raw)
+                val converted = if (ctx != null && WxVoiceTranscoder.isSilk(f)) WxVoiceTranscoder.transcode(ctx, f) else null
+                (converted ?: WxDownloader.displayable(ctx, f)).absolutePath
+            }
             XposedBridge.log("$TAG local=$localMedia imgPath=${ex.imgPath} md5=${parsed.mediaMd5}")
             if (localMedia != null) {
                 val file = File(localMedia)
@@ -680,6 +690,40 @@ object ForwardSender {
         } catch (_: Throwable) {
             null
         }
+    }
+
+    /**
+     * 微信语音落在 MicroMsg/<hash>/voice2/<xx>/<yy>/msg_<id>.amr（内容是 SILK v3）。
+     * XML 里没有可用的 md5/clientmsgid，按文件修改时间与消息时间最接近来匹配。
+     */
+    private fun findVoiceFile(createTimeMs: Long): String? {
+        if (createTimeMs <= 0) return null
+        val sec = if (createTimeMs > 10_000_000_000L) createTimeMs / 1000 else createTimeMs
+        val target = sec * 1000
+        var best: File? = null
+        var bestDiff = Long.MAX_VALUE
+        try {
+            File("/data/data/com.tencent.mm/MicroMsg").listFiles()?.forEach { d ->
+                val v2 = File(d, "voice2")
+                if (!v2.isDirectory) return@forEach
+                v2.listFiles()?.forEach { l1 ->
+                    l1.listFiles()?.forEach { l2 ->
+                        l2.listFiles()?.forEach { f ->
+                            if (!f.isFile || !f.name.endsWith(".amr") || f.length() < 100) return@forEach
+                            val diff = kotlin.math.abs(f.lastModified() - target)
+                            if (diff < bestDiff) {
+                                bestDiff = diff
+                                best = f
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        // 时间差超过 3 天认为不是同一条
+        return if (best != null && bestDiff < 3 * 24 * 3600 * 1000L) best!!.absolutePath else null
     }
 
     private fun guessKind(path: String): String {
