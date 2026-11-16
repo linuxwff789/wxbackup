@@ -272,7 +272,11 @@ object WxDownloader {
             val svcCls = Class.forName(
                 "com.tencent.mm.plugin.cdndownloader.service.CDNDownloadService", false, loader
             )
-            val svc = svcCls.getDeclaredConstructor().newInstance()
+            // Service 不能直接 new（会触发 Android 生命周期/闪退），用 Unsafe 只分配内存
+            val unsafeCls = Class.forName("sun.misc.Unsafe")
+            val theUnsafe = unsafeCls.getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null)
+            val svc = unsafeCls.getMethod("allocateInstance", Class::class.java).invoke(theUnsafe, svcCls)
+            fileLog(ctx, "cdn service allocated=$svc")
             val aCls = Class.forName("w12.a", false, loader)
             val binder = aCls.getConstructor(svcCls).newInstance(svc)
             val infoCls = Class.forName(
