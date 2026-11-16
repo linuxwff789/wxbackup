@@ -93,28 +93,6 @@ object WxImageTranscoder {
         else -> 0
     }
 
-    /** 从第一个 NAL 开始遍历，找到 SPS(nal type 33) 并解出宽高。 */
-    private fun parseSpsSize(data: ByteArray, offset: Int): Pair<Int, Int>? {
-        var i = offset
-        while (true) {
-            val sc = findStartCode(data, i)
-            if (sc < 0) return null
-            val len = startCodeLen(data, sc)
-            if (len == 0) return null
-            val nalStart = sc + len
-            if (nalStart + 2 >= data.size) return null
-            val nalType = (data[nalStart].toInt() shr 1) and 0x3F
-            val next = findStartCode(data, nalStart + 1)
-            val nalEnd = if (next < 0) data.size else next
-            if (nalType == 33) {
-                val body = unescape(data, nalStart + 2, nalEnd)
-                if (body.isNotEmpty()) return parseSpsBody(body)
-            }
-            if (next < 0) return null
-            i = next
-        }
-    }
-
     /** 去掉 00 00 03 防竞争字节。 */
     private fun unescape(data: ByteArray, from: Int, to: Int): ByteArray {
         val out = java.io.ByteArrayOutputStream(to - from)
@@ -139,11 +117,6 @@ object WxImageTranscoder {
             pos++
             return v
         }
-        fun bits(n: Int): Int {
-            var v = 0
-            repeat(n) { v = (v shl 1) or bit() }
-            return v
-        }
         fun skip(n: Int) {
             if (pos + n > b.size * 8) throw IndexOutOfBoundsException("bits eof")
             pos += n
@@ -154,37 +127,64 @@ object WxImageTranscoder {
                 lz++
                 if (lz > 31) throw IllegalStateException("ue overflow")
             }
-            return if (lz == 0) 0 else ((1 shl lz) - 1) + bits(lz)
+            if (lz == 0) return 0
+            var v = 0
+            repeat(lz) { v = (v shl 1) or bit() }
+            return ((1 shl lz) - 1) + v
         }
     }
 
-    private fun parseSpsBody(rbsp: ByteArray): Pair<Int, Int>? {
-        val r = Bits(rbsp)
-        r.skip(4)                       // sps_video_parameter_set_id
-        val maxSubLayers = r.bits(3)    // sps_max_sub_layers_minus1
-        r.skip(1)                       // sps_temporal_id_nesting_flag
-        // profile_tier_level(1, maxSubLayers)
-        r.skip(2 + 1 + 5 + 32 + 4 + 43 + 1)   // = 88
-        if (maxSubLayers > 0) {
-            val profilePresent = BooleanArray(maxSubLayers)
-            val levelPresent = BooleanArray(maxSubLayers)
-            for (i in 0 until maxSubLayers) {
-                profilePresent[i] = r.bit() == 1
-                levelPresent[i] = r.bit() == 1
+    /** 遍历 NAL，取第一个 SPS(nal type 33) 的 RBSP。 */
+    private fun findSpsRbsp(data: ByteArray, offset: Int): ByteArray? {
+        var i = offset
+        while (true) {
+            val sc = findStartCode(data, i)
+            if (sc < 0) return null
+            val len = startCodeLen(data, sc)
+            if (len == 0) return null
+            val nalStart = sc + len
+            if (nalStart + 2 >= data.size) return null
+            val nalType = (data[nalStart].toInt() shr 1) and 0x3F
+            val next = findStartCode(data, nalStart + 1)
+            val nalEnd = if (next < 0) data.size else next
+            if (nalType == 33) {
+                val body = unescape(data, nalStart + 2, nalEnd)
+                if (body.size >= 8) return body
             }
-            for (i in maxSubLayers until 8) r.skip(2)
-            for (i in 0 until maxSubLayers) {
-                if (profilePresent[i]) r.skip(88)
-                if (levelPresent[i]) r.skip(8)
-            }
+            if (next < 0) return null
+            i = next
         }
-        r.ue()                          // sps_seq_parameter_set_id
-        val chroma = r.ue()
-        if (chroma == 3) r.bit()        // separate_colour_plane_flag
-        val w = r.ue()
-        val h = r.ue()
-        if (w <= 0 || h <= 0 || w > 20000 || h > 20000) return null
-        return w to h
+    }
+
+    /**
+     * 解出 pic_width/height。
+     *
+     * 规范上 profile_tier_level 是 88 位，不同编码器/版本会有偏差（实测某个微信样本
+     * 的有效起点在 102 位），所以先试标准偏移，再在 80..140 区间扫描并用取值范围校验。
+     */
+    private fun parseSpsSize(data: ByteArray, offset: Int): Pair<Int, Int>? {
+        val rbsp = findSpsRbsp(data, offset) ?: return null
+        parseAt(rbsp, 8 + 88)?.let { return it }
+        for (p in 80..140) {
+            parseAt(rbsp, p)?.let { return it }
+        }
+        return null
+    }
+
+    private fun parseAt(rbsp: ByteArray, start: Int): Pair<Int, Int>? {
+        return try {
+            val r = Bits(rbsp)
+            r.skip(start)
+            val sid = r.ue()          // sps_seq_parameter_set_id
+            val chroma = r.ue()       // chroma_format_idc
+            if (sid > 15 || chroma > 3) return null
+            val w = r.ue()            // pic_width_in_luma_samples
+            val h = r.ue()            // pic_height_in_luma_samples
+            if (w < 16 || h < 16 || w > 16384 || h > 16384) return null
+            w to h
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     // ---------------- MediaCodec 解码 ----------------
