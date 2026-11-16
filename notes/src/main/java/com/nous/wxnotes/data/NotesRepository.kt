@@ -46,7 +46,15 @@ class NotesRepository(private val context: Context) {
             ?.take(28)
 
         // 1. 选出目标笔记
-        val existing = if (talker.isNotBlank()) {
+        // 单条消息的"更新"（例如自动补全原图后 publishUpdate）必须回到它原本所属的笔记；
+        // 否则聚合窗口一过就会错误地新建一篇笔记，旧笔记里的缩略图永远不更新。
+        val updateTarget = if (batch.messages.size == 1) {
+            val m0 = batch.messages[0]
+            messageDao.getByKeyPrefix("$talker|${m0.effectiveDedupeKey()}")
+        } else null
+        val existing = if (updateTarget != null) {
+            noteDao.getById(updateTarget.noteId)
+        } else if (talker.isNotBlank()) {
             noteDao.findAggregateTarget(talker, now - windowMs)
         } else null
         val noteId: Long

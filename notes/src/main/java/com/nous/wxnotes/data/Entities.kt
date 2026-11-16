@@ -123,6 +123,9 @@ interface NoteDao {
     )
     suspend fun findAggregateTarget(talker: String, since: Long): NoteEntity?
 
+    @Query("SELECT * FROM notes WHERE id=:id LIMIT 1")
+    suspend fun getById(id: Long): NoteEntity?
+
     @Query("SELECT * FROM notes WHERE archived=:archived ORDER BY updatedAt DESC")
     fun observeArchived(archived: Boolean): Flow<List<NoteEntity>>
 
