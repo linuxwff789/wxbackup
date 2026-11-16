@@ -30,6 +30,7 @@ object VoiceTranscoder {
     /** 同目录生成 <name>.wav，成功返回 wav 文件。 */
     fun transcode(context: Context, src: File): File? {
         val exe = File(context.applicationInfo.nativeLibraryDir, "libsilkdec.so")
+        android.util.Log.i("WxNotesVT", "transcode exe=${exe.absolutePath} exists=${exe.isFile} src=${src.absolutePath} len=${src.length()} silk=${isSilk(src)} parentWritable=${src.parentFile?.canWrite()}")
         if (!exe.isFile) return null
         val stem = src.name.substringBeforeLast('.')
         val pcm = File(src.parentFile, "$stem.pcm")
@@ -43,11 +44,16 @@ object VoiceTranscoder {
                 p.destroy()
                 return null
             }
-            if (!pcm.isFile || pcm.length() < 100) return null
+            if (!pcm.isFile || pcm.length() < 100) {
+                android.util.Log.w("WxNotesVT", "no pcm exit=${p.exitValue()} pcmExists=${pcm.isFile} len=${if (pcm.isFile) pcm.length() else -1}")
+                return null
+            }
             writeWav(pcm, wav)
             pcm.delete()
+            android.util.Log.i("WxNotesVT", "transcode ok wav=${wav.absolutePath} len=${wav.length()}")
             wav
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            android.util.Log.e("WxNotesVT", "transcode failed", e)
             null
         } finally {
             runCatching { pcm.delete() }

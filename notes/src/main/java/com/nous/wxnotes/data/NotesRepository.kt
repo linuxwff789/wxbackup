@@ -233,6 +233,7 @@ class NotesRepository(private val context: Context) {
     private fun finalizeVoice(path: String, kind: String): String {
         if (path.isBlank() || kind != ForwardProtocol.MEDIA_VOICE) return path
         val f = File(path)
+        android.util.Log.i("WxNotesVT", "finalize path=$path exists=${f.isFile} silk=${if (f.isFile) VoiceTranscoder.isSilk(f) else false}")
         if (!f.isFile || !VoiceTranscoder.isSilk(f)) return path
         val wav = VoiceTranscoder.transcode(context, f) ?: return path
         runCatching { f.delete() }
