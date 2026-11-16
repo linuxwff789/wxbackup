@@ -140,10 +140,14 @@ object ForwardProbe {
         MultiSelectHook.install(loader)
         AutoViewOriginal.install(loader)
         try {
-            context?.registerReceiver(
-                WxCliReceiver(),
-                android.content.IntentFilter(WxCliReceiver.ACTION)
-            )
+            if (context != null) {
+                val filter = android.content.IntentFilter(WxCliReceiver.ACTION)
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    context.registerReceiver(WxCliReceiver(), filter, android.content.Context.RECEIVER_EXPORTED)
+                } else {
+                    context.registerReceiver(WxCliReceiver(), filter)
+                }
+            }
             XposedBridge.log("$TAG download receiver registered")
         } catch (e: Throwable) {
             XposedBridge.log("$TAG receiver register failed: ${e.message}")
