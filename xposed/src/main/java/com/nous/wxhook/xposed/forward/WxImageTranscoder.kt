@@ -223,8 +223,13 @@ object WxImageTranscoder {
         w: Int,
         h: Int
     ): Bitmap? {
-        val nals = parseNals(data, offset)
-        if (nals.isEmpty()) return null
+        val allNals = parseNals(data, offset)
+        if (allNals.isEmpty()) return null
+        // wxgf 里可能有多组参数集+IDR（小图 + 主图）；同一 codec 解两段不同序列会进 error，
+        // 只取最后一组（从最后一个 VPS 开始）。
+        val vpsIdx = allNals.indices.filter { allNals[it].type == 32 }
+        val groupStart = if (vpsIdx.size > 1) vpsIdx.last() else 0
+        val nals = allNals.subList(groupStart, allNals.size)
         // 最后一组 VPS/SPS/PPS 作为 csd-0
         val ps = nals.filter { it.type == 32 || it.type == 33 || it.type == 34 }
         val csdBytes = java.io.ByteArrayOutputStream().also { bos ->
@@ -232,7 +237,7 @@ object WxImageTranscoder {
         }.toByteArray()
         WxDownloader.fileLog(
             ctx,
-            "transcode: nals=${nals.size} types=${nals.joinToString(",") { it.type.toString() }} csd=${csdBytes.size}B"
+            "transcode: nals=${nals.size}/${allNals.size} types=${nals.joinToString(",") { it.type.toString() }} csd=${csdBytes.size}B"
         )
 
         for (name in decoderCandidates()) {
