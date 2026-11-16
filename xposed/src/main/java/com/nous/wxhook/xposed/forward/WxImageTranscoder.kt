@@ -2,9 +2,7 @@ package com.nous.wxhook.xposed.forward
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.ImageFormat
 import android.media.Image
-import android.media.ImageReader
 import android.media.MediaCodec
 import android.media.MediaFormat
 import java.io.File
@@ -275,9 +273,7 @@ object WxImageTranscoder {
         h: Int
     ): Bitmap? {
         var codec: MediaCodec? = null
-        var reader: ImageReader? = null
         try {
-            reader = ImageReader.newInstance(w, h, ImageFormat.YUV_420_888, 2)
             val fmt = MediaFormat.createVideoFormat(MIME, w, h)
             fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(data.size, 512 * 1024))
             if (csd.isNotEmpty()) {
@@ -291,7 +287,7 @@ object WxImageTranscoder {
                 return null
             }
             WxDownloader.fileLog(ctx, "transcode: codec=${codec.name} size=${w}x$h csd=${csd.size}B")
-            codec.configure(fmt, reader.surface, null, 0)
+            codec.configure(fmt, null, null, 0)
             codec.start()
 
             val info = MediaCodec.BufferInfo()
@@ -299,8 +295,7 @@ object WxImageTranscoder {
             val pending = ArrayList(nals)
             var nalIdx = 0
             var eosQueued = false
-            var image: Image? = null
-            var outCount = 0
+            var bmp: Bitmap? = null
 
             while (System.currentTimeMillis() < deadline) {
                 if (!eosQueued && nalIdx < pending.size) {
@@ -322,7 +317,6 @@ object WxImageTranscoder {
                                 if (last) eosQueued = true
                                 nalIdx++
                             } else {
-                                // 单个 NAL 超过 buffer：分片喂（理论上不会发生）
                                 val n = buf.capacity()
                                 buf.put(data, off, n)
                                 codec.queueInputBuffer(inIdx, 0, n, 0, 0)
@@ -335,25 +329,35 @@ object WxImageTranscoder {
                 }
                 val outIdx = codec.dequeueOutputBuffer(info, 1000)
                 if (outIdx >= 0) {
-                    outCount++
-                    codec.releaseOutputBuffer(outIdx, true)
-                    image = reader.acquireLatestImage()
-                    if (image != null) {
-                        WxDownloader.fileLog(ctx, "transcode: got frame ${image.width}x${image.height} after $outCount")
+                    val img = try {
+                        codec.getOutputImage(outIdx)
+                    } catch (e: Throwable) {
+                        WxDownloader.fileLog(ctx, "transcode: getOutputImage err ${e.message}")
+                        null
+                    }
+                    if (img != null) {
+                        WxDownloader.fileLog(
+                            ctx,
+                            "transcode: frame ${img.width}x${img.height} planes=${img.planes.size} " +
+                                "fmt=${codec.outputFormat.getString(MediaFormat.KEY_COLOR_FORMAT)}"
+                        )
+                        bmp = toBitmap(img)
+                        img.close()
+                        codec.releaseOutputBuffer(outIdx, false)
                         break
                     }
+                    WxDownloader.fileLog(
+                        ctx,
+                        "transcode: output $outIdx size=${info.size} flags=${info.flags} " +
+                            "cf=${codec.outputFormat.getInteger(MediaFormat.KEY_COLOR_FORMAT, -1)}"
+                    )
+                    codec.releaseOutputBuffer(outIdx, false)
                 } else if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     WxDownloader.fileLog(ctx, "transcode: output format changed ${codec.outputFormat}")
                 }
                 if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break
             }
-
-            val img = image ?: return null
-            return try {
-                toBitmap(img)
-            } finally {
-                img.close()
-            }
+            return bmp
         } finally {
             try {
                 codec?.stop()
@@ -361,10 +365,6 @@ object WxImageTranscoder {
             }
             try {
                 codec?.release()
-            } catch (_: Throwable) {
-            }
-            try {
-                reader?.close()
             } catch (_: Throwable) {
             }
         }
