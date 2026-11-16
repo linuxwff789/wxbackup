@@ -629,7 +629,7 @@ object WxDownloader {
                 fileName = fileName.ifBlank { src.name },
                 fileSize = len
             )
-            if (len <= 400 * 1024) {
+            if (len <= 100 * 1024) {
                 val b64 = android.util.Base64.encodeToString(src.readBytes(), android.util.Base64.NO_WRAP)
                 msgs.add(msg.copy(mediaBase64 = b64) to src)
             } else {

@@ -76,6 +76,13 @@ class WxCliReceiver : BroadcastReceiver() {
                 if (mi == null) "msg not found" else MessageExtractor.dump(mi)
             }
 
+            "inbox_test" -> {
+                val f = File(context.cacheDir, "inbox_test.bin")
+                f.writeBytes(ByteArray(200 * 1024) { (it % 251).toByte() })
+                val up = WxMediaBridge.upload(context, f)
+                "uploaded=$up size=${f.length()}"
+            }
+
             "codec_test" -> {
                 val sb = StringBuilder()
                 val names = listOf(
