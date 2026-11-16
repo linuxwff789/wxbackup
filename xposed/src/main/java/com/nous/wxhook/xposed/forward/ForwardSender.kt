@@ -81,7 +81,9 @@ object ForwardSender {
             }
             if (mediaBase64.isEmpty()) {
                 if (file.length() > MAX_INLINE_BYTES) {
-                    chunkSource = file
+                    // 先走 ContentProvider 直传；失败再回退分片广播
+                    val up = WxMediaBridge.upload(ctx, file)
+                    if (up != null) mediaUrl = up else chunkSource = file
                 } else {
                     MediaServer.uriFor(localMedia)?.let { mediaUrl = it }
                 }
@@ -325,6 +327,7 @@ object ForwardSender {
             val parsed = WxMessageParser.parse(ex.type, content)
             var mediaKind = parsed.mediaKind
             var mediaBase64 = ""
+            var mediaUrl = ""
             var chunkFile: File? = null
             val localMedia = (findImageByMd5(parsed.mediaMd5)
                 ?: WxDownloader.findImgInfo2Original(ctx, ex.msgSvrId)?.let { resolveUnderMicroMsg(it) }
@@ -348,7 +351,14 @@ object ForwardSender {
                     } catch (_: Throwable) {
                     }
                 }
-                if (mediaBase64.isEmpty()) chunkFile = file
+                if (mediaBase64.isEmpty()) {
+                    if (file.length() > MAX_INLINE_BYTES) {
+                        val up = WxMediaBridge.upload(ctx, file)
+                        if (up != null) mediaUrl = up else chunkFile = file
+                    } else {
+                        MediaServer.uriFor(localMedia)?.let { mediaUrl = it }
+                    }
+                }
                 if (mediaKind == ForwardProtocol.MEDIA_NONE) mediaKind = guessKind(localMedia)
             }
             val createTime = if (ex.createTime > 10_000_000_000L) ex.createTime / 1000 else ex.createTime
@@ -425,7 +435,8 @@ object ForwardSender {
                 fileName = parsed.fileName,
                 fileSize = parsed.fileSize,
                 durationMs = parsed.durationMs,
-                mediaBase64 = mediaBase64
+                mediaBase64 = mediaBase64,
+                localPath = mediaUrl
             )
             entries.add(Triple(ex.talker, fwd, chunkFile))
         }

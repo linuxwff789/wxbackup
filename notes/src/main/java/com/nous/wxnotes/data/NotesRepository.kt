@@ -192,6 +192,10 @@ class NotesRepository(private val context: Context) {
         if (m.mediaBase64.isNotBlank()) {
             return saveInlineMedia(noteId, m)
         }
+        // 插件通过 MediaInboxProvider 直传的大文件：filesDir/inbox/<name>
+        if (m.localPath.startsWith("content://")) {
+            return importFromInbox(noteId, m)
+        }
         if (m.localPath.isBlank()) return ""
         // 插件通过 127.0.0.1 的本地 HTTP 暴露微信私有目录里的媒体
         if (m.localPath.startsWith("lss://")) {
@@ -211,6 +215,24 @@ class NotesRepository(private val context: Context) {
             dst.absolutePath
         } catch (_: Throwable) {
             m.localPath
+        }
+    }
+
+    /** 读取插件通过 ContentProvider 写入的 inbox 文件，移动到笔记媒体目录。 */
+    private fun importFromInbox(noteId: Long, m: ForwardMessage): String {
+        val name = m.localPath.substringAfterLast('/')
+        if (name.isBlank()) return ""
+        val src = File(File(context.filesDir, "inbox"), name)
+        if (!src.isFile || src.length() <= 0) return ""
+        val dir = File(File(context.filesDir, "media"), noteId.toString())
+        if (!dir.exists() && !dir.mkdirs()) return ""
+        val dst = uniqueFile(dir, m.fileName.ifBlank { src.name.substringAfter('_') })
+        return try {
+            src.copyTo(dst, overwrite = true)
+            src.delete()
+            dst.absolutePath
+        } catch (_: Throwable) {
+            ""
         }
     }
 

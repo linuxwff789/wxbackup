@@ -629,11 +629,16 @@ object WxDownloader {
                 fileName = fileName.ifBlank { src.name },
                 fileSize = len
             )
-            if (len <= 600 * 1024) {
+            if (len <= 400 * 1024) {
                 val b64 = android.util.Base64.encodeToString(src.readBytes(), android.util.Base64.NO_WRAP)
                 msgs.add(msg.copy(mediaBase64 = b64) to src)
             } else {
-                msgs.add(msg to src)
+                val up = WxMediaBridge.upload(ctx, src)
+                if (up != null) {
+                    msgs.add(msg.copy(localPath = up, fileSize = len) to src)
+                } else {
+                    msgs.add(msg to src)
+                }
             }
             val batch = ForwardBatch(
                 pluginVersion = "1.0.3",
@@ -649,7 +654,7 @@ object WxDownloader {
                 }
             )
             msgs.forEach { (m, f) ->
-                if (m.mediaBase64.isEmpty()) {
+                if (m.mediaBase64.isEmpty() && m.localPath.isBlank()) {
                     ForwardSender.sendChunks(
                         ctx,
                         Conversation(talker, talkerTitle.ifBlank { talker }, talker.endsWith("@chatroom")),
