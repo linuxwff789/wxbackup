@@ -124,6 +124,11 @@ object ForwardSender {
                 }
             }
         }
+        WxDownloader.fileLog(
+            ctx,
+            "autoFetch? single id=${ex.msgId} svr=${ex.msgSvrId} kind=$mediaKind " +
+                "local=${localMedia?.takeLast(48)} thumb=$thumbOnly md5=${parsed.mediaMd5.length} auto=$autoFetchOriginal"
+        )
         if (autoFetchOriginal && (localMedia == null || thumbOnly) &&
             mediaKind == ForwardProtocol.MEDIA_IMAGE && ex.msgSvrId > 0
         ) {
@@ -383,6 +388,11 @@ object ForwardSender {
                     }
                 }
             }
+            WxDownloader.fileLog(
+                ctx,
+                "autoFetch? list id=${ex.msgId} svr=${ex.msgSvrId} kind=$mediaKind " +
+                    "local=${localMedia?.takeLast(48)} thumb=$thumbOnly md5=${parsed.mediaMd5.length}"
+            )
             if ((localMedia == null || thumbOnly) && mediaKind == ForwardProtocol.MEDIA_IMAGE && ex.msgSvrId > 0) {
                 val md5 = parsed.mediaMd5
                 val fetch: ((File?) -> Unit) -> Boolean = { cb ->
@@ -613,6 +623,8 @@ object ForwardSender {
     }
 
     private fun guessKind(path: String): String {
+        // 微信缩略图 th_<md5> 没有扩展名，必须按图片处理
+        if (File(path).name.startsWith("th_")) return ForwardProtocol.MEDIA_IMAGE
         val ext = path.substringAfterLast('.', "").lowercase()
         return when (ext) {
             "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic" -> ForwardProtocol.MEDIA_IMAGE
