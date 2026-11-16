@@ -617,18 +617,23 @@ object ForwardSender {
     }
 
     /** 本地路径拿不到时，按文件名在微信数据目录里兜底查找（下载过的文件/图片）。 */
+    /**
+     * 微信的附件实际落在 MicroMsg/<用户hash>/attachment/<原文件名>（或 Download/），
+     * 老的固定路径 MicroMsg/attachment 不存在，导致文件消息一直没带上附件。
+     */
     private fun findMediaFile(name: String, kind: String): String? {
         if (name.isBlank()) return null
-        val roots = listOf(
-            "/data/data/com.tencent.mm/MicroMsg/Download",
-            "/data/data/com.tencent.mm/MicroMsg/attachment",
-            "/data/data/com.tencent.mm/MicroMsg"
-        )
-        roots.forEach { root ->
-            val f = File(root, name)
-            if (f.isFile) return f.absolutePath
+        val micro = File("/data/data/com.tencent.mm/MicroMsg")
+        val candidates = ArrayList<File>()
+        candidates.add(File(micro, "Download/$name"))
+        micro.listFiles()?.forEach { d ->
+            if (d.isDirectory) {
+                candidates.add(File(d, "attachment/$name"))
+                candidates.add(File(d, "Download/$name"))
+                candidates.add(File(d, name))
+            }
         }
-        return null
+        return candidates.firstOrNull { it.isFile && it.length() > 0 }?.absolutePath
     }
 
     private fun guessKind(path: String): String {

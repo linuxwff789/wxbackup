@@ -624,7 +624,12 @@ object WxDownloader {
                 type = if (type > 0) type else 3,
                 createTime = createTime,
                 isSend = isSend,
-                text = "[图片]",
+                text = when (mediaKind) {
+                    ForwardProtocol.MEDIA_FILE -> "[文件]"
+                    ForwardProtocol.MEDIA_VOICE -> "[语音]"
+                    ForwardProtocol.MEDIA_VIDEO -> "[视频]"
+                    else -> "[图片]"
+                },
                 mediaKind = mediaKind,
                 fileName = fileName.ifBlank { src.name },
                 fileSize = len
