@@ -51,16 +51,28 @@ object WeDb {
             val coreCls = Class.forName(core, false, ctx.classLoader)
             val coreInst = kernelCls.methods.firstOrNull {
                 Modifier.isStatic(it.modifiers) && it.parameterCount == 0 && it.returnType == coreCls
-            }?.invoke(null) ?: return false
+            }?.invoke(null)
+            WxDownloader.fileLog(ctx, "WeDb coreInst=${coreInst?.javaClass?.name}")
+            if (coreInst == null) return false
 
             val wrapperCls = Class.forName(wrapper, false, ctx.classLoader)
             val wrapperInst = coreInst.javaClass.fields.firstOrNull {
                 wrapperCls.isAssignableFrom(it.type)
-            }?.apply { isAccessible = true }?.get(coreInst) ?: return false
+            }?.apply { isAccessible = true }?.get(coreInst)
+            WxDownloader.fileLog(
+                ctx,
+                "WeDb wrapperInst=${wrapperInst?.javaClass?.name} fields=" +
+                    coreInst.javaClass.fields.joinToString { it.name + ":" + it.type.simpleName }
+            )
+            if (wrapperInst == null) return false
 
-            db = wrapperInst.javaClass.methods.firstOrNull {
+            val dbMethod = wrapperInst.javaClass.methods.firstOrNull {
                 it.parameterCount == 0 && it.returnType.name == "com.tencent.wcdb.database.SQLiteDatabase"
-            }?.invoke(wrapperInst)
+            }
+            WxDownloader.fileLog(ctx, "WeDb dbMethod=${dbMethod?.name} methods=" +
+                wrapperInst.javaClass.methods.filter { it.parameterCount == 0 }.take(12)
+                    .joinToString { it.name + ":" + it.returnType.simpleName })
+            db = dbMethod?.invoke(wrapperInst)
             WxDownloader.fileLog(ctx, "WeDb ready=${db != null}")
             db != null
         } catch (e: Throwable) {
