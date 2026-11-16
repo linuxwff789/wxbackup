@@ -50,12 +50,12 @@ object WxImageTranscoder {
                 WxDownloader.fileLog(ctx, "transcode: no annex-b start code in ${src.name}")
                 return null
             }
+            // 尺寸只用于 configure；真正宽高以解码器 output format / Image 为准
             val size = parseSpsSize(data, offset)
+            val (w, h) = size ?: (1280 to 720)
             if (size == null) {
-                WxDownloader.fileLog(ctx, "transcode: sps parse failed ${src.name}")
-                return null
+                WxDownloader.fileLog(ctx, "transcode: sps parse failed ${src.name}, fallback ${w}x$h")
             }
-            val (w, h) = size
             val bmp = decodeFirstFrame(ctx, data, offset, w, h) ?: return null
             FileOutputStream(out).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
             bmp.recycle()
@@ -183,6 +183,8 @@ object WxImageTranscoder {
             val w = r.ue()            // pic_width_in_luma_samples
             val h = r.ue()            // pic_height_in_luma_samples
             if (w < 16 || h < 16 || w > 16384 || h > 16384) return null
+            // HEVC 亮度采样宽高通常为偶数，可过滤掉误命中的偏移
+            if (w % 2 != 0 || h % 2 != 0) return null
             w to h
         } catch (_: Throwable) {
             null
@@ -339,7 +341,7 @@ object WxImageTranscoder {
                         WxDownloader.fileLog(
                             ctx,
                             "transcode: frame ${img.width}x${img.height} planes=${img.planes.size} " +
-                                "fmt=${codec.outputFormat.getString(MediaFormat.KEY_COLOR_FORMAT)}"
+                                "cf=${codec.outputFormat.getInteger(MediaFormat.KEY_COLOR_FORMAT, -1)}"
                         )
                         bmp = toBitmap(img)
                         img.close()
