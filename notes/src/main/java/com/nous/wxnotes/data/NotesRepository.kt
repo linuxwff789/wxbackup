@@ -23,6 +23,16 @@ class NotesRepository(private val context: Context) {
 
     private val prefs = context.getSharedPreferences("wxnotes", Context.MODE_PRIVATE)
 
+    /**
+     * 媒体放公共目录，用户可以直接在文件管理器里看到/导出。
+     * 没有全文件访问权限时回退到私有目录。
+     */
+    private fun mediaRoot(): File {
+        val ext = Environment.getExternalStorageDirectory() ?: return File(context.filesDir, "media")
+        val dir = File(ext, "Download/wxnotes/media")
+        return if (dir.exists() || dir.mkdirs()) dir else File(context.filesDir, "media")
+    }
+
     data class SaveResult(
         val noteId: Long,
         val noteTitle: String,
@@ -206,7 +216,7 @@ class NotesRepository(private val context: Context) {
         val src = File(m.localPath)
         if (!src.exists() || !src.canRead() || !src.isFile) return m.localPath
         val fileName = src.name.ifBlank { "media_${System.currentTimeMillis()}" }
-        val dir = File(File(context.filesDir, "media"), noteId.toString())
+        val dir = File(mediaRoot(), noteId.toString())
         if (!dir.exists() && !dir.mkdirs()) return m.localPath
         val dst = uniqueFile(dir, fileName)
         return try {
@@ -223,7 +233,7 @@ class NotesRepository(private val context: Context) {
         if (name.isBlank()) return ""
         val src = File(File(context.filesDir, "inbox"), name)
         if (!src.isFile || src.length() <= 0) return ""
-        val dir = File(File(context.filesDir, "media"), noteId.toString())
+        val dir = File(mediaRoot(), noteId.toString())
         if (!dir.exists() && !dir.mkdirs()) return ""
         val dst = uniqueFile(dir, m.fileName.ifBlank { src.name.substringAfter('_') })
         return try {
@@ -237,7 +247,7 @@ class NotesRepository(private val context: Context) {
 
     /** 广播内嵌的小媒体：直接解码落盘（图片/语音/小文件走这条）。 */
     private fun saveInlineMedia(noteId: Long, m: ForwardMessage): String {
-        val dir = File(File(context.filesDir, "media"), noteId.toString())
+        val dir = File(mediaRoot(), noteId.toString())
         if (!dir.exists() && !dir.mkdirs()) return ""
         val name = m.fileName.ifBlank {
             val ext = when (m.mediaKind) {
@@ -262,7 +272,7 @@ class NotesRepository(private val context: Context) {
 
     /** 通过抽象 LocalSocket 从微信进程取媒体（后台也能用，不受 loopback 网络限制）。 */
     private fun downloadViaLocalSocket(noteId: Long, m: ForwardMessage): String {
-        val dir = File(File(context.filesDir, "media"), noteId.toString())
+        val dir = File(mediaRoot(), noteId.toString())
         if (!dir.exists() && !dir.mkdirs()) return m.localPath
         val rest = m.localPath.removePrefix("lss://")
         val token = rest.substringBefore('/')
@@ -322,7 +332,7 @@ class NotesRepository(private val context: Context) {
     }
 
     private fun downloadMedia(noteId: Long, m: ForwardMessage): String {
-        val dir = File(File(context.filesDir, "media"), noteId.toString())
+        val dir = File(mediaRoot(), noteId.toString())
         if (!dir.exists() && !dir.mkdirs()) return m.localPath
         val urlName = m.localPath.substringAfterLast('/').substringBefore('?')
         val fallback = "media_${System.currentTimeMillis()}"
@@ -396,7 +406,7 @@ class NotesRepository(private val context: Context) {
 
     private suspend fun deleteNoteInternal(noteId: Long) {
         runCatching {
-            File(File(context.filesDir, "media"), noteId.toString()).deleteRecursively()
+            File(mediaRoot(), noteId.toString()).deleteRecursively()
         }
         messageDao.deleteByNote(noteId)
         noteDao.delete(noteId)

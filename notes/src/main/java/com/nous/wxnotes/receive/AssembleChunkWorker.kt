@@ -39,7 +39,12 @@ class AssembleChunkWorker(context: Context, params: WorkerParameters) : Coroutin
             }
         }
 
-        val mediaDir = File(File(applicationContext.filesDir, "media"), msg.noteId.toString())
+                val mediaRoot = run {
+            val ext = android.os.Environment.getExternalStorageDirectory()
+            val d = if (ext != null) File(ext, "Download/wxnotes/media") else null
+            if (d != null && (d.exists() || d.mkdirs())) d else File(applicationContext.filesDir, "media")
+        }
+        val mediaDir = File(mediaRoot, msg.noteId.toString())
         if (!mediaDir.exists() && !mediaDir.mkdirs()) return Result.failure()
 
         val name = meta.fileName.ifBlank {

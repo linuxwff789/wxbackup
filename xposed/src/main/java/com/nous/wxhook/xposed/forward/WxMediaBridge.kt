@@ -16,6 +16,40 @@ object WxMediaBridge {
 
     fun upload(ctx: Context?, file: File?): String? {
         if (ctx == null || file == null || !file.isFile || file.length() <= 0) return null
+        // 优先写公共 Download 目录（MediaStore 无需 MANAGE_EXTERNAL_STORAGE），
+        // 这样笔记 App 能直接读，用户也能在文件管理器里看到。
+        uploadToSdcard(ctx, file)?.let { return it }
+        return uploadToProvider(ctx, file)
+    }
+
+    private fun uploadToSdcard(ctx: Context, file: File): String? {
+        return try {
+            val safeName = file.name.replace('/', '_').replace('\\', '_')
+            val name = "${System.currentTimeMillis()}_$safeName"
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download/wxnotes/inbox")
+            }
+            val uri = ctx.contentResolver.insert(
+                android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+            ) ?: return null
+            ctx.contentResolver.openOutputStream(uri)?.use { out ->
+                file.inputStream().use { it.copyTo(out, 64 * 1024) }
+            } ?: return null
+            val path = File(
+                android.os.Environment.getExternalStorageDirectory(),
+                "Download/wxnotes/inbox/$name"
+            ).absolutePath
+            WxDownloader.fileLog(ctx, "sdcard upload ok ${file.name} ${file.length()}B -> $name")
+            path
+        } catch (e: Throwable) {
+            WxDownloader.fileLog(ctx, "sdcard upload failed ${file.name}: ${e.javaClass.simpleName} ${e.message}")
+            null
+        }
+    }
+
+    private fun uploadToProvider(ctx: Context, file: File): String? {
         return try {
             val safeName = file.name.replace('/', '_').replace('\\', '_')
             val name = "${System.currentTimeMillis()}_$safeName"
