@@ -76,6 +76,48 @@ class WxCliReceiver : BroadcastReceiver() {
                 if (mi == null) "msg not found" else MessageExtractor.dump(mi)
             }
 
+            "codec_test" -> {
+                val sb = StringBuilder()
+                val names = listOf(
+                    "video/hevc",
+                    "c2.android.hevc.decoder",
+                    "OMX.google.hevc.decoder",
+                    "c2.qti.hevc.decoder"
+                )
+                for (name in names) {
+                    sb.append("--- $name\n")
+                    var c: android.media.MediaCodec? = null
+                    try {
+                        c = if (name.contains('/')) {
+                            android.media.MediaCodec.createDecoderByType(name)
+                        } else {
+                            android.media.MediaCodec.createByCodecName(name)
+                        }
+                        sb.append("created=${c.name}\n")
+                        val fmt = android.media.MediaFormat.createVideoFormat("video/hevc", 952, 576)
+                        fmt.setInteger(android.media.MediaFormat.KEY_MAX_INPUT_SIZE, 512 * 1024)
+                        c.configure(fmt, null, null, 0)
+                        sb.append("configure ok\n")
+                        c.start()
+                        sb.append("start ok\n")
+                        val i = c.dequeueInputBuffer(1000)
+                        sb.append("dequeueInput=$i\n")
+                    } catch (e: Throwable) {
+                        sb.append("ERR ${e.javaClass.simpleName} ${e.message}\n")
+                    } finally {
+                        try {
+                            c?.stop()
+                        } catch (_: Throwable) {
+                        }
+                        try {
+                            c?.release()
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+                sb.toString()
+            }
+
             "transcode" -> {
                 val path = intent.getStringExtra("path").orEmpty()
                 val src = File(path)
