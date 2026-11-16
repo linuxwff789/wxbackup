@@ -2,7 +2,7 @@ package com.nous.wxhook.xposed.forward
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.PixelFormat
+import android.graphics.ImageFormat
 import android.media.Image
 import android.media.ImageReader
 import android.media.MediaCodec
@@ -58,7 +58,7 @@ object WxImageTranscoder {
                 return null
             }
             val (w, h) = size
-            val bmp = decodeFirstFrame(data, offset, w, h) ?: return null
+            val bmp = decodeFirstFrame(ctx, data, offset, w, h) ?: return null
             FileOutputStream(out).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
             bmp.recycle()
             WxDownloader.fileLog(
@@ -193,16 +193,24 @@ object WxImageTranscoder {
 
     // ---------------- MediaCodec 解码 ----------------
 
-    private fun decodeFirstFrame(data: ByteArray, offset: Int, w: Int, h: Int): Bitmap? {
+    private fun decodeFirstFrame(
+        ctx: Context?,
+        data: ByteArray,
+        offset: Int,
+        w: Int,
+        h: Int
+    ): Bitmap? {
         var codec: MediaCodec? = null
         var reader: ImageReader? = null
         try {
-            reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+            reader = ImageReader.newInstance(w, h, ImageFormat.YUV_420_888, 2)
             val fmt = MediaFormat.createVideoFormat(MIME, w, h)
             fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(data.size - offset, 512 * 1024))
             codec = MediaCodec.createDecoderByType(MIME)
+            WxDownloader.fileLog(ctx, "transcode: codec=${codec.name} size=${w}x$h")
             codec.configure(fmt, reader.surface, null, 0)
             codec.start()
+            WxDownloader.fileLog(ctx, "transcode: codec started")
 
             val info = MediaCodec.BufferInfo()
             val deadline = System.currentTimeMillis() + TIMEOUT_MS
@@ -264,18 +272,45 @@ object WxImageTranscoder {
     }
 
     private fun toBitmap(image: Image): Bitmap? {
-        val plane = image.planes.firstOrNull() ?: return null
-        val buffer = plane.buffer
-        buffer.rewind()
-        val pixelStride = plane.pixelStride
-        val rowStride = plane.rowStride
-        val rowPadding = rowStride - pixelStride * image.width
-        val paddedWidth = image.width + rowPadding / pixelStride
-        val full = Bitmap.createBitmap(paddedWidth, image.height, Bitmap.Config.ARGB_8888)
-        full.copyPixelsFromBuffer(buffer)
-        if (paddedWidth == image.width) return full
-        val cropped = Bitmap.createBitmap(full, 0, 0, image.width, image.height)
-        full.recycle()
-        return cropped
+        if (image.planes.size < 3) return null
+        val w = image.width
+        val h = image.height
+        val yPlane = image.planes[0]
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
+
+        val yBuf = yPlane.buffer
+        val uBuf = uPlane.buffer
+        val vBuf = vPlane.buffer
+        val y = ByteArray(yBuf.remaining()).also { yBuf.get(it) }
+        val u = ByteArray(uBuf.remaining()).also { uBuf.get(it) }
+        val v = ByteArray(vBuf.remaining()).also { vBuf.get(it) }
+
+        val yRowStride = yPlane.rowStride
+        val uvRowStride = uPlane.rowStride
+        val uvPixelStride = uPlane.pixelStride
+        if (yRowStride <= 0 || uvRowStride <= 0 || uvPixelStride <= 0) return null
+
+        val out = IntArray(w * h)
+        var idx = 0
+        for (row in 0 until h) {
+            val yBase = row * yRowStride
+            val uvBase = (row / 2) * uvRowStride
+            if (yBase + w > y.size) return null
+            for (col in 0 until w) {
+                val yv = y[yBase + col].toInt() and 0xFF
+                val uvOff = uvBase + (col / 2) * uvPixelStride
+                if (uvOff >= u.size || uvOff >= v.size) return null
+                val uv = (u[uvOff].toInt() and 0xFF) - 128
+                val vv = (v[uvOff].toInt() and 0xFF) - 128
+                val r = yv + (1.370705f * vv).toInt()
+                val g = yv - (0.337633f * uv).toInt() - (0.698001f * vv).toInt()
+                val b = yv + (1.732446f * uv).toInt()
+                out[idx++] = (0xFF shl 24) or (clamp(r) shl 16) or (clamp(g) shl 8) or clamp(b)
+            }
+        }
+        return Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888)
     }
+
+    private fun clamp(v: Int): Int = if (v < 0) 0 else if (v > 255) 255 else v
 }
