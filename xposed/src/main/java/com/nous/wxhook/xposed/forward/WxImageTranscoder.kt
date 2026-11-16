@@ -68,7 +68,11 @@ object WxImageTranscoder {
             )
             out
         } catch (e: Throwable) {
-            WxDownloader.fileLog(ctx, "transcode failed ${src.name}: ${e.javaClass.simpleName} ${e.message}")
+            WxDownloader.fileLog(
+                ctx,
+                "transcode failed ${src.name}: ${e.javaClass.simpleName} ${e.message}\n" +
+                    e.stackTraceToString().lines().take(8).joinToString("\n")
+            )
             null
         }
     }
