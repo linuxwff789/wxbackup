@@ -125,10 +125,17 @@ object ForwardSender {
             }
         }
         if (autoFetchOriginal && (localMedia == null || thumbOnly) &&
-            mediaKind == ForwardProtocol.MEDIA_IMAGE && parsed.mediaMd5.length >= 8
+            mediaKind == ForwardProtocol.MEDIA_IMAGE && ex.msgSvrId > 0
         ) {
             val md5 = parsed.mediaMd5
-            WxDownloader.downloadImage(ctx, ex.talker, ex.msgId, ex.msgSvrId, md5) { file ->
+            val fetch: ((File?) -> Unit) -> Boolean = { cb ->
+                if (md5.length >= 8) {
+                    WxDownloader.downloadImage(ctx, ex.talker, ex.msgId, ex.msgSvrId, md5, cb)
+                } else {
+                    WxDownloader.downloadOriginal(ctx, ex.talker, ex.msgSvrId, ex.msgId, cb)
+                }
+            }
+            fetch { file ->
                 if (file != null) {
                     WxDownloader.publishUpdate(
                         ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,
@@ -376,8 +383,16 @@ object ForwardSender {
                     }
                 }
             }
-            if ((localMedia == null || thumbOnly) && mediaKind == ForwardProtocol.MEDIA_IMAGE && parsed.mediaMd5.length >= 8) {
-                WxDownloader.downloadImage(ctx, ex.talker, ex.msgId, ex.msgSvrId, parsed.mediaMd5) { file ->
+            if ((localMedia == null || thumbOnly) && mediaKind == ForwardProtocol.MEDIA_IMAGE && ex.msgSvrId > 0) {
+                val md5 = parsed.mediaMd5
+                val fetch: ((File?) -> Unit) -> Boolean = { cb ->
+                    if (md5.length >= 8) {
+                        WxDownloader.downloadImage(ctx, ex.talker, ex.msgId, ex.msgSvrId, md5, cb)
+                    } else {
+                        WxDownloader.downloadOriginal(ctx, ex.talker, ex.msgSvrId, ex.msgId, cb)
+                    }
+                }
+                fetch { file ->
                     if (file != null) {
                         WxDownloader.publishUpdate(
                             ctx, ex.talker, talkerTitle, ex.isSend, ex.msgId, ex.msgSvrId,

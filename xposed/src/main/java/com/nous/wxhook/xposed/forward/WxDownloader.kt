@@ -141,6 +141,81 @@ object WxDownloader {
         }
     }
 
+    /** ImgInfo2 里 bigImgPath 可能只是文件名，需要按 image2/xx/yy/ 拼。 */
+    private fun resolveImage2(rel: String): File? {
+        if (rel.isBlank()) return null
+        val candidates = ArrayList<String>()
+        candidates.add(rel)
+        if (!rel.contains('/')) {
+            val stem = rel.substringBefore('.').substringBefore('_')
+            if (stem.length >= 4) {
+                candidates.add("image2/${stem.take(2)}/${stem.drop(2).take(2)}/$rel")
+            }
+        }
+        return try {
+            File("/data/data/com.tencent.mm/MicroMsg").listFiles()?.forEach { d ->
+                candidates.forEach { c ->
+                    val f = File(d, c)
+                    if (f.isFile && f.length() > 0) return f
+                }
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * 不依赖消息 XML 里的 md5：直接让微信下载原图（ImgInfo2 + v61.j），
+     * 然后轮询 ImgInfo2 直到原图路径变成真实文件。
+     *
+     * 实测很多图片消息的 XML 没有 md5 属性，用 md5 做条件会完全跳过下载。
+     */
+    fun downloadOriginal(
+        ctx: Context?,
+        talker: String,
+        msgSvrId: Long,
+        msgId: Long,
+        onDone: (File?) -> Unit
+    ): Boolean {
+        if (ctx == null || msgSvrId <= 0) return false
+        val key = "orig|$msgSvrId"
+        if (downloading.putIfAbsent(key, true) != null) return false
+        val queued = try {
+            downloadViaImageService(ctx, msgSvrId, talker)
+        } catch (e: Throwable) {
+            fileLog(ctx, "downloadOriginal enqueue failed: ${e.message}")
+            false
+        }
+        Thread({
+            var f: File? = null
+            val deadline = System.currentTimeMillis() + 30_000
+            while (System.currentTimeMillis() < deadline) {
+                val rel = findImgInfo2Original(ctx, msgSvrId)
+                if (rel != null) {
+                    val cand = resolveImage2(rel)
+                    if (cand != null) {
+                        f = cand
+                        break
+                    }
+                }
+                try {
+                    Thread.sleep(800)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+            downloading.remove(key)
+            fileLog(
+                ctx,
+                "downloadOriginal svr=$msgSvrId msgId=$msgId queued=$queued -> " +
+                    (f?.let { "${it.absolutePath}(${it.length()})" } ?: "null")
+            )
+            onDone(f)
+        }, "wxnotes-orig-$msgSvrId").apply { isDaemon = true }.start()
+        return queued
+    }
+
     /**
      * 照 WeKit：查 ImgInfo2 拿到原图行 localId，调用 v61.j（DownloadImageService）
      * 的 b(long,MsgIdTalker,int,Object,int,w,int,boolean) 触发微信原生下载。
