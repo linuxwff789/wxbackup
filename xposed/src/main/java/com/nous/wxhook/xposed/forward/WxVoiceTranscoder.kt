@@ -41,23 +41,20 @@ object WxVoiceTranscoder {
      */
     private fun findDecoder(ctx: Context): File? {
         cachedExe?.let { if (it.isFile) return it }
-        // 1) 模块类自己的 codeSource 指向模块 APK，最可靠（不受包可见性 / SELinux 影响）
+        // 1) /proc/self/maps 里能找到模块 APK 的映射（Xposed 的 ClassLoader 没有 codeSource）
         runCatching {
-            val loc = WxVoiceTranscoder::class.java.protectionDomain?.codeSource?.location
-            WxDownloader.fileLog(ctx, "silk codeSource=$loc")
-            if (loc != null) {
-                val raw = loc.toString()
-                    .removePrefix("jar:")
-                    .removePrefix("file:")
-                    .substringBefore("!/")
-                val apk = File(raw)
-                if (apk.isFile) {
-                    val f = File(apk.parentFile, "lib/arm64/libsilkdec.so")
-                    if (f.isFile) {
-                        cachedExe = f
-                        WxDownloader.fileLog(ctx, "silk decoder(codeSource): ${f.absolutePath}")
-                        return f
-                    }
+            val line = File("/proc/self/maps").readLines()
+                .firstOrNull { it.contains("com.nous.wxhook") }
+            WxDownloader.fileLog(ctx, "silk maps=${line?.takeLast(120)}")
+            if (line != null) {
+                val path = line.trim().split(Regex("\\s+")).lastOrNull().orEmpty()
+                val apk = File(path)
+                val pkgDir = if (apk.name.endsWith(".apk")) apk.parentFile else apk.parentFile?.parentFile
+                val f = pkgDir?.let { File(it, "lib/arm64/libsilkdec.so") }
+                if (f != null && f.isFile) {
+                    cachedExe = f
+                    WxDownloader.fileLog(ctx, "silk decoder(maps): ${f.absolutePath}")
+                    return f
                 }
             }
         }
