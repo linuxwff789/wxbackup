@@ -54,14 +54,23 @@ class WebDavClient(
      */
     private fun resolveUrl(remote: String): String {
         val base = url.trimEnd('/')
+        val r = remote.trim()
         return when {
-            remote.startsWith("http://") || remote.startsWith("https://") -> remote
-            remote.startsWith("/") -> {
+            r.startsWith("http://") || r.startsWith("https://") -> r
+            r.startsWith("/") -> {
                 val origin = Regex("^(https?://[^/]+)").find(base)?.groupValues?.get(1) ?: base
-                "$origin$remote"
+                "$origin$r"
             }
-            else -> "$base/$remote"
+            r.isEmpty() -> "$base/"
+            else -> "$base/${r.trimStart('/')}"
         }
+    }
+
+    /** PROPFIND 返回的 href 是 percent-encoded 的（中文/空格/括号），解码后才能和本地文件名比对。 */
+    private fun decodeHref(href: String): String = try {
+        java.net.URLDecoder.decode(href.replace("+", "%2B"), "UTF-8")
+    } catch (_: Exception) {
+        href
     }
 
     /** 解析 WebDAV 返回的 HTTP 日期（如 "Wed, 23 Jul 2025 07:35:01 GMT"）为毫秒时间戳 */
@@ -82,8 +91,9 @@ class WebDavClient(
 
     override suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val body = """<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>"""
-            val fullUrl = "${url.trimEnd('/')}/"
+            // allprop 在部分服务器（坚果云等）会 400，propname 兼容性最好
+            val body = """<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:propname/></D:propfind>"""
+            val fullUrl = resolveUrl("")
             val requestBody = body.toRequestBody("application/xml".toMediaType())
             val request = Request.Builder()
                 .url(fullUrl)
@@ -91,10 +101,11 @@ class WebDavClient(
                 .header("Depth", "0")
                 .method("PROPFIND", requestBody)
                 .build()
-            val response = client.newCall(request).execute()
-            // 207 Multi-Status = PROPFIND success, 200 = OK
-            if (response.code in 200..299 || response.code == 207) Result.success(Unit)
-            else Result.failure(Exception("WebDAV PROPFIND failed: ${response.code}"))
+            client.newCall(request).execute().use { response ->
+                // 207 Multi-Status = PROPFIND success, 200 = OK
+                if (response.code in 200..299 || response.code == 207) Result.success(Unit)
+                else Result.failure(Exception("WebDAV PROPFIND failed: ${response.code}"))
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -102,15 +113,27 @@ class WebDavClient(
 
     override suspend fun ensureDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val fullUrl = "${url.trimEnd('/')}/$path"
-            val request = Request.Builder()
-                .url(fullUrl)
-                .header("Authorization", authHeader())
-                .method("MKCOL", null)
-                .build()
-            val response = client.newCall(request).execute()
-            if (response.code in 200..299 || response.code == 405) Result.success(Unit)
-            else Result.failure(Exception("MKCOL failed: ${response.code}"))
+            // 远端目录可能是多级（wxhook-backup/phone），MKCOL 不支持自动创建父目录，逐级建
+            var acc = ""
+            var lastError: String? = null
+            for (seg in path.split('/').filter { it.isNotBlank() }) {
+                acc = if (acc.isEmpty()) seg else "$acc/$seg"
+                val request = Request.Builder()
+                    .url(resolveUrl(acc))
+                    .header("Authorization", authHeader())
+                    .method("MKCOL", null)
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    // 201 Created / 200-299 ok；405 Already Exists 也算成功
+                    if (response.code !in 200..299 && response.code != 405) {
+                        // 409 Conflict 一般是父目录权限问题；继续尝试下一级没有意义
+                        lastError = "MKCOL $acc failed: ${response.code}"
+                    }
+                }
+                if (lastError != null) break
+            }
+            if (lastError != null) Result.failure(Exception(lastError))
+            else Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -125,7 +148,7 @@ class WebDavClient(
                 </D:propfind>
             """.trimIndent()
 
-            val fullUrl = "${url.trimEnd('/')}/$remote"
+            val fullUrl = resolveUrl(remote)
             val requestBody = body.toRequestBody("application/xml".toMediaType())
             val request = Request.Builder()
                 .url(fullUrl)
@@ -149,7 +172,10 @@ class WebDavClient(
                 val xml = block.groupValues[1]
                 val hrefMatch = Regex("<[a-zA-Z0-9-]+:?href>([^<]+)</[a-zA-Z0-9-]+:?href>").find(xml)
                     ?: continue
-                val href = hrefMatch.groupValues[1]
+                val rawHref = hrefMatch.groupValues[1]
+                // 目录的 href 以 / 结尾，跳过（Syncer 只关心归档文件）
+                if (rawHref.endsWith("/")) continue
+                val href = decodeHref(rawHref)
                 val name = href.trimEnd('/').substringAfterLast('/')
                 if (name.isNotEmpty()) {
                     val size = Regex("<[a-zA-Z0-9-]+:?getcontentlength>([0-9]+)</[a-zA-Z0-9-]+:?getcontentlength>")
@@ -168,7 +194,7 @@ class WebDavClient(
     override suspend fun upload(local: File, remote: String, onProgress: ((uploaded: Long, total: Long) -> Unit)?): Result<RemoteObject> = withContext(Dispatchers.IO) {
         try {
             val body = ProgressRequestBody(local, onProgress)
-            val fullUrl = "${url.trimEnd('/')}/$remote"
+            val fullUrl = resolveUrl(remote)
             val request = Request.Builder()
                 .url(fullUrl)
                 .header("Authorization", authHeader())
@@ -209,7 +235,7 @@ class WebDavClient(
 
     override suspend fun delete(remote: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val fullUrl = "${url.trimEnd('/')}/$remote"
+            val fullUrl = resolveUrl(remote)
             val request = Request.Builder()
                 .url(fullUrl)
                 .header("Authorization", authHeader())
@@ -223,24 +249,101 @@ class WebDavClient(
         }
     }
 
-    override suspend fun get(remotePath: String): Result<RemoteObject> {
-        return Result.failure(Exception("WebDAV get not implemented"))
+    /** HEAD 取文件大小/修改时间。 */
+    override suspend fun get(remotePath: String): Result<RemoteObject> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url(resolveUrl(remotePath))
+                .header("Authorization", authHeader())
+                .head()
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (response.code !in 200..299) {
+                    Result.failure(Exception("HEAD failed: ${response.code}"))
+                } else {
+                    Result.success(
+                        RemoteObject(
+                            remotePath,
+                            response.header("Content-Length")?.toLongOrNull() ?: 0L,
+                            parseHttpDate(response.header("Last-Modified").orEmpty())
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
+    private fun davMoveCopy(method: String, srcPath: String, dstPath: String, overwrite: Boolean): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url(resolveUrl(srcPath))
+                    .header("Authorization", authHeader())
+                    .header("Destination", resolveUrl(dstPath))
+                    .header("Overwrite", if (overwrite) "T" else "F")
+                    .method(method, null)
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (response.code in 200..299) Result.success(Unit)
+                    else Result.failure(Exception("$method failed: ${response.code}"))
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
     override suspend fun rename(remotePath: String, newName: String): Result<Unit> {
-        return Result.failure(Exception("WebDAV rename not implemented"))
+        val parent = remotePath.trimEnd('/').substringBeforeLast('/', "")
+        val dst = if (parent.isEmpty()) newName else "$parent/$newName"
+        return davMoveCopy("MOVE", remotePath, dst, overwrite = true)
     }
 
     override suspend fun move(srcPath: String, dstDirPath: String): Result<Unit> {
-        return Result.failure(Exception("WebDAV move not implemented"))
+        val name = srcPath.trimEnd('/').substringAfterLast('/')
+        return davMoveCopy("MOVE", srcPath, "$dstDirPath/$name", overwrite = true)
     }
 
     override suspend fun copy(srcPath: String, dstDirPath: String): Result<Unit> {
-        return Result.failure(Exception("WebDAV copy not implemented"))
+        val name = srcPath.trimEnd('/').substringAfterLast('/')
+        return davMoveCopy("COPY", srcPath, "$dstDirPath/$name", overwrite = true)
     }
 
-    override suspend fun getStorageDetails(): Result<Pair<Long, Long>> {
-        return Result.failure(Exception("WebDAV storage details not implemented"))
+    /** quota-available-bytes / quota-used-bytes（部分服务器不返回，失败时调用方自行忽略）。 */
+    override suspend fun getStorageDetails(): Result<Pair<Long, Long>> = withContext(Dispatchers.IO) {
+        try {
+            val body = """
+                <?xml version="1.0" encoding="utf-8"?>
+                <D:propfind xmlns:D="DAV:">
+                    <D:prop>
+                        <D:quota-available-bytes/>
+                        <D:quota-used-bytes/>
+                    </D:prop>
+                </D:propfind>
+            """.trimIndent()
+            val request = Request.Builder()
+                .url(resolveUrl(""))
+                .header("Authorization", authHeader())
+                .header("Depth", "0")
+                .method("PROPFIND", body.toRequestBody("application/xml".toMediaType()))
+                .build()
+            client.newCall(request).execute().use { response ->
+                val xml = response.body?.string().orEmpty()
+                if (response.code !in 200..299) return@use Result.failure(Exception("PROPFIND quota failed: ${response.code}"))
+                val avail = Regex("<[a-zA-Z0-9-]+:?quota-available-bytes>([0-9]+)<")
+                    .find(xml)?.groupValues?.get(1)?.toLongOrNull()
+                val used = Regex("<[a-zA-Z0-9-]+:?quota-used-bytes>([0-9]+)<")
+                    .find(xml)?.groupValues?.get(1)?.toLongOrNull()
+                if (avail == null || used == null) {
+                    Result.failure(Exception("服务器未返回配额信息"))
+                } else {
+                    Result.success(avail to used)
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 }
 
