@@ -459,6 +459,11 @@ object ForwardSender {
                 )
             }
         }
+        WxDownloader.fileLog(
+            ctx,
+            "forwardList size=${entries.size} ids=${entries.map { it.second.msgId }} " +
+                "svr=${entries.map { it.second.msgSvrId }} jsonLen=${batch.encode().length}"
+        )
         XposedBridge.log("$TAG forwardList size=${entries.size} talker=$talker title=${title.take(24)}")
         return entries.size
     }

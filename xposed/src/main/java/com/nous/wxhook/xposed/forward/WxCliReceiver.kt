@@ -199,6 +199,24 @@ class WxCliReceiver : BroadcastReceiver() {
                 }
             }
 
+            "save_list" -> {
+                val talker = intent.getStringExtra("talker").orEmpty()
+                val title = intent.getStringExtra("title").orEmpty()
+                val ids = intent.getStringExtra("msgIds").orEmpty()
+                    .split(",").mapNotNull { it.trim().toLongOrNull() }
+                if (talker.isBlank() || ids.isEmpty()) {
+                    "talker/msgIds required"
+                } else {
+                    val zi = Class.forName("oy0.k0", false, loader)
+                        .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
+                    val list = ids.mapNotNull { id ->
+                        runCatching { zi.invoke(null, talker, id) }.getOrNull()
+                    }
+                    val n = ForwardSender.forwardList(context, list, title)
+                    "saved=$n requested=${ids.size} resolved=${list.size}"
+                }
+            }
+
             "save_msg" -> {
                 val msgId = intent.getStringExtra("msgId")?.toLongOrNull() ?: 0L
                 val svrId = intent.getStringExtra("svrId")?.toLongOrNull() ?: 0L
