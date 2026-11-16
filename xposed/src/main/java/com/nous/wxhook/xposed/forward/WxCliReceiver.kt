@@ -88,20 +88,25 @@ class WxCliReceiver : BroadcastReceiver() {
                 val limit = intent.getStringExtra("limit")?.toIntOrNull() ?: 30
                 val rows = WeDb.query(
                     context,
-                    "SELECT username, displayName, unReadCount, msgType, createTime FROM rconversation " +
-                        "ORDER BY createTime DESC LIMIT $limit"
+                    "SELECT c.username, c.unReadCount, c.msgType, c.conversationTime, c.digest, " +
+                        "r.nickname, r.conRemark FROM rconversation c " +
+                        "LEFT JOIN rcontact r ON r.username = c.username " +
+                        "ORDER BY c.conversationTime DESC LIMIT $limit"
                 )
-                rows.joinToString("\n") { "${it["username"]} | ${it["displayName"]} | unread=${it["unReadCount"]}" }
+                rows.joinToString("\n") {
+                    "${it["username"]} | ${it["nickname"]} | remark=${it["conRemark"]} | " +
+                        "unread=${it["unReadCount"]} | ${it["digest"]}"
+                }
             }
 
             "list_contacts" -> {
                 val limit = intent.getStringExtra("limit")?.toIntOrNull() ?: 100
                 val rows = WeDb.query(
                     context,
-                    "SELECT username, nickname, remark, type FROM rcontact " +
+                    "SELECT username, nickname, conRemark, type FROM rcontact " +
                         "WHERE type != 4 ORDER BY nickname LIMIT $limit"
                 )
-                rows.joinToString("\n") { "${it["username"]} | ${it["nickname"]} | remark=${it["remark"]}" }
+                rows.joinToString("\n") { "${it["username"]} | ${it["nickname"]} | remark=${it["conRemark"]}" }
             }
 
             "get_messages" -> {
