@@ -496,8 +496,15 @@ object WxDownloader {
             } else if (p2 == String::class.java) {
                 attachId
             } else null
-            XposedBridge.log("$TAG Ud param2=${p2.name} msgInfo=${msgInfo != null}")
-            ud.invoke(jj, talker, msgInfo)
+            XposedBridge.log("$TAG Ud param1=${ud.parameterTypes[0].name} param2=${p2.name} msgInfo=${msgInfo != null}")
+            // 8.0.79 实测签名是 Ud(long, e9)：第一个参数是 localId/msgId，不是 talker
+            val p1 = ud.parameterTypes[0]
+            val arg1: Any = when (p1) {
+                java.lang.Long.TYPE -> msgId
+                java.lang.Integer.TYPE -> msgId.toInt()
+                else -> talker
+            }
+            ud.invoke(jj, arg1, msgInfo)
             XposedBridge.log("$TAG enqueued file download attachId=${attachId.take(40)} name=$fileName")
             Thread({
                 val f = waitForAttachment(fileName, expectedSize, 60_000)

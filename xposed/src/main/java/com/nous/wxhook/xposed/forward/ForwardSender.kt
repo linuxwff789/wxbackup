@@ -63,6 +63,7 @@ object ForwardSender {
             ?: WxDownloader.findImgInfo2Original(ctx, ex.msgSvrId)?.let { resolveUnderMicroMsg(it) }
             ?: candidates.firstOrNull { File(it).isFile && !isThumbnailPath(it) }
             ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
+            ?: findVideoFile(ex.createTime, ex.talker.endsWith("@chatroom"))
             ?: candidates.firstOrNull { File(it).isFile })
             ?.let { WxDownloader.displayable(ctx, File(it)).absolutePath }
         XposedBridge.log("$TAG local=$localMedia imgPath=${ex.imgPath} md5=${parsed.mediaMd5}")
@@ -339,6 +340,7 @@ object ForwardSender {
                     .filter { it.isNotBlank() }
                     .firstOrNull { File(it).isFile && !isThumbnailPath(it) }
                 ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
+                ?: findVideoFile(ex.createTime, ex.talker.endsWith("@chatroom"))
                 ?: listOf(ex.imgPath, ex.fileFullPath)
                     .filter { it.isNotBlank() }
                     .firstOrNull { File(it).isFile })
@@ -634,6 +636,34 @@ object ForwardSender {
             }
         }
         return candidates.firstOrNull { it.isFile && it.length() > 0 }?.absolutePath
+    }
+
+    /**
+     * 微信视频落在 MicroMsg/<hash>/video/，文件名是 NS<yyMMddHHmmss><ms>[chatroom].mp4
+     * （未下载时是 36 字节占位文件）。这里按消息时间戳匹配。
+     */
+    private fun findVideoFile(createTimeMs: Long, isGroup: Boolean): String? {
+        if (createTimeMs <= 0) return null
+        val sec = if (createTimeMs > 10_000_000_000L) createTimeMs / 1000 else createTimeMs
+        val stamp = java.text.SimpleDateFormat("yyMMddHHmm", java.util.Locale.US)
+            .format(java.util.Date(sec * 1000))
+        return try {
+            File("/data/data/com.tencent.mm/MicroMsg").listFiles()?.asSequence()
+                ?.map { File(it, "video") }
+                ?.filter { it.isDirectory }
+                ?.flatMap { it.listFiles()?.asSequence() ?: emptySequence() }
+                ?.filter { f ->
+                    f.isFile && f.name.endsWith(".mp4") &&
+                        f.length() > 1024 &&
+                        f.name.startsWith("NS") &&
+                        f.name.contains(stamp) &&
+                        (isGroup || !f.name.contains("chatroom"))
+                }
+                ?.maxByOrNull { it.lastModified() }
+                ?.absolutePath
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun guessKind(path: String): String {
