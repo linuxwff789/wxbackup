@@ -19,6 +19,7 @@ class NotesApp : Application() {
         cleanupInbox()
         Thread({
             runCatching { kotlinx.coroutines.runBlocking { repository.fixMisdetectedVoice() } }
+            runCatching { repository.applyMediaScanPolicy() }
         }, "wxnotes-fix-kinds").apply { isDaemon = true }.start()
     }
 

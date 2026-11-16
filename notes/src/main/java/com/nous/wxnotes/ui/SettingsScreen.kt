@@ -24,6 +24,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -38,6 +39,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.nous.wxnotes.NotesApp
 import com.nous.wxnotes.data.NotesRepository
 import com.nous.wxshared.ForwardProtocol
 
@@ -54,6 +56,9 @@ fun SettingsScreen(onBack: () -> Unit) {
         )
     }
     var saved by remember { mutableStateOf(false) }
+    var skipMediaScan by remember {
+        mutableStateOf(prefs.getBoolean(NotesRepository.KEY_SKIP_MEDIA_SCAN, true))
+    }
 
     Scaffold(
         topBar = {
@@ -100,6 +105,28 @@ fun SettingsScreen(onBack: () -> Unit) {
                     window = v.toString()
                     saved = true
                 }) { Text(if (saved) "已保存" else "保存") }
+            }
+
+            HorizontalDivider()
+
+            Text("媒体", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("跳过媒体扫描", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "在媒体目录放 .nomedia，转发的图片/视频不会出现在系统相册和图库",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = skipMediaScan,
+                    onCheckedChange = { checked ->
+                        skipMediaScan = checked
+                        prefs.edit().putBoolean(NotesRepository.KEY_SKIP_MEDIA_SCAN, checked).apply()
+                        NotesApp.instance.repository.applyMediaScanPolicy()
+                    }
+                )
             }
 
             HorizontalDivider()

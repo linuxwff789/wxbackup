@@ -27,6 +27,25 @@ class NotesRepository(private val context: Context) {
      * 媒体放公共目录，用户可以直接在文件管理器里看到/导出。
      * 没有全文件访问权限时回退到私有目录。
      */
+    /**
+     * 媒体目录默认放一个 .nomedia，系统相册/媒体库就不会扫描这些转发的图片和视频。
+     * 关掉开关时删掉 .nomedia。
+     */
+    fun applyMediaScanPolicy() {
+        val skip = context.getSharedPreferences("wxnotes", Context.MODE_PRIVATE)
+            .getBoolean(KEY_SKIP_MEDIA_SCAN, true)
+        runCatching {
+            val dir = mediaRoot()
+            if (!dir.isDirectory) return@runCatching
+            val marker = File(dir, ".nomedia")
+            if (skip) {
+                if (!marker.exists()) marker.writeText("")
+            } else {
+                marker.delete()
+            }
+        }
+    }
+
     private fun mediaRoot(): File {
         val ext = Environment.getExternalStorageDirectory() ?: return File(context.filesDir, "media")
         val dir = File(ext, "Download/wxnotes/media")
@@ -608,6 +627,7 @@ class NotesRepository(private val context: Context) {
         .take(60)
 
     companion object {
+        const val KEY_SKIP_MEDIA_SCAN = "skip_media_scan"
         const val KEY_AGGREGATE_WINDOW = "aggregate_window_min"
         const val DEFAULT_AGGREGATE_WINDOW = 30L
         const val KEY_KEEP_RAW = "keep_raw_xml"
