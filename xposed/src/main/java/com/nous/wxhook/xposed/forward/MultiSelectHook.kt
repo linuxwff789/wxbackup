@@ -300,31 +300,50 @@ object MultiSelectHook {
         }
     }
 
-    /** 从 ChattingContext 的 fragment 字段里找出 adapter.k 实例。 */
+    /** 从 ChattingContext 的 fragment 字段里找出 adapter.k 实例（不依赖混淆字段名）。 */
     private fun findAdapter(ctx: Any?): Any? {
         if (ctx == null) return null
         val adapterCls = "com.tencent.mm.ui.chatting.adapter.k"
-        val frags = ArrayList<Any>()
-        listOf("f35829l", "f35830m").forEach { n ->
-            readField(ctx, n)?.let { frags.add(it) }
-        }
-        for (frag in frags) {
-            readField(frag, "f201807s")?.let {
-                if (it.javaClass.name == adapterCls) return it
+        var k: Class<*>? = ctx.javaClass
+        var depth = 0
+        while (k != null && k != Any::class.java && depth < 5) {
+            for (f in k.declaredFields) {
+                val v = try {
+                    f.isAccessible = true
+                    f.get(ctx)
+                } catch (_: Throwable) {
+                    null
+                } ?: continue
+                if (v.javaClass.name == adapterCls) return v
+                val tn = v.javaClass.name
+                if (tn.contains("ChattingUIFragment") || tn == "com.tencent.mm.ui.chatting.hb") {
+                    adapterOf(v)?.let { return it }
+                }
             }
-            var k: Class<*>? = frag.javaClass
-            while (k != null && k != Any::class.java) {
-                k.declaredFields.forEach { f ->
-                    if (f.type.name == adapterCls) {
-                        try {
-                            f.isAccessible = true
-                            f.get(frag)?.let { return it }
-                        } catch (_: Throwable) {
-                        }
+            k = k.superclass
+            depth++
+        }
+        return null
+    }
+
+    private fun adapterOf(obj: Any): Any? {
+        val adapterCls = "com.tencent.mm.ui.chatting.adapter.k"
+        var k: Class<*>? = obj.javaClass
+        var depth = 0
+        while (k != null && k != Any::class.java && depth < 6) {
+            for (f in k.declaredFields) {
+                // 字段声明类型可能是接口 wl5.z，实际对象才是 adapter.k
+                if (f.type.name == adapterCls || f.type.name == "wl5.z") {
+                    try {
+                        f.isAccessible = true
+                        val v = f.get(obj)
+                        if (v != null && v.javaClass.name == adapterCls) return v
+                    } catch (_: Throwable) {
                     }
                 }
-                k = k.superclass
             }
+            k = k.superclass
+            depth++
         }
         return null
     }
@@ -445,6 +464,11 @@ object MultiSelectHook {
             val cls = Class.forName("com.tencent.mm.ui.chatting.adapter.k", false, loader)
             val m = cls.getMethod("getView", Int::class.javaPrimitiveType, android.view.View::class.java, android.view.ViewGroup::class.java)
             XposedBridge.hookMethod(m, object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    cachedAdapter = param.thisObject
+                }
+            })
+            XposedBridge.hookAllConstructors(cls, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     cachedAdapter = param.thisObject
                 }
