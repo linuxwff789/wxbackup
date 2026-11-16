@@ -107,7 +107,7 @@ object ForwardSender {
         }
         val thumbOnly = localMedia != null && isThumbnailPath(localMedia)
         XposedBridge.log("$TAG image thumbOnly=$thumbOnly local=$localMedia")
-        if (mediaKind == ForwardProtocol.MEDIA_IMAGE && (localMedia == null || thumbOnly) &&
+        if (false && mediaKind == ForwardProtocol.MEDIA_IMAGE && (localMedia == null || thumbOnly) &&
             parsed.mediaHint.isNotBlank()
         ) {
             XposedBridge.log("$TAG cdn branch hint=${parsed.mediaHint.take(24)} aesLen=${parsed.aesKey.length}")
@@ -356,7 +356,7 @@ object ForwardSender {
                 }
             }
             val thumbOnly = localMedia != null && isThumbnailPath(localMedia)
-            if ((localMedia == null || thumbOnly) && mediaKind == ForwardProtocol.MEDIA_IMAGE &&
+            if (false && (localMedia == null || thumbOnly) && mediaKind == ForwardProtocol.MEDIA_IMAGE &&
                 parsed.mediaHint.isNotBlank()
             ) {
                 XposedBridge.log("$TAG cdn branch hint=${parsed.mediaHint.take(24)} aesLen=${parsed.aesKey.length}")
