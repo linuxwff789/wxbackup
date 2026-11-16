@@ -292,7 +292,8 @@ object MultiSelectHook {
         return runCatching {
             val w = de.robv.android.xposed.XposedHelpers.getObjectField(adapter, "W") as? Collection<*>
             val items = (w?.toList() ?: emptyList()).mapNotNull { e -> e?.let { msgIdTalkerOf(it) } }
-            XposedBridge.log("$TAG adapter.W size=${w?.size} ids=${items.map { it.first }}")
+            XposedBridge.log("$TAG adapter.W size=${w?.size} elems=${(w?.toList() ?: emptyList()).map { it?.toString() }}")
+            XposedBridge.log("$TAG adapter.W ids=${items.map { it.first }} talkers=${items.map { it.second }}")
             items
         }.getOrElse {
             XposedBridge.log("$TAG adapter.W failed: ${it.message}")
@@ -348,16 +349,25 @@ object MultiSelectHook {
         return null
     }
 
-    /** MsgIdTalker: f149692d=msgId，另有 String 字段存 talker。 */
+    /**
+     * MsgIdTalker：jadx 显示 f149692d/f149693e，运行时字段名是 d(long msgId) / e(String talker)。
+     */
     private fun msgIdTalkerOf(o: Any): Pair<Long, String>? {
-        val id = (readField(o, "f149692d") as? Number)?.toLong() ?: return null
-        var talker = ""
-        runCatching {
-            o.javaClass.declaredFields.forEach { f ->
-                if (f.type == String::class.java) {
-                    f.isAccessible = true
-                    val s = f.get(o) as? String
-                    if (!s.isNullOrBlank() && (s.contains("@") || s.startsWith("wxid_"))) talker = s
+        val id = (readField(o, "d") as? Number)?.toLong()
+            ?: (readField(o, "f149692d") as? Number)?.toLong()
+            ?: (readField(o, "msgId") as? Number)?.toLong()
+            ?: return null
+        var talker = (readField(o, "e") as? String)
+            ?: (readField(o, "f149693e") as? String)
+            ?: ""
+        if (talker.isBlank()) {
+            runCatching {
+                o.javaClass.declaredFields.forEach { f ->
+                    if (f.type == String::class.java) {
+                        f.isAccessible = true
+                        val s = f.get(o) as? String
+                        if (!s.isNullOrBlank() && (s.contains("@") || s.startsWith("wxid_"))) talker = s
+                    }
                 }
             }
         }
