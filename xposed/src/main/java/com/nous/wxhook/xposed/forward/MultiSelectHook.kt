@@ -281,10 +281,14 @@ object MultiSelectHook {
      * 不能靠 ctx.a(wl5.z)（那个接口有多个实现，拿到的不是 adapter）。
      */
     private fun selectedItems(ctx: Any?): List<Pair<Long, String>> {
-        val adapter = cachedAdapter ?: findAdapter(ctx)?.also {
-            cachedAdapter = it
-            XposedBridge.log("$TAG adapter resolved via fragment: ${it.javaClass.name}")
-        }
+        // 必须用"当前会话"的 adapter：cachedAdapter 可能是上一个聊天窗口的实例，
+        // 它的 W 是空的（切换会话后不会清空缓存，会导致误判"没有选中消息"）。
+        val adapter = findAdapter(ctx)?.also {
+            if (cachedAdapter !== it) {
+                cachedAdapter = it
+                XposedBridge.log("$TAG adapter resolved via fragment: ${it.javaClass.name}")
+            }
+        } ?: cachedAdapter
         if (adapter == null) {
             XposedBridge.log("$TAG adapter not found (ctx=${ctx?.javaClass?.name})")
             return emptyList()
