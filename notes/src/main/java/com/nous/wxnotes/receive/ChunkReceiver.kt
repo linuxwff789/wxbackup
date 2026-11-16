@@ -40,6 +40,7 @@ class ChunkReceiver : BroadcastReceiver() {
         try {
             val request = OneTimeWorkRequestBuilder<AssembleChunkWorker>()
                 .setInputData(workDataOf(AssembleChunkWorker.KEY_TRANSFER_ID to transferId))
+                .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(

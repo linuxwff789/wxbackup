@@ -41,6 +41,7 @@ class BatchReceiver : BroadcastReceiver() {
         try {
             val request = OneTimeWorkRequestBuilder<ImportWorker>()
                 .setInputData(workDataOf(ImportWorker.KEY_PATH to path))
+                .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
                 .build()
             WorkManager.getInstance(context).enqueue(request)
