@@ -414,6 +414,7 @@ private fun MessageRow(
     val clipboard = LocalClipboardManager.current
     var menuOpen by remember(m.id) { mutableStateOf(false) }
     var confirmDelete by remember(m.id) { mutableStateOf(false) }
+    var videoFullscreen by remember(m.id) { mutableStateOf(false) }
     val parsed = remember(m.id) {
         if (m.rawXml.isNotBlank()) WxMessageParser.parse(m.type, m.rawXml, m.subType) else null
     }
@@ -492,7 +493,34 @@ private fun MessageRow(
                     )
                 }
             }
+            // 视频的操作条放在气泡外面，气泡才能刚好贴合画面
+            if (m.mediaKind == ForwardProtocol.MEDIA_VIDEO && m.mediaPath.isNotBlank()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        listOfNotNull(
+                            WxMessageParser.formatSize(m.fileSize).takeIf { it.isNotBlank() },
+                            WxMessageParser.formatDuration(m.durationMs).takeIf { it.isNotBlank() }
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { videoFullscreen = true }) {
+                        Text("全屏", style = MaterialTheme.typography.labelSmall)
+                    }
+                    TextButton(onClick = {
+                        if (m.mediaPath.isNotBlank()) openLocalFile(context, m.mediaPath, "video", m.fileName)
+                    }) { Text("外部打开", style = MaterialTheme.typography.labelSmall) }
+                }
+            }
         }
+    }
+
+    if (videoFullscreen) {
+        FullscreenVideoDialog(path = m.mediaPath, onDismiss = { videoFullscreen = false })
     }
 
     if (confirmDelete) {
@@ -651,59 +679,22 @@ private fun PendingMedia(m: MessageEntity) {
     }
 }
 
-/** 笔记内直接播放视频：按原始比例显示，支持全屏。 */
+/** 只负责画面：按原始比例测量，宽度由视频自己决定（父容器 wrapContent），气泡才能贴合。 */
 @Composable
 private fun VideoContent(m: MessageEntity) {
-    val context = LocalContext.current
-    var fullscreen by remember { mutableStateOf(false) }
-
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            androidx.compose.ui.viewinterop.AndroidView(
-                factory = { ctx ->
-                    AspectVideoView(ctx).apply {
-                        setVideoPath(m.mediaPath)
-                        val mc = android.widget.MediaController(ctx)
-                        mc.setAnchorView(this)
-                        setMediaController(mc)
-                    }
-                },
-                // wrapContentSize 让 AndroidView 采用 AspectVideoView 自己量出来的尺寸，
-                // 气泡就能正好贴合视频，不会出现左右留白或黑边
-                modifier = Modifier
-                    .heightIn(max = 340.dp)
-                    .wrapContentSize(Alignment.Center)
-                    .clip(RoundedCornerShape(8.dp))
-            )
-        }
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                listOfNotNull(
-                    WxMessageParser.formatSize(m.fileSize).takeIf { it.isNotBlank() },
-                    WxMessageParser.formatDuration(m.durationMs).takeIf { it.isNotBlank() }
-                ).joinToString(" · "),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = { fullscreen = true }) {
-                Text("全屏", style = MaterialTheme.typography.labelSmall)
+    androidx.compose.ui.viewinterop.AndroidView(
+        factory = { ctx ->
+            AspectVideoView(ctx).apply {
+                setVideoPath(m.mediaPath)
+                val mc = android.widget.MediaController(ctx)
+                mc.setAnchorView(this)
+                setMediaController(mc)
             }
-            TextButton(onClick = {
-                if (m.mediaPath.isNotBlank()) openLocalFile(context, m.mediaPath, "video", m.fileName)
-            }) { Text("外部打开", style = MaterialTheme.typography.labelSmall) }
-        }
-    }
-
-    if (fullscreen) {
-        FullscreenVideoDialog(
-            path = m.mediaPath,
-            onDismiss = { fullscreen = false }
-        )
-    }
+        },
+        modifier = Modifier
+            .heightIn(max = 340.dp)
+            .wrapContentSize(Alignment.Center)
+    )
 }
 
 @Composable
