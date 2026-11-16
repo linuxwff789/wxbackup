@@ -29,17 +29,46 @@ object WxVoiceTranscoder {
         }
     }
 
-    fun transcode(ctx: Context, src: File): File? {
-        // 注意：ctx 是微信进程的 Context，applicationInfo.nativeLibraryDir 指向微信自己的 lib 目录；
-        // silk 解码器在模块 APK 里，必须按模块包名取。
-        val exe = try {
+    @Volatile
+    private var cachedExe: File? = null
+
+    /**
+     * 解码器在模块 APK 的 nativeLibraryDir。
+     *
+     * 注意：ctx 是微信进程的 Context，`applicationInfo.nativeLibraryDir` 是微信自己的 lib 目录；
+     * 而微信进程受 Android 11+ 包可见性限制，`packageManager.getApplicationInfo(模块包名)` 会抛异常。
+     * 所以直接扫描 /data/app 下的模块目录（/data/app 是 711，lib 目录 755，可读可执行）。
+     */
+    private fun findDecoder(ctx: Context): File? {
+        cachedExe?.let { if (it.isFile) return it }
+        runCatching {
             val info = ctx.packageManager.getApplicationInfo("com.nous.wxhook.xposed", 0)
-            File(info.nativeLibraryDir, "libsilkdec.so")
-        } catch (_: Throwable) {
-            File(ctx.applicationInfo.nativeLibraryDir, "libsilkdec.so")
+            val f = File(info.nativeLibraryDir, "libsilkdec.so")
+            if (f.isFile) {
+                cachedExe = f
+                return f
+            }
         }
-        if (!exe.isFile) {
-            WxDownloader.fileLog(ctx, "silk decoder missing: ${exe.absolutePath}")
+        runCatching {
+            File("/data/app").listFiles()?.forEach { hashDir ->
+                hashDir.listFiles()?.forEach { pkgDir ->
+                    if (!pkgDir.name.startsWith("com.nous.wxhook.xposed")) return@forEach
+                    val f = File(pkgDir, "lib/arm64/libsilkdec.so")
+                    if (f.isFile) {
+                        cachedExe = f
+                        WxDownloader.fileLog(ctx, "silk decoder: ${f.absolutePath}")
+                        return f
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    fun transcode(ctx: Context, src: File): File? {
+        val exe = findDecoder(ctx)
+        if (exe == null) {
+            WxDownloader.fileLog(ctx, "silk decoder missing")
             return null
         }
         val stamp = System.currentTimeMillis()
