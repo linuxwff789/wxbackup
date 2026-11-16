@@ -418,7 +418,9 @@ private fun MessageRow(m: MessageEntity, note: NoteEntity, onImageClick: (String
                 color = if (mine) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
             ) {
-                Column(modifier = Modifier.padding(10.dp)) {
+                // 视频要有画面贴边的效果：气泡内不留 padding，由视频自己按比例撑满
+                val videoFullBleed = m.mediaKind == ForwardProtocol.MEDIA_VIDEO && m.mediaPath.isNotBlank()
+                Column(modifier = Modifier.padding(if (videoFullBleed) 0.dp else 10.dp)) {
                     MessageContent(m, parsed?.url.orEmpty(), note, onImageClick)
                 }
             }
@@ -614,8 +616,10 @@ private fun VideoContent(m: MessageEntity) {
                     .clip(RoundedCornerShape(8.dp))
             )
         }
-        Spacer(Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(
                 listOfNotNull(
                     WxMessageParser.formatSize(m.fileSize).takeIf { it.isNotBlank() },
