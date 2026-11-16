@@ -109,7 +109,12 @@ class NotesRepository(private val context: Context) {
                 val newerMedia = m.mediaBase64.isNotBlank() ||
                     (m.localPath.isNotBlank() && !m.localPath.startsWith("lss://") && !m.localPath.startsWith("http"))
                 val currentMissing = existing.mediaPath.isBlank() || !File(existing.mediaPath).exists()
-                if (newerMedia && currentMissing) {
+                // 缩略图先落盘、原图后到的情况：文件存在但很小，也要用更大的原图覆盖
+                val actualSize = if (existing.mediaPath.isNotBlank() && !currentMissing) {
+                    runCatching { File(existing.mediaPath).length() }.getOrDefault(0L)
+                } else 0L
+                val betterMedia = newerMedia && m.fileSize > 0 && m.fileSize > actualSize
+                if (newerMedia && (currentMissing || betterMedia)) {
                     val newPath = importMedia(noteId, m, mediaKind)
                     if (newPath.isNotBlank()) {
                         messageDao.updateMedia(
