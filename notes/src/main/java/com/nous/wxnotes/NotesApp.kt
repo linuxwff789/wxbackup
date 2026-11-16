@@ -17,6 +17,9 @@ class NotesApp : Application() {
         repository = NotesRepository(this)
         createChannels()
         cleanupInbox()
+        Thread({
+            runCatching { kotlinx.coroutines.runBlocking { repository.fixMisdetectedVoice() } }
+        }, "wxnotes-fix-kinds").apply { isDaemon = true }.start()
     }
 
     /** 插件写进 files/inbox 的临时文件，导入后删除；这里兜底清理超过 1 小时的残留。 */

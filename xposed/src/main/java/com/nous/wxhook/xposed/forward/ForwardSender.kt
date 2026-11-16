@@ -63,8 +63,10 @@ object ForwardSender {
             ?: WxDownloader.findImgInfo2Original(ctx, ex.msgSvrId)?.let { resolveUnderMicroMsg(it) }
             ?: candidates.firstOrNull { File(it).isFile && !isThumbnailPath(it) }
             ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind, parsed.fileSize)
-            ?: findVideoFile(ex.createTime, ex.talker.endsWith("@chatroom"))
-            ?: findVoiceFile(ex.createTime)
+            ?: if (parsed.type == WxMessageParser.TYPE_VIDEO) {
+                findVideoFile(ex.createTime, ex.talker.endsWith("@chatroom"))
+            } else null
+            ?: if (parsed.type == WxMessageParser.TYPE_VOICE) findVoiceFile(ex.createTime) else null
             ?: candidates.firstOrNull { File(it).isFile })
             ?.let { WxDownloader.displayable(ctx, File(it)).absolutePath }
         XposedBridge.log("$TAG local=$localMedia imgPath=${ex.imgPath} md5=${parsed.mediaMd5}")
@@ -94,7 +96,12 @@ object ForwardSender {
                     MediaServer.uriFor(localMedia)?.let { mediaUrl = it }
                 }
             }
-            if (mediaKind == ForwardProtocol.MEDIA_NONE) mediaKind = guessKind(localMedia)
+            if (mediaKind == ForwardProtocol.MEDIA_NONE &&
+                parsed.type != WxMessageParser.TYPE_TEXT &&
+                parsed.type != WxMessageParser.TYPE_SYSTEM
+            ) {
+                mediaKind = guessKind(localMedia)
+            }
         }
 
         val createTime = if (ex.createTime > 10_000_000_000L) ex.createTime / 1000 else ex.createTime
@@ -341,8 +348,10 @@ object ForwardSender {
                     .filter { it.isNotBlank() }
                     .firstOrNull { File(it).isFile && !isThumbnailPath(it) }
                 ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind, parsed.fileSize)
-                ?: findVideoFile(ex.createTime, ex.talker.endsWith("@chatroom"))
-            ?: findVoiceFile(ex.createTime)
+                ?: if (parsed.type == WxMessageParser.TYPE_VIDEO) {
+                    findVideoFile(ex.createTime, ex.talker.endsWith("@chatroom"))
+                } else null
+                ?: if (parsed.type == WxMessageParser.TYPE_VOICE) findVoiceFile(ex.createTime) else null
                 ?: listOf(ex.imgPath, ex.fileFullPath)
                     .filter { it.isNotBlank() }
                     .firstOrNull { File(it).isFile })
@@ -367,7 +376,12 @@ object ForwardSender {
                         MediaServer.uriFor(localMedia)?.let { mediaUrl = it }
                     }
                 }
-                if (mediaKind == ForwardProtocol.MEDIA_NONE) mediaKind = guessKind(localMedia)
+                if (mediaKind == ForwardProtocol.MEDIA_NONE &&
+                parsed.type != WxMessageParser.TYPE_TEXT &&
+                parsed.type != WxMessageParser.TYPE_SYSTEM
+            ) {
+                mediaKind = guessKind(localMedia)
+            }
             }
             val createTime = if (ex.createTime > 10_000_000_000L) ex.createTime / 1000 else ex.createTime
             if (localMedia == null && mediaKind == ForwardProtocol.MEDIA_FILE && parsed.attachId.isNotBlank()) {

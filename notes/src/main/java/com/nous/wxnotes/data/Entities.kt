@@ -182,6 +182,15 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE id=:id")
     suspend fun deleteById(id: Long)
+
+    /** 旧版本把文本消息按时间就近误配成语音（mediaKind=voice），这里一次性纠正。 */
+    @Query(
+        """
+        UPDATE messages SET mediaPath='', mediaKind='', fileName='', fileSize=0
+        WHERE type=:textType AND mediaKind=:voiceKind
+        """
+    )
+    suspend fun clearMisdetectedVoice(textType: Int, voiceKind: String)
 }
 
 @Dao

@@ -498,7 +498,9 @@ private fun MessageRow(
                 }
             }
             // 视频的操作条放在气泡外面，气泡才能刚好贴合画面
-            if (m.mediaKind == ForwardProtocol.MEDIA_VIDEO && m.mediaPath.isNotBlank()) {
+            if (m.mediaKind == ForwardProtocol.MEDIA_VIDEO && m.mediaPath.isNotBlank() &&
+                File(m.mediaPath).let { it.isFile && it.length() >= MIN_VIDEO_BYTES }
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                     verticalAlignment = Alignment.CenterVertically

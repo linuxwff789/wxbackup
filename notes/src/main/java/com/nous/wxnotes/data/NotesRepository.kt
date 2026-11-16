@@ -417,6 +417,13 @@ class NotesRepository(private val context: Context) {
         ids.forEach { deleteNoteInternal(it) }
     }
 
+    /** 修掉历史数据里"文本消息被误标为语音"的记录（旧版 findVoiceFile 按时间硬匹配导致）。 */
+    suspend fun fixMisdetectedVoice() = withContext(Dispatchers.IO) {
+        runCatching {
+            messageDao.clearMisdetectedVoice(WxMessageParser.TYPE_TEXT, ForwardProtocol.MEDIA_VOICE)
+        }
+    }
+
     /** 删除单条消息（长按菜单用）：连带删掉它的媒体文件；笔记空了就把笔记也删掉。 */
     suspend fun deleteMessage(noteId: Long, messageId: Long) = withContext(Dispatchers.IO) {
         val msg = messageDao.getById(messageId)
