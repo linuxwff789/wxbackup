@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -605,9 +606,11 @@ private fun VideoContent(m: MessageEntity) {
                         setMediaController(mc)
                     }
                 },
+                // wrapContentSize 让 AndroidView 采用 AspectVideoView 自己量出来的尺寸，
+                // 气泡就能正好贴合视频，不会出现左右留白或黑边
                 modifier = Modifier
-                    .fillMaxWidth()
                     .heightIn(max = 340.dp)
+                    .wrapContentSize(Alignment.Center)
                     .clip(RoundedCornerShape(8.dp))
             )
         }
