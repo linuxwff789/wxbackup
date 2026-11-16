@@ -62,7 +62,7 @@ object ForwardSender {
         val localMedia = (findImageByMd5(parsed.mediaMd5)
             ?: WxDownloader.findImgInfo2Original(ctx, ex.msgSvrId)?.let { resolveUnderMicroMsg(it) }
             ?: candidates.firstOrNull { File(it).isFile && !isThumbnailPath(it) }
-            ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
+            ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind, parsed.fileSize)
             ?: findVideoFile(ex.createTime, ex.talker.endsWith("@chatroom"))
             ?: candidates.firstOrNull { File(it).isFile })
             ?.let { WxDownloader.displayable(ctx, File(it)).absolutePath }
@@ -339,7 +339,7 @@ object ForwardSender {
                 ?: listOf(ex.imgPath, ex.fileFullPath)
                     .filter { it.isNotBlank() }
                     .firstOrNull { File(it).isFile && !isThumbnailPath(it) }
-                ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
+                ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind, parsed.fileSize)
                 ?: findVideoFile(ex.createTime, ex.talker.endsWith("@chatroom"))
                 ?: listOf(ex.imgPath, ex.fileFullPath)
                     .filter { it.isNotBlank() }
@@ -620,22 +620,38 @@ object ForwardSender {
 
     /** 本地路径拿不到时，按文件名在微信数据目录里兜底查找（下载过的文件/图片）。 */
     /**
-     * 微信的附件实际落在 MicroMsg/<用户hash>/attachment/<原文件名>（或 Download/），
-     * 老的固定路径 MicroMsg/attachment 不存在，导致文件消息一直没带上附件。
+     * 微信的附件实际落在 MicroMsg/<用户hash>/attachment/<原文件名>（重名时会有 1_xxx、2_xxx）。
+     * 同名文件可能有多个副本，按消息里给的大小挑最接近的那个，避免拿到 20KB 的预览版。
      */
-    private fun findMediaFile(name: String, kind: String): String? {
+    private fun findMediaFile(name: String, kind: String, expectedSize: Long = 0): String? {
         if (name.isBlank()) return null
         val micro = File("/data/data/com.tencent.mm/MicroMsg")
+        val variants = ArrayList<String>()
+        variants.add(name)
+        for (i in 1..3) variants.add("${i}_$name")
         val candidates = ArrayList<File>()
-        candidates.add(File(micro, "Download/$name"))
+        variants.forEach { v ->
+            candidates.add(File(micro, "Download/$v"))
+            candidates.add(File(micro, v))
+        }
         micro.listFiles()?.forEach { d ->
             if (d.isDirectory) {
-                candidates.add(File(d, "attachment/$name"))
-                candidates.add(File(d, "Download/$name"))
-                candidates.add(File(d, name))
+                variants.forEach { v ->
+                    candidates.add(File(d, "attachment/$v"))
+                    candidates.add(File(d, "Download/$v"))
+                    candidates.add(File(d, v))
+                }
             }
         }
-        return candidates.firstOrNull { it.isFile && it.length() > 0 }?.absolutePath
+        val matches = candidates.filter { it.isFile && it.length() > 0 }
+        if (matches.isEmpty()) return null
+        val best = if (expectedSize > 0) {
+            matches.firstOrNull { it.length() == expectedSize }
+                ?: matches.minByOrNull { kotlin.math.abs(it.length() - expectedSize) }
+        } else {
+            matches.maxByOrNull { it.length() }
+        }
+        return best?.absolutePath
     }
 
     /**
