@@ -231,10 +231,11 @@ object WxDownloader {
                 "com.tencent.mm.plugin.cdndownloader.ipc.CDNTaskInfo", false, loader
             )
             val info = infoCls.getConstructor(String::class.java).newInstance(fileKey)
-            de.robv.android.xposed.XposedHelpers.setObjectField(info, "f92137f", fileId)
-            de.robv.android.xposed.XposedHelpers.setObjectField(info, "f92138g", savePath)
-            de.robv.android.xposed.XposedHelpers.setObjectField(info, "f92139h", aesKey)
-            de.robv.android.xposed.XposedHelpers.setIntField(info, "f92141m", fileType)
+            // jadx 显示为 f92137f 等，运行时真实字段名是混淆后的 f/g/h/m
+            de.robv.android.xposed.XposedHelpers.setObjectField(info, "f", fileId)
+            de.robv.android.xposed.XposedHelpers.setObjectField(info, "g", savePath)
+            de.robv.android.xposed.XposedHelpers.setObjectField(info, "h", aesKey)
+            de.robv.android.xposed.XposedHelpers.setIntField(info, "m", fileType)
             val code = de.robv.android.xposed.XposedHelpers.callMethod(binder, "A2", info) as? Int ?: -1
             XposedBridge.log("$TAG cdn task enqueued code=$code key=$fileKey file=${fileId.take(48)} type=$fileType")
             Thread({
