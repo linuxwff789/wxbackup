@@ -42,6 +42,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun updateBody(note: NoteEntity, body: String) = repository.updateNote(note.copy(body = body))
     suspend fun delete(id: Long) = repository.deleteNote(id)
     suspend fun deleteNotes(ids: List<Long>) = repository.deleteNotes(ids)
+    suspend fun deleteMessage(noteId: Long, messageId: Long) = repository.deleteMessage(noteId, messageId)
     suspend fun setArchived(id: Long, archived: Boolean) = repository.setArchived(id, archived)
     suspend fun setPinned(id: Long, pinned: Boolean) = repository.setPinned(id, pinned)
     suspend fun addTag(id: Long, name: String) = repository.addTag(id, name)

@@ -176,6 +176,12 @@ interface MessageDao {
 
     @Query("UPDATE messages SET mediaPath=:path, mediaKind=:kind, fileName=:name, fileSize=:size WHERE id=:id")
     suspend fun updateMedia(id: Long, path: String, kind: String, name: String, size: Long)
+
+    @Query("SELECT * FROM messages WHERE id=:id")
+    suspend fun getById(id: Long): MessageEntity?
+
+    @Query("DELETE FROM messages WHERE id=:id")
+    suspend fun deleteById(id: Long)
 }
 
 @Dao

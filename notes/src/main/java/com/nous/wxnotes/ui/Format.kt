@@ -76,6 +76,16 @@ fun shareLocalFile(context: Context, file: File, mime: String = "*/*") {
         .onFailure { android.widget.Toast.makeText(context, "无法分享：${it.message}", android.widget.Toast.LENGTH_SHORT).show() }
 }
 
+/** 分享纯文本（长按消息 -> 分享）。 */
+fun shareText(context: Context, text: String) {
+    if (text.isBlank()) return
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    runCatching { context.startActivity(Intent.createChooser(intent, "分享文字")) }
+}
+
 /** 按媒体类型分享笔记里的附件（图片/视频/语音/文件都能分享）。 */
 fun shareMedia(context: Context, path: String, kind: String, fileName: String) {
     val f = File(path)

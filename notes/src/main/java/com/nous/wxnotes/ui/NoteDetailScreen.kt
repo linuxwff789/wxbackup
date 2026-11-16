@@ -3,7 +3,9 @@ package com.nous.wxnotes.ui
 import android.media.MediaPlayer
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
@@ -72,6 +75,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -263,14 +267,19 @@ fun NoteDetailScreen(vm: NotesViewModel, noteId: Long, onBack: () -> Unit) {
                     )
                 }
                 items(msgs, key = { it.id }) { m ->
-                    MessageRow(m, n) { path ->
-                        val imgs = messages
-                            .filter { it.mediaKind == ForwardProtocol.MEDIA_IMAGE && it.mediaPath.isNotBlank() }
-                            .map { it.mediaPath }
-                        val idx = imgs.indexOf(path).coerceAtLeast(0)
-                        previewImages = imgs
-                        previewIndex = idx
-                    }
+                    MessageRow(
+                        m = m,
+                        note = n,
+                        onImageClick = { path ->
+                            val imgs = messages
+                                .filter { it.mediaKind == ForwardProtocol.MEDIA_IMAGE && it.mediaPath.isNotBlank() }
+                                .map { it.mediaPath }
+                            val idx = imgs.indexOf(path).coerceAtLeast(0)
+                            previewImages = imgs
+                            previewIndex = idx
+                        },
+                        onDelete = { scope.launch { vm.deleteMessage(noteId, m.id) } }
+                    )
                 }
             }
         }
@@ -392,9 +401,19 @@ private fun dayKey(createTime: Long, fallback: Long): String {
     return SimpleDateFormat("yyyy年M月d日 EEEE", Locale.getDefault()).format(Date(ms))
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(m: MessageEntity, note: NoteEntity, onImageClick: (String) -> Unit) {
+private fun MessageRow(
+    m: MessageEntity,
+    note: NoteEntity,
+    onImageClick: (String) -> Unit,
+    onDelete: () -> Unit
+) {
     val mine = m.isSend
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    var menuOpen by remember(m.id) { mutableStateOf(false) }
+    var confirmDelete by remember(m.id) { mutableStateOf(false) }
     val parsed = remember(m.id) {
         if (m.rawXml.isNotBlank()) WxMessageParser.parse(m.type, m.rawXml, m.subType) else null
     }
@@ -413,18 +432,84 @@ private fun MessageRow(m: MessageEntity, note: NoteEntity, onImageClick: (String
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
             )
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = if (mine) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-            ) {
-                // 视频要有画面贴边的效果：气泡内不留 padding，由视频自己按比例撑满
-                val videoFullBleed = m.mediaKind == ForwardProtocol.MEDIA_VIDEO && m.mediaPath.isNotBlank()
-                Column(modifier = Modifier.padding(if (videoFullBleed) 0.dp else 10.dp)) {
-                    MessageContent(m, parsed?.url.orEmpty(), note, onImageClick)
+            Box {
+                Surface(
+                    modifier = Modifier.combinedClickable(
+                        onClick = {},
+                        onLongClick = {
+                            menuOpen = true
+                            true
+                        }
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (mine) MaterialTheme.colorScheme.primaryContainer
+                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                ) {
+                    // 视频要有画面贴边的效果：气泡内不留 padding，由视频自己按比例撑满
+                    val videoFullBleed = m.mediaKind == ForwardProtocol.MEDIA_VIDEO && m.mediaPath.isNotBlank()
+                    Column(modifier = Modifier.padding(if (videoFullBleed) 0.dp else 10.dp)) {
+                        MessageContent(m, parsed?.url.orEmpty(), note, onImageClick)
+                    }
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    if (m.mediaPath.isNotBlank() && m.mediaKind != ForwardProtocol.MEDIA_NONE) {
+                        DropdownMenuItem(
+                            text = { Text("分享") },
+                            leadingIcon = { Icon(Icons.Default.Share, null) },
+                            onClick = {
+                                menuOpen = false
+                                shareMedia(context, m.mediaPath, m.mediaKind, m.fileName)
+                            }
+                        )
+                    } else if (m.text.isNotBlank()) {
+                        DropdownMenuItem(
+                            text = { Text("分享文字") },
+                            leadingIcon = { Icon(Icons.Default.Share, null) },
+                            onClick = {
+                                menuOpen = false
+                                shareText(context, m.text)
+                            }
+                        )
+                    }
+                    if (m.text.isNotBlank()) {
+                        DropdownMenuItem(
+                            text = { Text("复制文字") },
+                            leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
+                            onClick = {
+                                menuOpen = false
+                                clipboard.setText(androidx.compose.ui.text.AnnotatedString(m.text))
+                                Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("删除") },
+                        leadingIcon = { Icon(Icons.Default.Delete, null) },
+                        onClick = {
+                            menuOpen = false
+                            confirmDelete = true
+                        }
+                    )
                 }
             }
         }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除这条消息？") },
+            text = { Text("它的媒体文件也会一起删除，无法恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    onDelete()
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("取消") }
+            }
+        )
     }
 }
 
@@ -455,14 +540,6 @@ private fun MessageContent(
                         .clickable { onImageClick(m.mediaPath) },
                     contentScale = ContentScale.Fit
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { onImageClick(m.mediaPath) }) {
-                        Text("查看", style = MaterialTheme.typography.labelSmall)
-                    }
-                    TextButton(onClick = {
-                        shareMedia(context, m.mediaPath, ForwardProtocol.MEDIA_IMAGE, m.fileName)
-                    }) { Text("分享", style = MaterialTheme.typography.labelSmall) }
-                }
                 if (m.text.isNotBlank() && m.text != "[图片]") {
                     Spacer(Modifier.height(4.dp))
                     Text(m.text, style = MaterialTheme.typography.bodySmall)
@@ -479,8 +556,7 @@ private fun MessageContent(
         ForwardProtocol.MEDIA_FILE -> AttachmentRow(
             icon = "📄", title = m.fileName.ifBlank { m.text.ifBlank { "[文件]" } },
             subtitle = WxMessageParser.formatSize(m.fileSize),
-            onClick = { if (m.mediaPath.isNotBlank()) openLocalFile(context, m.mediaPath, "file", m.fileName) },
-            onShare = { shareMedia(context, m.mediaPath, ForwardProtocol.MEDIA_FILE, m.fileName) }
+            onClick = { if (m.mediaPath.isNotBlank()) openLocalFile(context, m.mediaPath, "file", m.fileName) }
         )
 
         else -> {
@@ -514,40 +590,24 @@ private fun MessageContent(
 }
 
 @Composable
-private fun AttachmentRow(
-    icon: String,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-    onShare: (() -> Unit)? = null
-) {
+private fun AttachmentRow(icon: String, title: String, subtitle: String, onClick: () -> Unit) {
     Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onClick)
-                .padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(icon, style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.width(8.dp))
-            Column {
-                Text(title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (subtitle.isNotBlank()) {
-                    Text(
-                        subtitle,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-        if (onShare != null) {
-            IconButton(onClick = onShare) {
-                Icon(Icons.Default.Share, contentDescription = "分享", tint = MaterialTheme.colorScheme.primary)
+        Text(icon, style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (subtitle.isNotBlank()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -629,9 +689,6 @@ private fun VideoContent(m: MessageEntity) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = { shareMedia(context, m.mediaPath, ForwardProtocol.MEDIA_VIDEO, m.fileName) }) {
-                Text("分享", style = MaterialTheme.typography.labelSmall)
-            }
             TextButton(onClick = { fullscreen = true }) {
                 Text("全屏", style = MaterialTheme.typography.labelSmall)
             }
@@ -740,11 +797,5 @@ private fun VoiceContent(m: MessageEntity) {
             },
             style = MaterialTheme.typography.bodyMedium
         )
-        Spacer(Modifier.width(4.dp))
-        IconButton(onClick = {
-            shareMedia(context, m.mediaPath, ForwardProtocol.MEDIA_VOICE, m.fileName)
-        }) {
-            Icon(Icons.Default.Share, contentDescription = "分享", tint = MaterialTheme.colorScheme.primary)
-        }
     }
 }

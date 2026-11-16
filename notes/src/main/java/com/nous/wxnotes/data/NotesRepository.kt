@@ -417,6 +417,28 @@ class NotesRepository(private val context: Context) {
         ids.forEach { deleteNoteInternal(it) }
     }
 
+    /** 删除单条消息（长按菜单用）：连带删掉它的媒体文件；笔记空了就把笔记也删掉。 */
+    suspend fun deleteMessage(noteId: Long, messageId: Long) = withContext(Dispatchers.IO) {
+        val msg = messageDao.getById(messageId)
+        messageDao.deleteById(messageId)
+        val path = msg?.mediaPath.orEmpty()
+        if (path.isNotBlank()) {
+            runCatching {
+                val f = File(path)
+                f.delete()
+                val dir = f.parentFile
+                if (dir != null && dir.name == noteId.toString() && dir.list()?.isEmpty() == true) {
+                    dir.delete()
+                }
+            }
+        }
+        if (messageDao.countByNote(noteId) == 0) {
+            deleteNoteInternal(noteId)
+        } else {
+            noteDao.get(noteId)?.let { noteDao.update(it.copy(updatedAt = System.currentTimeMillis())) }
+        }
+    }
+
     private suspend fun deleteNoteInternal(noteId: Long) {
         runCatching {
             File(mediaRoot(), noteId.toString()).deleteRecursively()
