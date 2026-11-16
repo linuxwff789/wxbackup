@@ -79,10 +79,10 @@ class WxCliReceiver : BroadcastReceiver() {
                 val limit = intent.getStringExtra("limit")?.toIntOrNull() ?: 30
                 val rows = WeDb.query(
                     context,
-                    "SELECT username, nickname, unReadCount, msgType, createTime FROM rconversation " +
+                    "SELECT username, displayName, unReadCount, msgType, createTime FROM rconversation " +
                         "ORDER BY createTime DESC LIMIT $limit"
                 )
-                rows.joinToString("\n") { "${it["username"]} | ${it["nickname"]} | unread=${it["unReadCount"]}" }
+                rows.joinToString("\n") { "${it["username"]} | ${it["displayName"]} | unread=${it["unReadCount"]}" }
             }
 
             "list_contacts" -> {
