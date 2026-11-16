@@ -496,6 +496,29 @@ object WxDownloader {
     }
 
     /** 下载完成后把大图作为同一消息的更新发回笔记端。 */
+    /**
+     * 微信 8.x 的 image2/<md5>.jpg 可能是私有 HEVC 容器（文件头 "wxfa"），
+     * Android/Coil 均无法解码。此时退回同目录的高清缩略图 th_<stem>hd（标准 JPEG）。
+     */
+    fun displayable(file: File): File {
+        return try {
+            val head = ByteArray(4)
+            java.io.FileInputStream(file).use { if (it.read(head) != 4) return file }
+            if (head[0] != 'w'.code.toByte() || head[1] != 'x'.code.toByte() ||
+                head[2] != 'f'.code.toByte() || head[3] != 'a'.code.toByte()
+            ) {
+                return file
+            }
+            val dir = file.parentFile ?: return file
+            val stem = file.name.substringBefore('.')
+            listOf("th_${stem}hd", "th_$stem")
+                .map { File(dir, it) }
+                .firstOrNull { it.isFile && it.length() > 0 } ?: file
+        } catch (_: Throwable) {
+            file
+        }
+    }
+
     fun publishUpdate(
         ctx: Context?,
         talker: String,
@@ -511,8 +534,10 @@ object WxDownloader {
     ) {
         if (ctx == null) return
         try {
+            // 微信大图可能是私有 HEVC 封装（wxfa 头），照原样发送到笔记端无法显示
+            val src = displayable(file)
             val msgs = ArrayList<Pair<ForwardMessage, File>>()
-            val len = file.length()
+            val len = src.length()
             val msg = ForwardMessage(
                 msgId = msgId,
                 msgSvrId = msgSvrId,
@@ -521,14 +546,14 @@ object WxDownloader {
                 isSend = isSend,
                 text = "[图片]",
                 mediaKind = mediaKind,
-                fileName = fileName.ifBlank { file.name },
+                fileName = fileName.ifBlank { src.name },
                 fileSize = len
             )
             if (len <= 600 * 1024) {
-                val b64 = android.util.Base64.encodeToString(file.readBytes(), android.util.Base64.NO_WRAP)
-                msgs.add(msg.copy(mediaBase64 = b64) to file)
+                val b64 = android.util.Base64.encodeToString(src.readBytes(), android.util.Base64.NO_WRAP)
+                msgs.add(msg.copy(mediaBase64 = b64) to src)
             } else {
-                msgs.add(msg to file)
+                msgs.add(msg to src)
             }
             val batch = ForwardBatch(
                 pluginVersion = "1.0.3",
