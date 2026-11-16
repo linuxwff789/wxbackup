@@ -193,10 +193,84 @@ object WxImageTranscoder {
 
     // ---------------- MediaCodec 解码 ----------------
 
+    private data class Nal(val type: Int, val start: Int, val end: Int)
+
+    /** 按 Annex-B 切出所有 NAL（start 含起始码）。 */
+    private fun parseNals(data: ByteArray, offset: Int): List<Nal> {
+        val out = ArrayList<Nal>()
+        var i = offset
+        while (true) {
+            val sc = findStartCode(data, i)
+            if (sc < 0) break
+            val len = startCodeLen(data, sc)
+            if (len == 0) break
+            val nalStart = sc + len
+            if (nalStart + 2 > data.size) break
+            val type = (data[nalStart].toInt() shr 1) and 0x3F
+            val next = findStartCode(data, nalStart + 1)
+            val end = if (next < 0) data.size else next
+            out.add(Nal(type, sc, end))
+            if (next < 0) break
+            i = next
+        }
+        return out
+    }
+
     private fun decodeFirstFrame(
         ctx: Context?,
         data: ByteArray,
         offset: Int,
+        w: Int,
+        h: Int
+    ): Bitmap? {
+        val nals = parseNals(data, offset)
+        if (nals.isEmpty()) return null
+        // 最后一组 VPS/SPS/PPS 作为 csd-0
+        val ps = nals.filter { it.type == 32 || it.type == 33 || it.type == 34 }
+        val csdBytes = java.io.ByteArrayOutputStream().also { bos ->
+            ps.takeLast(3).forEach { bos.write(data, it.start, it.end - it.start) }
+        }.toByteArray()
+        WxDownloader.fileLog(
+            ctx,
+            "transcode: nals=${nals.size} types=${nals.joinToString(",") { it.type.toString() }} csd=${csdBytes.size}B"
+        )
+
+        for (name in decoderCandidates()) {
+            val bmp = try {
+                decodeWith(ctx, name, data, nals, csdBytes, w, h)
+            } catch (e: Throwable) {
+                WxDownloader.fileLog(ctx, "transcode: $name failed ${e.javaClass.simpleName} ${e.message}")
+                null
+            }
+            if (bmp != null) return bmp
+        }
+        return null
+    }
+
+    private fun decoderCandidates(): List<String> {
+        val out = ArrayList<String>()
+        try {
+            out.add(MIME)   // 默认（通常硬件）
+        } catch (_: Throwable) {
+        }
+        try {
+            val list = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+            list.codecInfos
+                .filter { !it.isEncoder && it.supportedTypes.any { t -> t.equals(MIME, true) } }
+                .map { it.name }
+                .filter { it !in out }
+                .forEach { out.add(it) }
+        } catch (_: Throwable) {
+        }
+        return out
+    }
+
+    private fun decodeWith(
+        ctx: Context?,
+        codecName: String,
+        data: ByteArray,
+        nals: List<Nal>,
+        csd: ByteArray,
         w: Int,
         h: Int
     ): Bitmap? {
@@ -205,34 +279,55 @@ object WxImageTranscoder {
         try {
             reader = ImageReader.newInstance(w, h, ImageFormat.YUV_420_888, 2)
             val fmt = MediaFormat.createVideoFormat(MIME, w, h)
-            fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(data.size - offset, 512 * 1024))
-            codec = MediaCodec.createDecoderByType(MIME)
-            WxDownloader.fileLog(ctx, "transcode: codec=${codec.name} size=${w}x$h")
+            fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(data.size, 512 * 1024))
+            if (csd.isNotEmpty()) {
+                fmt.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(csd))
+            }
+            codec = try {
+                if (codecName == MIME) MediaCodec.createDecoderByType(MIME)
+                else MediaCodec.createByCodecName(codecName)
+            } catch (e: Throwable) {
+                WxDownloader.fileLog(ctx, "transcode: create $codecName failed: ${e.message}")
+                return null
+            }
+            WxDownloader.fileLog(ctx, "transcode: codec=${codec.name} size=${w}x$h csd=${csd.size}B")
             codec.configure(fmt, reader.surface, null, 0)
             codec.start()
-            WxDownloader.fileLog(ctx, "transcode: codec started")
 
             val info = MediaCodec.BufferInfo()
             val deadline = System.currentTimeMillis() + TIMEOUT_MS
-            var inOff = offset
-            var inLeft = data.size - offset
+            val pending = ArrayList(nals)
+            var nalIdx = 0
             var eosQueued = false
             var image: Image? = null
+            var outCount = 0
 
             while (System.currentTimeMillis() < deadline) {
-                if (!eosQueued) {
+                if (!eosQueued && nalIdx < pending.size) {
                     val inIdx = codec.dequeueInputBuffer(2000)
                     if (inIdx >= 0) {
                         val buf = codec.getInputBuffer(inIdx)
                         if (buf != null) {
                             buf.clear()
-                            val n = minOf(buf.capacity(), inLeft)
-                            if (n > 0) buf.put(data, inOff, n)
-                            val flags = if (inLeft - n <= 0) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
-                            codec.queueInputBuffer(inIdx, 0, n, 0, flags)
-                            inOff += n
-                            inLeft -= n
-                            if (flags != 0) eosQueued = true
+                            val nal = pending[nalIdx]
+                            var off = nal.start
+                            var left = nal.end - nal.start
+                            if (left <= buf.capacity()) {
+                                buf.put(data, off, left)
+                                val last = nalIdx == pending.size - 1
+                                codec.queueInputBuffer(
+                                    inIdx, 0, left, 0,
+                                    if (last) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
+                                )
+                                if (last) eosQueued = true
+                                nalIdx++
+                            } else {
+                                // 单个 NAL 超过 buffer：分片喂（理论上不会发生）
+                                val n = buf.capacity()
+                                buf.put(data, off, n)
+                                codec.queueInputBuffer(inIdx, 0, n, 0, 0)
+                                pending[nalIdx] = Nal(nal.type, off + n, nal.end)
+                            }
                         } else {
                             codec.queueInputBuffer(inIdx, 0, 0, 0, 0)
                         }
@@ -240,11 +335,15 @@ object WxImageTranscoder {
                 }
                 val outIdx = codec.dequeueOutputBuffer(info, 1000)
                 if (outIdx >= 0) {
+                    outCount++
                     codec.releaseOutputBuffer(outIdx, true)
                     image = reader.acquireLatestImage()
-                    if (image != null) break
+                    if (image != null) {
+                        WxDownloader.fileLog(ctx, "transcode: got frame ${image.width}x${image.height} after $outCount")
+                        break
+                    }
                 } else if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    // 输出格式变化，忽略
+                    WxDownloader.fileLog(ctx, "transcode: output format changed ${codec.outputFormat}")
                 }
                 if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break
             }
