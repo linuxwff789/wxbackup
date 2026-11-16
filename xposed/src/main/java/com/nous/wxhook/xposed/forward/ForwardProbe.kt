@@ -139,6 +139,15 @@ object ForwardProbe {
         OriginalFetcher.install()
         MultiSelectHook.install(loader)
         AutoViewOriginal.install(loader)
+        try {
+            context?.registerReceiver(
+                WxDownloadReceiver(),
+                android.content.IntentFilter(WxDownloadReceiver.ACTION)
+            )
+            XposedBridge.log("$TAG download receiver registered")
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG receiver register failed: ${e.message}")
+        }
         probeDownloadApi(loader)
         probeMultiSelect(loader)
         XposedBridge.log("$TAG done classes=$hookedClasses methods=$hookedMethods")

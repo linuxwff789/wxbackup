@@ -142,6 +142,64 @@ object WxDownloader {
     }
 
     /**
+     * 照 WeKit：查 ImgInfo2 拿到原图行 localId，调用 v61.j（DownloadImageService）
+     * 的 b(long,MsgIdTalker,int,Object,int,w,int,boolean) 触发微信原生下载。
+     */
+    fun downloadViaImageService(ctx: Context?, msgSvrId: Long, talker: String): Boolean {
+        if (ctx == null || msgSvrId <= 0) return false
+        return try {
+            val loader = ctx.classLoader
+            val storage = Class.forName("v61.b1", false, loader).getMethod("Bj").invoke(null)!!
+            val x4 = storage.javaClass.getMethod(
+                "X4",
+                String::class.java,
+                Array<String>::class.java,
+                String::class.java,
+                Array<String>::class.java,
+                String::class.java,
+                String::class.java,
+                String::class.java
+            )
+            fun query(sel: String, arg: String): Map<String, String>? {
+                val c = x4.invoke(storage, "ImgInfo2", null, sel, arrayOf(arg), null, null, null)
+                    as? android.database.Cursor ?: return null
+                c.use {
+                    if (!it.moveToFirst()) return null
+                    val m = HashMap<String, String>()
+                    for (name in listOf("id", "msgTalker", "bigImgPath", "hevcPath", "midImgPath", "reserved1")) {
+                        val idx = it.getColumnIndex(name)
+                        if (idx >= 0) m[name] = if (it.isNull(idx)) "" else it.getString(idx)
+                    }
+                    return m
+                }
+            }
+            val base = query("msgSvrId=?", msgSvrId.toString()) ?: return false
+            val hd = base["reserved1"]?.toLongOrNull() ?: 0L
+            val target = if (hd > 0) query("id=?", hd.toString()) ?: base else base
+            val localId = target["id"]?.toLongOrNull() ?: return false
+            val talkerStr = target["msgTalker"].orEmpty().ifBlank { talker }
+
+            val jCls = Class.forName("v61.j", false, loader)
+            val svc = jCls.getDeclaredConstructor().newInstance()
+            val mtCls = Class.forName("com.tencent.mm.plugin.msg.MsgIdTalker", false, loader)
+            val mt = mtCls.getConstructor(java.lang.Long.TYPE, String::class.java)
+                .newInstance(localId, talkerStr)
+            val b = jCls.methods.firstOrNull { it.name == "b" && it.parameterCount == 8 }
+                ?: throw NoSuchMethodException("v61.j.b")
+            val wCls = b.parameterTypes[5]
+            val listener = java.lang.reflect.Proxy.newProxyInstance(loader, arrayOf(wCls)) { _, m, _ ->
+                if (m.returnType == java.lang.Boolean.TYPE) false else null
+            }
+            val code = b.invoke(svc, localId, mt, 0, null, 0, listener, -1, false) as? Int ?: -1
+            fileLog(ctx, "imageService code=$code localId=$localId hd=$hd talker=$talkerStr")
+            code >= 0
+        } catch (e: Throwable) {
+            fileLog(ctx, "imageService failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
      * 微信 8.0.79 的图片信息在 ImgInfo2 表（WeKit 同款）：
      * bigImgPath/hevcPath/midImgPath 是文件路径，reserved1 指向原图行 id。
      */
