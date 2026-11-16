@@ -56,6 +56,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -434,25 +436,7 @@ private fun MessageContent(
     if (m.mediaPath.isBlank() && m.mediaKind.isNotBlank() &&
         m.mediaKind != ForwardProtocol.MEDIA_EMOJI
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(4.dp))
-            Text(
-                when (m.mediaKind) {
-                    ForwardProtocol.MEDIA_IMAGE -> "正在下载原图…"
-                    ForwardProtocol.MEDIA_VIDEO -> "正在下载视频…"
-                    ForwardProtocol.MEDIA_FILE -> "正在下载附件…"
-                    ForwardProtocol.MEDIA_VOICE -> "正在下载语音…"
-                    else -> "媒体处理中…"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (m.text.isNotBlank()) {
-                Spacer(Modifier.height(2.dp))
-                Text(m.text, style = MaterialTheme.typography.bodySmall)
-            }
-        }
+        PendingMedia(m)
         return
     }
     when (m.mediaKind) {
@@ -478,14 +462,7 @@ private fun MessageContent(
 
         ForwardProtocol.MEDIA_VOICE -> VoiceContent(m)
 
-        ForwardProtocol.MEDIA_VIDEO -> AttachmentRow(
-            icon = "▶", title = m.text.ifBlank { "[视频]" },
-            subtitle = listOfNotNull(
-                WxMessageParser.formatSize(m.fileSize).takeIf { it.isNotBlank() },
-                WxMessageParser.formatDuration(m.durationMs).takeIf { it.isNotBlank() }
-            ).joinToString(" · "),
-            onClick = { if (m.mediaPath.isNotBlank()) openLocalFile(context, m.mediaPath, "video", m.fileName) }
-        )
+        ForwardProtocol.MEDIA_VIDEO -> VideoContent(m)
 
         ForwardProtocol.MEDIA_FILE -> AttachmentRow(
             icon = "📄", title = m.fileName.ifBlank { m.text.ifBlank { "[文件]" } },
@@ -543,6 +520,81 @@ private fun AttachmentRow(icon: String, title: String, subtitle: String, onClick
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun PendingMedia(m: MessageEntity) {
+    var elapsed by remember(m.id) { mutableIntStateOf(0) }
+    LaunchedEffect(m.id) {
+        while (elapsed < 180) {
+            kotlinx.coroutines.delay(1000)
+            elapsed++
+        }
+    }
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        if (elapsed < 180) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(4.dp))
+            Text(
+                when (m.mediaKind) {
+                    ForwardProtocol.MEDIA_IMAGE -> "正在下载原图…"
+                    ForwardProtocol.MEDIA_VIDEO -> "正在下载视频…"
+                    ForwardProtocol.MEDIA_FILE -> "正在下载附件…"
+                    ForwardProtocol.MEDIA_VOICE -> "正在下载语音…"
+                    else -> "媒体处理中…"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            Text(
+                "媒体未下载（可在微信里重新保存一次）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+        if (m.text.isNotBlank() && m.text != "[图片]" && m.text != "[视频]") {
+            Spacer(Modifier.height(2.dp))
+            Text(m.text, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+/** 笔记内直接播放视频，不跳转外部 App。 */
+@Composable
+private fun VideoContent(m: MessageEntity) {
+    val context = LocalContext.current
+    Column(modifier = Modifier.fillMaxWidth()) {
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = { ctx ->
+                android.widget.VideoView(ctx).apply {
+                    setVideoPath(m.mediaPath)
+                    val mc = android.widget.MediaController(ctx)
+                    mc.setAnchorView(this)
+                    setMediaController(mc)
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 260.dp)
+                .clip(RoundedCornerShape(8.dp))
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                listOfNotNull(
+                    WxMessageParser.formatSize(m.fileSize).takeIf { it.isNotBlank() },
+                    WxMessageParser.formatDuration(m.durationMs).takeIf { it.isNotBlank() }
+                ).joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = {
+                if (m.mediaPath.isNotBlank()) openLocalFile(context, m.mediaPath, "video", m.fileName)
+            }) { Text("外部打开", style = MaterialTheme.typography.labelSmall) }
         }
     }
 }
