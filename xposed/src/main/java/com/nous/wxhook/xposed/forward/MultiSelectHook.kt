@@ -207,35 +207,25 @@ object MultiSelectHook {
             }
         }
 
-        // q/r/s/t/u 里筛出真正被选中的
-        val singles = listOf("q", "r", "s", "t", "u")
-            .mapNotNull { readField(quick, it) }
-            .filter { MessageExtractor.looksLikeMsgInfo(it) }
+        // q/r/s/t/u 只是"最近消息引用"（同一会话里相邻的几条），不能当作选中集合：
+        // 实测只选 2 条时会带出第 3 条。这里只在有 z(ids) 约束时用来补齐。
+        if (ids.isNotEmpty()) {
+            val singles = listOf("q", "r", "s", "t", "u")
+                .mapNotNull { readField(quick, it) }
+                .filter { MessageExtractor.looksLikeMsgInfo(it) }
+                .filter { m -> ids.contains(MessageExtractor.extract(m)?.msgId) }
+            val deduped = dedupe(singles)
+            XposedBridge.log("$TAG singles(ids-constrained)=${deduped.size}")
+            if (deduped.size == ids.size) return deduped
+            val byId = ids.mapNotNull { msgById(ctxObj, it) }
+            val out = dedupe(byId)
+            XposedBridge.log("$TAG selected by id size=${out.size}/${ids.size}")
+            if (out.isNotEmpty()) return out
+        }
         dumpFields(quick)
         dumpFields(ctxObj)
-        if (singles.isNotEmpty()) {
-            val detail = singles.mapNotNull { m ->
-                runCatching {
-                    MessageExtractor.extract(m)?.let { "${it.msgId}/${it.createTime}/${it.type}" }
-                }.getOrNull()
-            }
-            XposedBridge.log("$TAG singles detail=$detail")
-        }
-        val filtered = if (ids.isNotEmpty()) {
-            singles.filter { m -> ids.contains(MessageExtractor.extract(m)?.msgId) }
-        } else {
-            singles
-        }
-        val deduped = dedupe(filtered)
-        XposedBridge.log("$TAG singles=${singles.size} ids=${ids.size} filtered=${deduped.size}")
-
-        if (deduped.isNotEmpty()) return deduped
-
-        // 按 id 查
-        val byId = ids.mapNotNull { msgById(ctxObj, it) }
-        val out = dedupe(byId)
-        XposedBridge.log("$TAG selected by id size=${out.size}")
-        return out
+        XposedBridge.log("$TAG no reliable selection (adapter.W empty)")
+        return emptyList()
     }
 
     private fun dumpFields(o: Any?) {
@@ -284,34 +274,59 @@ object MultiSelectHook {
         return out
     }
 
-    /** 微信真正维护多选状态的是 adapter.k.W（CopyOnWriteArraySet<MsgIdTalker>）。 */
+    /**
+     * 微信真正维护多选状态的是 adapter.k.W（CopyOnWriteArraySet<MsgIdTalker>）。
+     *
+     * adapter 实例在 ChattingUIFragment.f201807s（cm5.d.f35829l / f35830m 指向它），
+     * 不能靠 ctx.a(wl5.z)（那个接口有多个实现，拿到的不是 adapter）。
+     */
     private fun selectedItems(ctx: Any?): List<Pair<Long, String>> {
-        val adapter = cachedAdapter
-        if (adapter != null) {
-            runCatching {
-                val w = de.robv.android.xposed.XposedHelpers.getObjectField(adapter, "W") as? Collection<*>
-                val items = (w?.toList() ?: emptyList()).mapNotNull { e -> e?.let { msgIdTalkerOf(it) } }
-                XposedBridge.log("$TAG cachedAdapter.W size=${w?.size} ids=${items.map { it.first }}")
-                if (items.isNotEmpty()) return items
-            }.onFailure { XposedBridge.log("$TAG cachedAdapter.W failed: ${it.message}") }
+        val adapter = cachedAdapter ?: findAdapter(ctx)?.also {
+            cachedAdapter = it
+            XposedBridge.log("$TAG adapter resolved via fragment: ${it.javaClass.name}")
         }
-        if (ctx == null) {
-            XposedBridge.log("$TAG ids ctx=null")
+        if (adapter == null) {
+            XposedBridge.log("$TAG adapter not found (ctx=${ctx?.javaClass?.name})")
             return emptyList()
         }
-        return try {
-            val cls = Class.forName("wl5.z", false, ctx.javaClass.classLoader)
-            // cm5.d 有公开方法 a(Class)（内部转发给 manager），避免读私有字段
-            val comp = de.robv.android.xposed.XposedHelpers.callMethod(ctx, "a", cls)
-            if (comp == null) return emptyList()
-            val w = de.robv.android.xposed.XposedHelpers.getObjectField(comp, "W") as? Collection<*>
+        return runCatching {
+            val w = de.robv.android.xposed.XposedHelpers.getObjectField(adapter, "W") as? Collection<*>
             val items = (w?.toList() ?: emptyList()).mapNotNull { e -> e?.let { msgIdTalkerOf(it) } }
-            XposedBridge.log("$TAG adapter.W ids=${items.map { it.first }}")
+            XposedBridge.log("$TAG adapter.W size=${w?.size} ids=${items.map { it.first }}")
             items
-        } catch (e: Throwable) {
-            XposedBridge.log("$TAG ids failed: ${e.message}")
+        }.getOrElse {
+            XposedBridge.log("$TAG adapter.W failed: ${it.message}")
             emptyList()
         }
+    }
+
+    /** 从 ChattingContext 的 fragment 字段里找出 adapter.k 实例。 */
+    private fun findAdapter(ctx: Any?): Any? {
+        if (ctx == null) return null
+        val adapterCls = "com.tencent.mm.ui.chatting.adapter.k"
+        val frags = ArrayList<Any>()
+        listOf("f35829l", "f35830m").forEach { n ->
+            readField(ctx, n)?.let { frags.add(it) }
+        }
+        for (frag in frags) {
+            readField(frag, "f201807s")?.let {
+                if (it.javaClass.name == adapterCls) return it
+            }
+            var k: Class<*>? = frag.javaClass
+            while (k != null && k != Any::class.java) {
+                k.declaredFields.forEach { f ->
+                    if (f.type.name == adapterCls) {
+                        try {
+                            f.isAccessible = true
+                            f.get(frag)?.let { return it }
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+                k = k.superclass
+            }
+        }
+        return null
     }
 
     /** MsgIdTalker: f149692d=msgId，另有 String 字段存 talker。 */
