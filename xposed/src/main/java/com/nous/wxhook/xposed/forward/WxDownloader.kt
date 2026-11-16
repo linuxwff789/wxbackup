@@ -500,14 +500,11 @@ object WxDownloader {
      * 微信 8.x 的 image2/<md5>.jpg 可能是私有 HEVC 容器（文件头 "wxgf"），
      * Android/Coil 均无法解码。此时退回同目录的高清缩略图 th_<stem>hd（标准 JPEG）。
      */
-    fun displayable(file: File): File {
+    fun displayable(ctx: Context?, file: File): File {
         return try {
-            val head = ByteArray(4)
-            java.io.FileInputStream(file).use { if (it.read(head) != 4) return file }
-            // 微信自有容器魔数：wxgf（HEVC）/ wxfa
-            val isWx = head[0] == 'w'.code.toByte() && head[1] == 'x'.code.toByte() &&
-                (head[2] == 'g'.code.toByte() || head[2] == 'f'.code.toByte())
-            if (!isWx) return file
+            if (!WxImageTranscoder.isWxContainer(file)) return file
+            // 优先真转码成 JPEG；失败再退回同目录高清缩略图
+            WxImageTranscoder.transcode(ctx, file)?.let { return it }
             val dir = file.parentFile ?: return file
             val stem = file.name.substringBefore('.')
             listOf("th_${stem}hd", "th_$stem")
@@ -534,7 +531,7 @@ object WxDownloader {
         if (ctx == null) return
         try {
             // 微信大图可能是私有 HEVC 封装（wxfa 头），照原样发送到笔记端无法显示
-            val src = displayable(file)
+            val src = displayable(ctx, file)
             val msgs = ArrayList<Pair<ForwardMessage, File>>()
             val len = src.length()
             val msg = ForwardMessage(

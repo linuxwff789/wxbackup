@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import de.robv.android.xposed.XposedBridge
+import java.io.File
 
 /**
  * 统一 CLI 调试入口（不依赖 UI 点击）：
@@ -73,6 +74,18 @@ class WxCliReceiver : BroadcastReceiver() {
                     .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
                     .invoke(null, talker, msgId)
                 if (mi == null) "msg not found" else MessageExtractor.dump(mi)
+            }
+
+            "transcode" -> {
+                val path = intent.getStringExtra("path").orEmpty()
+                val src = File(path)
+                if (path.isBlank() || !src.isFile) {
+                    "path not found: $path"
+                } else {
+                    val probe = WxImageTranscoder.isWxContainer(src)
+                    val out = WxImageTranscoder.transcode(context, src)
+                    "wxContainer=$probe -> ${out?.absolutePath ?: "null"} (${out?.length() ?: 0}B)"
+                }
             }
 
             "raw_sql" -> {
