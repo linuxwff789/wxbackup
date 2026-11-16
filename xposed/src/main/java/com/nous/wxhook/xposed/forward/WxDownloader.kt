@@ -141,6 +141,54 @@ object WxDownloader {
         }
     }
 
+    /**
+     * 微信 8.0.79 的图片信息在 ImgInfo2 表（WeKit 同款）：
+     * bigImgPath/hevcPath/midImgPath 是文件路径，reserved1 指向原图行 id。
+     */
+    fun findImgInfo2Original(ctx: Context?, msgSvrId: Long): String? {
+        if (ctx == null || msgSvrId <= 0) return null
+        return try {
+            val loader = ctx.classLoader
+            val storage = Class.forName("v61.b1", false, loader).getMethod("Bj").invoke(null)!!
+            val x4 = storage.javaClass.getMethod(
+                "X4",
+                String::class.java,
+                Array<String>::class.java,
+                String::class.java,
+                Array<String>::class.java,
+                String::class.java,
+                String::class.java,
+                String::class.java
+            )
+            fun query(sel: String, arg: String): Map<String, String>? {
+                val c = x4.invoke(storage, "ImgInfo2", null, sel, arrayOf(arg), null, null, null)
+                    as? android.database.Cursor ?: return null
+                c.use {
+                    if (!it.moveToFirst()) return null
+                    val m = HashMap<String, String>()
+                    for (name in listOf("id", "msgTalker", "bigImgPath", "hevcPath", "midImgPath", "reserved1")) {
+                        val idx = it.getColumnIndex(name)
+                        if (idx >= 0) m[name] = if (it.isNull(idx)) "" else it.getString(idx)
+                    }
+                    return m
+                }
+            }
+            var row = query("msgSvrId=?", msgSvrId.toString())
+            fileLog(ctx, "ImgInfo2 svr=$msgSvrId row=$row")
+            val hd = row?.get("reserved1")?.toLongOrNull() ?: 0L
+            if (hd > 0) {
+                row = query("id=?", hd.toString()) ?: row
+                fileLog(ctx, "ImgInfo2 hd=$hd row=$row")
+            }
+            listOf("bigImgPath", "hevcPath", "midImgPath")
+                .mapNotNull { row?.get(it) }
+                .firstOrNull { it.isNotBlank() && !it.startsWith("SERVERID://") }
+        } catch (e: Throwable) {
+            fileLog(ctx, "ImgInfo2 query failed: ${e.message}")
+            null
+        }
+    }
+
     /** 不依赖 ImgInfo：直接走消息里的 cdnbigimgurl + aeskey 下载原图。 */
     fun downloadImageByCdn(
         ctx: Context?,

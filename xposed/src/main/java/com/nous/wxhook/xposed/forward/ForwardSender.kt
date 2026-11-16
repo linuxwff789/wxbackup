@@ -56,6 +56,7 @@ object ForwardSender {
         val candidates = listOf(ex.imgPath, ex.fileFullPath)
             .filter { it.isNotBlank() }
         val localMedia = findImageByMd5(parsed.mediaMd5)
+            ?: WxDownloader.findImgInfo2Original(ctx, ex.msgSvrId)?.let { resolveUnderMicroMsg(it) }
             ?: candidates.firstOrNull { File(it).isFile && !isThumbnailPath(it) }
             ?: findMediaFile(parsed.fileName.ifBlank { ex.fileName }, parsed.mediaKind)
             ?: candidates.firstOrNull { File(it).isFile }
@@ -318,6 +319,7 @@ object ForwardSender {
             var mediaBase64 = ""
             var chunkFile: File? = null
             val localMedia = findImageByMd5(parsed.mediaMd5)
+                ?: WxDownloader.findImgInfo2Original(ctx, ex.msgSvrId)?.let { resolveUnderMicroMsg(it) }
                 ?: listOf(ex.imgPath, ex.fileFullPath)
                     .filter { it.isNotBlank() }
                     .firstOrNull { File(it).isFile && !isThumbnailPath(it) }
@@ -476,6 +478,20 @@ object ForwardSender {
         val name = File(path).name
         if (!name.startsWith("th_")) return null
         return name.removePrefix("th_").substringBefore('.').takeIf { it.length >= 32 }
+    }
+
+    private fun resolveUnderMicroMsg(rel: String): String? {
+        if (rel.isBlank()) return null
+        return try {
+            val root = File("/data/data/com.tencent.mm/MicroMsg")
+            root.listFiles()?.forEach { d ->
+                val f = File(d, rel)
+                if (f.isFile && f.length() > 0) return f.absolutePath
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun isThumbnailPath(path: String): Boolean {
