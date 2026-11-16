@@ -96,4 +96,7 @@ dependencies {
     implementation("io.coil-kt:coil-video:2.7.0")
 
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    // WebDAV 备份需要 PROPFIND/MKCOL，HttpURLConnection 不允许这些方法
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

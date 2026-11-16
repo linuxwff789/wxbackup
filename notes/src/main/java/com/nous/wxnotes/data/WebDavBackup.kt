@@ -4,16 +4,12 @@ import android.content.Context
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.IOException
-import java.io.InputStream
-import java.net.HttpURLConnection
-import java.net.URL
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLDecoder
-import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -185,7 +181,7 @@ object WebDavBackup {
         return String.format(Locale.US, "%.2f GB", mb / 1024.0)
     }
 
-    // ── 极简 WebDAV 客户端 ───────────────────────────────────────────
+    // ── 极简 WebDAV 客户端（OkHttp：HttpURLConnection 不支持 PROPFIND/MKCOL） ──
 
     private class Dav(val baseUrl: String, val user: String, val pass: String) {
 
@@ -193,105 +189,79 @@ object WebDavBackup {
             "$user:$pass".toByteArray(Charsets.UTF_8), Base64.NO_WRAP
         )
 
+        private val client = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(180, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(180, java.util.concurrent.TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+
         private fun resolve(remote: String): String {
             val base = baseUrl.trim().trimEnd('/')
             if (base.isEmpty()) throw IOException("WebDAV 地址为空")
+            val r = remote.trim()
             return when {
-                remote.startsWith("http://") || remote.startsWith("https://") -> remote
-                remote.startsWith("/") -> {
+                r.startsWith("http://") || r.startsWith("https://") -> r
+                r.startsWith("/") -> {
                     val origin = Regex("^(https?://[^/]+)").find(base)?.value ?: base
-                    origin + remote
+                    origin + r
                 }
-                remote.isEmpty() -> "$base/"
-                else -> "$base/" + remote.trimStart('/')
+                r.isEmpty() -> "$base/"
+                else -> "$base/" + r.trimStart('/')
             }
         }
-
-        /** 逐段 percent-encode（中文目录/文件名必须编码，URL 构造器不会自动处理）。 */
-        private fun toUrl(raw: String): URL {
-            val u = URL(raw)
-            val path = u.path.split('/').joinToString("/") {
-                URLEncoder.encode(it, "UTF-8").replace("+", "%20")
-            }
-            val query = u.query?.let { "?$it" } ?: ""
-            return URL(u.protocol, u.host, u.port, path + query)
-        }
-
-        private fun open(method: String, remote: String, depth: String? = null, contentType: String? = null): HttpURLConnection {
-            val conn = toUrl(resolve(remote)).openConnection() as HttpURLConnection
-            conn.requestMethod = method
-            conn.setRequestProperty("Authorization", auth)
-            depth?.let { conn.setRequestProperty("Depth", it) }
-            contentType?.let { conn.setRequestProperty("Content-Type", it) }
-            conn.connectTimeout = 20_000
-            conn.readTimeout = 180_000
-            conn.instanceFollowRedirects = true
-            return conn
-        }
-
-        private fun bodyOf(conn: HttpURLConnection): String =
-            (if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream)
-                ?.bufferedReader()?.use { it.readText() }.orEmpty()
 
         private fun decode(href: String): String = try {
             URLDecoder.decode(href.replace("+", "%2B"), "UTF-8")
         } catch (_: Exception) { href }
 
+        private fun builder(method: String, remote: String, depth: String? = null): okhttp3.Request.Builder {
+            val b = okhttp3.Request.Builder()
+                .url(resolve(remote))
+                .header("Authorization", auth)
+            depth?.let { b.header("Depth", it) }
+            b.method(method, null)
+            return b
+        }
+
         fun test() {
-            val conn = open("PROPFIND", "", depth = "0", contentType = "application/xml")
-            conn.doOutput = true
-            conn.outputStream.use { it.write(PROPFIND_BODY.toByteArray()) }
-            val code = conn.responseCode
-            bodyOf(conn)
-            conn.disconnect()
-            if (code !in 200..299) throw IOException("WebDAV 连接失败：HTTP $code")
+            val body = PROPFIND_BODY.toRequestBody("application/xml".toMediaType())
+            val req = builder("PROPFIND", "", "0").method("PROPFIND", body).build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.code !in 200..299) throw IOException("WebDAV 连接失败：HTTP ${resp.code}")
+            }
         }
 
         fun ensureDir(remote: String) {
             var acc = ""
             for (seg in remote.split('/').filter { it.isNotBlank() }) {
                 acc = if (acc.isEmpty()) seg else "$acc/$seg"
-                val conn = open("MKCOL", acc)
-                val code = conn.responseCode
-                conn.disconnect()
-                // 405 = 已存在
-                if (code !in 200..299 && code != 405) throw IOException("创建目录失败 $acc：HTTP $code")
+                val req = builder("MKCOL", acc).build()
+                client.newCall(req).execute().use { resp ->
+                    // 405 = 已存在
+                    if (resp.code !in 200..299 && resp.code != 405) {
+                        throw IOException("创建目录失败 $acc：HTTP ${resp.code}")
+                    }
+                }
             }
         }
 
         fun upload(file: File, remote: String, onProgress: (Long) -> Unit) {
-            val conn = open("PUT", remote, contentType = "application/zip")
-            conn.doOutput = true
-            conn.setFixedLengthStreamingMode(file.length())
-            var sent = 0L
-            file.inputStream().use { input ->
-                conn.outputStream.use { out ->
-                    val buf = ByteArray(64 * 1024)
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        out.write(buf, 0, n)
-                        sent += n
-                        onProgress(sent)
-                    }
-                    out.flush()
-                }
+            val body = ProgressBody(file, onProgress)
+            val req = builder("PUT", remote).method("PUT", body).build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.code !in 200..299) throw IOException("上传失败：HTTP ${resp.code}")
             }
-            val code = conn.responseCode
-            bodyOf(conn)
-            conn.disconnect()
-            if (code !in 200..299) throw IOException("上传失败：HTTP $code")
         }
 
         fun list(remote: String): List<RemoteFile> {
-            val conn = open("PROPFIND", remote, depth = "1", contentType = "application/xml")
-            conn.doOutput = true
-            conn.outputStream.use { it.write(PROPFIND_BODY.toByteArray()) }
-            val code = conn.responseCode
-            val xml = bodyOf(conn)
-            conn.disconnect()
-            if (code !in 200..299) throw IOException("列目录失败：HTTP $code")
-
+            val body = PROPFIND_BODY.toRequestBody("application/xml".toMediaType())
+            val req = builder("PROPFIND", remote, "1").method("PROPFIND", body).build()
+            val xml = client.newCall(req).execute().use { resp ->
+                if (resp.code !in 200..299) throw IOException("列目录失败：HTTP ${resp.code}")
+                resp.body?.string().orEmpty()
+            }
             val result = ArrayList<RemoteFile>()
             Regex("<[a-zA-Z0-9-]+:?response>([\\s\\S]*?)</[a-zA-Z0-9-]+:?response>").findAll(xml).forEach { block ->
                 val part = block.groupValues[1]
@@ -309,10 +279,38 @@ object WebDavBackup {
         }
 
         fun delete(remote: String) {
-            val conn = open("DELETE", remote)
-            val code = conn.responseCode
-            conn.disconnect()
-            if (code !in 200..299) throw IOException("删除失败：HTTP $code")
+            val req = builder("DELETE", remote).build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.code !in 200..299) throw IOException("删除失败：HTTP ${resp.code}")
+            }
+        }
+    }
+
+    /** 流式 PUT，60ms 节流回调，避免大包刷爆 UI。 */
+    private class ProgressBody(
+        private val file: File,
+        private val onProgress: (Long) -> Unit,
+    ) : okhttp3.RequestBody() {
+        override fun contentType() = "application/zip".toMediaType()
+        override fun contentLength() = file.length()
+        override fun writeTo(sink: okio.BufferedSink) {
+            var sent = 0L
+            var last = 0L
+            file.inputStream().use { input ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    sink.write(buf, 0, n)
+                    sent += n
+                    val now = System.currentTimeMillis()
+                    if (now - last >= 60) {
+                        last = now
+                        onProgress(sent)
+                    }
+                }
+            }
+            onProgress(sent)
         }
     }
 
