@@ -90,7 +90,8 @@ object WxDownloader {
                 }
             }.onFailure { XposedBridge.log("$TAG Zi failed: ${it.message}") }
 
-            val imgId = fieldLong(info, "f479445a")
+            // v61.b0 的字段是 jadx 重命名：imgId 运行时叫 a（renamed from: a）
+            val imgId = fieldLong(info, "a").takeIf { it > 0 } ?: fieldLong(info, "f479445a")
             XposedBridge.log("$TAG ImgInfo=${info.javaClass.name} imgId=$imgId talker=$talker msgId=$msgId svr=$msgSvrId")
             if (imgId <= 0) {
                 XposedBridge.log("$TAG imgId invalid, abort")
@@ -189,7 +190,9 @@ object WxDownloader {
         }
         Thread({
             var f: File? = null
-            val deadline = System.currentTimeMillis() + 30_000
+            val started = System.currentTimeMillis()
+            val deadline = started + 90_000
+            var retried = false
             while (System.currentTimeMillis() < deadline) {
                 val rel = findImgInfo2Original(ctx, msgSvrId)
                 if (rel != null) {
@@ -199,8 +202,14 @@ object WxDownloader {
                         break
                     }
                 }
+                // 微信下载队列慢时 30s 内可能没完成，再触发一次
+                if (!retried && System.currentTimeMillis() - started > 30_000) {
+                    retried = true
+                    runCatching { downloadViaImageService(ctx, msgSvrId, talker) }
+                    fileLog(ctx, "downloadOriginal retry svr=$msgSvrId")
+                }
                 try {
-                    Thread.sleep(800)
+                    Thread.sleep(1000)
                 } catch (_: InterruptedException) {
                     break
                 }
