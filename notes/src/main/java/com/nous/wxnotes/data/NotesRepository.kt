@@ -153,7 +153,12 @@ class NotesRepository(private val context: Context) {
                 talkerTitle = talkerTitle,
                 sender = m.sender,
                 senderName = m.senderName.ifBlank {
-                    if (m.isSend) "我" else talkerTitle
+                    when {
+                        m.isSend -> "我"
+                        // 群聊时不要把群名当发送人（导出时会误导）
+                        talker.endsWith("@chatroom") -> ""
+                        else -> talkerTitle
+                    }
                 },
                 type = m.type,
                 subType = if (m.subType != 0) m.subType else parsed?.subType ?: 0,
@@ -546,7 +551,12 @@ class NotesRepository(private val context: Context) {
                 sb.appendLine()
                 lastDay = day
             }
-            val who = if (m.isSend) "我" else m.senderName.ifBlank { note.talkerTitle }
+            val who = when {
+                m.isSend -> "我"
+                m.senderName.isNotBlank() -> m.senderName
+                note.talker.endsWith("@chatroom") -> m.sender.ifBlank { "群成员" }
+                else -> note.talkerTitle
+            }
             sb.appendLine("**${dayFmt.format(Date(timeMs))} · $who**")
             sb.appendLine()
             when {

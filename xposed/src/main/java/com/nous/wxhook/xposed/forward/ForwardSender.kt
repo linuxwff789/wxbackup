@@ -173,7 +173,7 @@ object ForwardSender {
             createTime = createTime,
             isSend = ex.isSend,
             sender = sender,
-            senderName = "",
+            senderName = senderDisplayName(ctx, sender),
             text = parsed.text,
             rawXml = content.take(4_000),
             mediaKind = mediaKind,
@@ -450,7 +450,7 @@ object ForwardSender {
                 createTime = createTime,
                 isSend = ex.isSend,
                 sender = sender,
-                senderName = "",
+                senderName = senderDisplayName(ctx, sender),
                 text = parsed.text,
                 rawXml = content.take(4_000),
                 mediaKind = mediaKind,
@@ -731,6 +731,13 @@ object ForwardSender {
         }
         // 时间差超过 3 天认为不是同一条
         return if (best != null && bestDiff < 3 * 24 * 3600 * 1000L) best!!.absolutePath else null
+    }
+
+    /** 群消息里 content 前缀是成员 wxid，转成微信昵称（查不到就退回 wxid 本身）。 */
+    private fun senderDisplayName(ctx: Context?, sender: String): String {
+        if (sender.isBlank()) return ""
+        val nick = runCatching { WeDb.contactNickname(ctx, sender) }.getOrDefault("")
+        return nick.ifBlank { sender }
     }
 
     private fun guessKind(path: String): String {

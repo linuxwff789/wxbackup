@@ -429,7 +429,14 @@ private fun MessageRow(
         Column(modifier = Modifier.widthIn(max = 320.dp)) {
             Text(
                 buildString {
-                    append(if (mine) "我" else m.senderName.ifBlank { note.talkerTitle })
+                    append(
+                        when {
+                            mine -> "我"
+                            m.senderName.isNotBlank() -> m.senderName
+                            note.talker.endsWith("@chatroom") -> m.sender.ifBlank { "群成员" }
+                            else -> note.talkerTitle
+                        }
+                    )
                     val t = m.createTime * 1000
                     if (t > 0) append("  ").append(formatTime(t))
                 },
