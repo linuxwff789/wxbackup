@@ -113,8 +113,10 @@ class NotesRepository(private val context: Context) {
                 val actualSize = if (existing.mediaPath.isNotBlank() && !currentMissing) {
                     runCatching { File(existing.mediaPath).length() }.getOrDefault(0L)
                 } else 0L
+                // provider 直传的文件一定是从微信侧拿到的原图/大文件，直接覆盖缩略图
+                val fromInbox = m.localPath.startsWith("content://")
                 val betterMedia = newerMedia && m.fileSize > 0 && m.fileSize > actualSize
-                if (newerMedia && (currentMissing || betterMedia)) {
+                if (newerMedia && (currentMissing || betterMedia || fromInbox)) {
                     val newPath = importMedia(noteId, m, mediaKind)
                     if (newPath.isNotBlank()) {
                         messageDao.updateMedia(

@@ -433,7 +433,7 @@ object ForwardSender {
                 rawXml = content.take(4_000),
                 mediaKind = mediaKind,
                 fileName = parsed.fileName,
-                fileSize = parsed.fileSize,
+                fileSize = if (localMedia != null) File(localMedia).length() else parsed.fileSize,
                 durationMs = parsed.durationMs,
                 mediaBase64 = mediaBase64,
                 localPath = mediaUrl
