@@ -30,6 +30,7 @@ class AssembleChunkWorker(context: Context, params: WorkerParameters) : Coroutin
 
         val db = NotesDatabase.get(applicationContext)
         val msg = db.messageDao().getByKey(meta.dedupeKey)
+            ?: db.messageDao().getByKeyPrefix(meta.dedupeKey)
         if (msg == null) {
             // 消息批次可能还没入库，等它
             return if (runAttemptCount < 10) Result.retry() else {

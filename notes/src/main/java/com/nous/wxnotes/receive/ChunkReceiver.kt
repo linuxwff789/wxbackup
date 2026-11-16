@@ -62,10 +62,11 @@ class ChunkReceiver : BroadcastReceiver() {
         try {
             val bytes = android.util.Base64.decode(chunk.data, android.util.Base64.DEFAULT)
             File(dir, "${chunk.index}.part").writeBytes(bytes)
-            // 元数据每片都写一次（内容相同），用临时文件原子替换
+            // 元数据每片都写一次（内容相同），用临时文件原子替换。
+            // 注意不能写原始 json：里面含本片的 base64 data，曾把 meta.json 撑到 127KB。
             val meta = File(dir, "meta.json")
             val tmp = File(dir, "meta.json.tmp")
-            tmp.writeText(json)
+            tmp.writeText(chunk.copy(data = "").encode())
             if (!tmp.renameTo(meta)) {
                 meta.writeText(json)
                 tmp.delete()

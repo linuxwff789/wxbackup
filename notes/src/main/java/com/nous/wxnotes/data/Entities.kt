@@ -167,6 +167,10 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE dedupeKey=:key LIMIT 1")
     suspend fun getByKey(key: String): MessageEntity?
 
+    /** 兼容旧的 chunk 元数据（dedupeKey 不带 |n:noteId 后缀）。 */
+    @Query("SELECT * FROM messages WHERE dedupeKey LIKE :prefix || '%' ORDER BY id DESC LIMIT 1")
+    suspend fun getByKeyPrefix(prefix: String): MessageEntity?
+
     @Query("UPDATE messages SET mediaPath=:path, mediaKind=:kind, fileName=:name, fileSize=:size WHERE id=:id")
     suspend fun updateMedia(id: Long, path: String, kind: String, name: String, size: Long)
 }
