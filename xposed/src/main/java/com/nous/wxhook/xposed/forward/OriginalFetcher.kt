@@ -182,7 +182,8 @@ object OriginalFetcher {
                     title = p.talkerTitle.ifBlank { p.talker },
                     isGroup = p.talker.endsWith("@chatroom")
                 ),
-                messages = listOf(msg)
+                messages = listOf(msg),
+                update = true
             )
             val json = batch.encode()
             val intent = Intent(ForwardProtocol.ACTION_RECEIVE_BATCH).apply {

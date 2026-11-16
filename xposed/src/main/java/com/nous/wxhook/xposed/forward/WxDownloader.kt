@@ -655,7 +655,8 @@ object WxDownloader {
             val batch = ForwardBatch(
                 pluginVersion = "1.0.3",
                 conversation = Conversation(talker, talkerTitle.ifBlank { talker }, talker.endsWith("@chatroom")),
-                messages = msgs.map { it.first }
+                messages = msgs.map { it.first },
+                update = true
             )
             ctx.sendBroadcast(
                 Intent(ForwardProtocol.ACTION_RECEIVE_BATCH).apply {

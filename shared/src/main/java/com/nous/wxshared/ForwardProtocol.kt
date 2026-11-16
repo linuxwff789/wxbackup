@@ -246,7 +246,10 @@ object ForwardProtocol {
         val pluginVersion: String = "",
         val noteTitle: String = "",
         val conversation: Conversation = Conversation(""),
-        val messages: List<ForwardMessage> = emptyList()
+        val messages: List<ForwardMessage> = emptyList(),
+        /** true 表示这是"原图/附件补全"的更新，应回到消息原本所属的笔记；
+         *  false 表示用户主动保存，即使只有一条也要新建笔记。 */
+        val update: Boolean = false
     ) {
         fun toJson(): JSONObject {
             val arr = JSONArray()
@@ -259,6 +262,7 @@ object ForwardProtocol {
                 .put("noteTitle", noteTitle)
                 .put("conversation", conversation.toJson())
                 .put("messages", arr)
+                .put("update", update)
         }
 
         fun encode(): String = toJson().toString()
@@ -282,7 +286,8 @@ object ForwardProtocol {
                     pluginVersion = o.optString("pluginVersion").orEmpty(),
                     noteTitle = o.optString("noteTitle").orEmpty(),
                     conversation = Conversation.fromJson(o.optJSONObject("conversation")),
-                    messages = list
+                    messages = list,
+                    update = o.optBoolean("update", false)
                 )
             }
         }

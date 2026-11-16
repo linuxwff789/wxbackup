@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -451,6 +452,14 @@ private fun MessageContent(
                         .clickable { onImageClick(m.mediaPath) },
                     contentScale = ContentScale.Fit
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { onImageClick(m.mediaPath) }) {
+                        Text("查看", style = MaterialTheme.typography.labelSmall)
+                    }
+                    TextButton(onClick = {
+                        shareMedia(context, m.mediaPath, ForwardProtocol.MEDIA_IMAGE, m.fileName)
+                    }) { Text("分享", style = MaterialTheme.typography.labelSmall) }
+                }
                 if (m.text.isNotBlank() && m.text != "[图片]") {
                     Spacer(Modifier.height(4.dp))
                     Text(m.text, style = MaterialTheme.typography.bodySmall)
@@ -467,7 +476,8 @@ private fun MessageContent(
         ForwardProtocol.MEDIA_FILE -> AttachmentRow(
             icon = "📄", title = m.fileName.ifBlank { m.text.ifBlank { "[文件]" } },
             subtitle = WxMessageParser.formatSize(m.fileSize),
-            onClick = { if (m.mediaPath.isNotBlank()) openLocalFile(context, m.mediaPath, "file", m.fileName) }
+            onClick = { if (m.mediaPath.isNotBlank()) openLocalFile(context, m.mediaPath, "file", m.fileName) },
+            onShare = { shareMedia(context, m.mediaPath, ForwardProtocol.MEDIA_FILE, m.fileName) }
         )
 
         else -> {
@@ -501,24 +511,40 @@ private fun MessageContent(
 }
 
 @Composable
-private fun AttachmentRow(icon: String, title: String, subtitle: String, onClick: () -> Unit) {
+private fun AttachmentRow(
+    icon: String,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    onShare: (() -> Unit)? = null
+) {
     Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(icon, style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.width(8.dp))
-        Column {
-            Text(title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (subtitle.isNotBlank()) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick)
+                .padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(icon, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.width(8.dp))
+            Column {
+                Text(title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (subtitle.isNotBlank()) {
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        if (onShare != null) {
+            IconButton(onClick = onShare) {
+                Icon(Icons.Default.Share, contentDescription = "分享", tint = MaterialTheme.colorScheme.primary)
             }
         }
     }
@@ -562,25 +588,29 @@ private fun PendingMedia(m: MessageEntity) {
     }
 }
 
-/** 笔记内直接播放视频，不跳转外部 App。 */
+/** 笔记内直接播放视频：按原始比例显示，支持全屏。 */
 @Composable
 private fun VideoContent(m: MessageEntity) {
     val context = LocalContext.current
+    var fullscreen by remember { mutableStateOf(false) }
+
     Column(modifier = Modifier.fillMaxWidth()) {
-        androidx.compose.ui.viewinterop.AndroidView(
-            factory = { ctx ->
-                android.widget.VideoView(ctx).apply {
-                    setVideoPath(m.mediaPath)
-                    val mc = android.widget.MediaController(ctx)
-                    mc.setAnchorView(this)
-                    setMediaController(mc)
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 260.dp)
-                .clip(RoundedCornerShape(8.dp))
-        )
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            androidx.compose.ui.viewinterop.AndroidView(
+                factory = { ctx ->
+                    AspectVideoView(ctx).apply {
+                        setVideoPath(m.mediaPath)
+                        val mc = android.widget.MediaController(ctx)
+                        mc.setAnchorView(this)
+                        setMediaController(mc)
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 340.dp)
+                    .clip(RoundedCornerShape(8.dp))
+            )
+        }
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -592,9 +622,58 @@ private fun VideoContent(m: MessageEntity) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.weight(1f))
+            TextButton(onClick = { shareMedia(context, m.mediaPath, ForwardProtocol.MEDIA_VIDEO, m.fileName) }) {
+                Text("分享", style = MaterialTheme.typography.labelSmall)
+            }
+            TextButton(onClick = { fullscreen = true }) {
+                Text("全屏", style = MaterialTheme.typography.labelSmall)
+            }
             TextButton(onClick = {
                 if (m.mediaPath.isNotBlank()) openLocalFile(context, m.mediaPath, "video", m.fileName)
             }) { Text("外部打开", style = MaterialTheme.typography.labelSmall) }
+        }
+    }
+
+    if (fullscreen) {
+        FullscreenVideoDialog(
+            path = m.mediaPath,
+            onDismiss = { fullscreen = false }
+        )
+    }
+}
+
+@Composable
+private fun FullscreenVideoDialog(path: String, onDismiss: () -> Unit) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.ui.viewinterop.AndroidView(
+                factory = { ctx ->
+                    AspectVideoView(ctx).apply {
+                        setVideoPath(path)
+                        val mc = android.widget.MediaController(ctx)
+                        mc.setAnchorView(this)
+                        setMediaController(mc)
+                        start()
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "关闭", tint = Color.White)
+            }
         }
     }
 }
@@ -654,5 +733,11 @@ private fun VoiceContent(m: MessageEntity) {
             },
             style = MaterialTheme.typography.bodyMedium
         )
+        Spacer(Modifier.width(4.dp))
+        IconButton(onClick = {
+            shareMedia(context, m.mediaPath, ForwardProtocol.MEDIA_VOICE, m.fileName)
+        }) {
+            Icon(Icons.Default.Share, contentDescription = "分享", tint = MaterialTheme.colorScheme.primary)
+        }
     }
 }

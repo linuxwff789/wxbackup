@@ -65,12 +65,51 @@ fun openLocalFile(context: Context, path: String, kind: String, name: String) {
     }
 }
 
-fun shareLocalFile(context: Context, file: File, mime: String = "text/markdown") {
+fun shareLocalFile(context: Context, file: File, mime: String = "*/*") {
     val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = mime
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    runCatching { context.startActivity(Intent.createChooser(intent, "分享笔记")) }
+    runCatching { context.startActivity(Intent.createChooser(intent, "分享文件")) }
+        .onFailure { android.widget.Toast.makeText(context, "无法分享：${it.message}", android.widget.Toast.LENGTH_SHORT).show() }
+}
+
+/** 按媒体类型分享笔记里的附件（图片/视频/语音/文件都能分享）。 */
+fun shareMedia(context: Context, path: String, kind: String, fileName: String) {
+    val f = File(path)
+    if (path.isBlank() || !f.isFile) {
+        android.widget.Toast.makeText(context, "文件还没下载完", android.widget.Toast.LENGTH_SHORT).show()
+        return
+    }
+    val mime = when (kind) {
+        com.nous.wxshared.ForwardProtocol.MEDIA_IMAGE -> "image/*"
+        com.nous.wxshared.ForwardProtocol.MEDIA_VIDEO -> "video/*"
+        com.nous.wxshared.ForwardProtocol.MEDIA_VOICE -> "audio/*"
+        else -> mimeFromName(fileName.ifBlank { f.name })
+    }
+    shareLocalFile(context, f, mime)
+}
+
+private fun mimeFromName(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+    "pdf" -> "application/pdf"
+    "doc" -> "application/msword"
+    "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    "xls" -> "application/vnd.ms-excel"
+    "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    "ppt" -> "application/vnd.ms-powerpoint"
+    "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    "zip" -> "application/zip"
+    "txt" -> "text/plain"
+    "mp3" -> "audio/mpeg"
+    "wav" -> "audio/wav"
+    "amr" -> "audio/amr"
+    "mp4" -> "video/mp4"
+    "jpg", "jpeg" -> "image/jpeg"
+    "png" -> "image/png"
+    "gif" -> "image/gif"
+    "webp" -> "image/webp"
+    "md" -> "text/markdown"
+    else -> "*/*"
 }
