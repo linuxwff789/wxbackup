@@ -132,13 +132,8 @@ object ForwardSender {
         if (autoFetchOriginal && (localMedia == null || thumbOnly) &&
             mediaKind == ForwardProtocol.MEDIA_IMAGE && ex.msgSvrId > 0
         ) {
-            val md5 = parsed.mediaMd5
             val fetch: ((File?) -> Unit) -> Boolean = { cb ->
-                if (md5.length >= 8) {
-                    WxDownloader.downloadImage(ctx, ex.talker, ex.msgId, ex.msgSvrId, md5, cb)
-                } else {
-                    WxDownloader.downloadOriginal(ctx, ex.talker, ex.msgSvrId, ex.msgId, cb)
-                }
+                WxDownloader.downloadOriginal(ctx, ex.talker, ex.msgSvrId, ex.msgId, cb)
             }
             fetch { file ->
                 if (file != null) {
@@ -149,7 +144,7 @@ object ForwardSender {
                 } else if (view != null && mediaBase64.isNotEmpty()) {
                     // 无感下载失败才退回打开预览
                     OriginalFetcher.schedule(
-                        ctx, view, md5, ex.msgId, ex.msgSvrId, ex.talker,
+                        ctx, view, parsed.mediaMd5, ex.msgId, ex.msgSvrId, ex.talker,
                         talkerTitle, ex.isSend, createTime, type, parsed.fileName
                     )
                 }
@@ -394,13 +389,10 @@ object ForwardSender {
                     "local=${localMedia?.takeLast(48)} thumb=$thumbOnly md5=${parsed.mediaMd5.length}"
             )
             if ((localMedia == null || thumbOnly) && mediaKind == ForwardProtocol.MEDIA_IMAGE && ex.msgSvrId > 0) {
-                val md5 = parsed.mediaMd5
+                // 统一走 ImgInfo2 + DownloadImageService（v61.j）：
+                // NetSceneGetMsgImg 需要读 ImgInfo.imgId，字段名是 jadx 重命名的，实测读不到。
                 val fetch: ((File?) -> Unit) -> Boolean = { cb ->
-                    if (md5.length >= 8) {
-                        WxDownloader.downloadImage(ctx, ex.talker, ex.msgId, ex.msgSvrId, md5, cb)
-                    } else {
-                        WxDownloader.downloadOriginal(ctx, ex.talker, ex.msgSvrId, ex.msgId, cb)
-                    }
+                    WxDownloader.downloadOriginal(ctx, ex.talker, ex.msgSvrId, ex.msgId, cb)
                 }
                 fetch { file ->
                     if (file != null) {
