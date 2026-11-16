@@ -76,6 +76,31 @@ class WxCliReceiver : BroadcastReceiver() {
                 if (mi == null) "msg not found" else MessageExtractor.dump(mi)
             }
 
+            "sdcard_test" -> {
+                // 测试微信能否通过 MediaStore 写公共 Download 目录（Android 10+ scoped storage）
+                val name = "wxnotes_test_${System.currentTimeMillis()}.txt"
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download/wxnotes")
+                }
+                try {
+                    val uri = context.contentResolver.insert(
+                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                    )
+                    if (uri == null) {
+                        "insert failed"
+                    } else {
+                        context.contentResolver.openOutputStream(uri)?.use {
+                            it.write(ByteArray(200 * 1024) { i -> (i % 251).toByte() })
+                        }
+                        "wrote uri=$uri"
+                    }
+                } catch (e: Throwable) {
+                    "error ${e.javaClass.simpleName} ${e.message}"
+                }
+            }
+
             "inbox_test" -> {
                 val f = File(context.cacheDir, "inbox_test.bin")
                 f.writeBytes(ByteArray(200 * 1024) { (it % 251).toByte() })
