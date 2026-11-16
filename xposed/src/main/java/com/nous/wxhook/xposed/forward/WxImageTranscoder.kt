@@ -57,13 +57,13 @@ object WxImageTranscoder {
                 WxDownloader.fileLog(ctx, "transcode: sps parse failed ${src.name}, fallback ${w}x$h")
             }
             val bmp = decodeFirstFrame(ctx, data, offset, w, h) ?: return null
-            // 压到 550KB 以内：这样 publishUpdate 会走单次广播内联，
-            // 不再依赖分片（分片在笔记进程被冻结时容易整包丢失）。
+            // 压到 300KB 以内：这样 publishUpdate 走单次广播内联（base64 后 ~400KB），
+            // 避免接近 Binder 1MB 限制，也不再依赖分片（分片在笔记进程被冻结时容易整包丢失）。
             var quality = 92
             while (true) {
                 FileOutputStream(out).use { bmp.compress(Bitmap.CompressFormat.JPEG, quality, it) }
-                if (out.length() <= 550_000 || quality <= 60) break
-                quality -= 8
+                if (out.length() <= 300_000 || quality <= 55) break
+                quality -= 7
             }
             bmp.recycle()
             WxDownloader.fileLog(

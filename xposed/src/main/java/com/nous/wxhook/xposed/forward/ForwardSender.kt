@@ -227,7 +227,7 @@ object ForwardSender {
     }
 
     /** Binder 单次 ~1MB，base64 后约 1.33 倍；500KB 原文安全 */
-    private const val MAX_INLINE_BYTES = 16 * 1024L
+    private const val MAX_INLINE_BYTES = 400 * 1024L
 
     /**
      * 把大媒体切成 ~360KB 的分片广播，接收端落盘合并后更新消息。
