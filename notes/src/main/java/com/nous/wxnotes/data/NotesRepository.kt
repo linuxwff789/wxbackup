@@ -124,7 +124,7 @@ class NotesRepository(private val context: Context) {
                 val fromInbox = m.localPath.startsWith("content://")
                 val betterMedia = newerMedia && m.fileSize > 0 && m.fileSize > actualSize
                 if (newerMedia && (currentMissing || betterMedia || fromInbox)) {
-                    val newPath = importMedia(noteId, m, mediaKind)
+                    val newPath = finalizeVoice(importMedia(noteId, m, mediaKind), mediaKind)
                     if (newPath.isNotBlank()) {
                         messageDao.updateMedia(
                             existing.id,
@@ -142,7 +142,7 @@ class NotesRepository(private val context: Context) {
                 continue
             }
 
-            val mediaPath = importMedia(noteId, m, mediaKind)
+            val mediaPath = finalizeVoice(importMedia(noteId, m, mediaKind), mediaKind)
 
             val entity = MessageEntity(
                 noteId = noteId,
@@ -225,6 +225,18 @@ class NotesRepository(private val context: Context) {
         } catch (_: Throwable) {
             m.localPath
         }
+    }
+
+    /**
+     * 微信语音是 SILK：落盘后转成 WAV，MediaPlayer 才能播。
+     */
+    private fun finalizeVoice(path: String, kind: String): String {
+        if (path.isBlank() || kind != ForwardProtocol.MEDIA_VOICE) return path
+        val f = File(path)
+        if (!f.isFile || !VoiceTranscoder.isSilk(f)) return path
+        val wav = VoiceTranscoder.transcode(context, f) ?: return path
+        runCatching { f.delete() }
+        return wav.absolutePath
     }
 
     /** 读取插件通过 ContentProvider 写入的 inbox 文件，移动到笔记媒体目录。 */

@@ -62,6 +62,11 @@ android {
     }
     packaging {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}")
+        // libsilkdec.so 是可执行文件，需要解压到 nativeLibraryDir 才能 exec
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += "**/libsilkdec.so"
+        }
     }
 }
 

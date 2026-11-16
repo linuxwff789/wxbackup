@@ -61,8 +61,6 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            // 本地 Termux 构建时 NDK 的 llvm-strip 是 x86_64 二进制，跑不了；跳过 strip（CI 也不需要）
-            keepDebugSymbols += "**/libsilkdec.so"
         }
     }
 }
