@@ -87,6 +87,10 @@ object WeDb {
         val out = ArrayList<Map<String, Any?>>()
         var c: Cursor? = null
         try {
+            runCatching {
+                val open = db!!.javaClass.getMethod("isOpen").invoke(db)
+                WxDownloader.fileLog(ctx, "WeDb isOpen=$open sql=${sql.take(60)}")
+            }
             val m = db!!.javaClass.methods.firstOrNull {
                 it.name == "rawQuery" && it.parameterCount == 2
             } ?: throw NoSuchMethodException("rawQuery(String,String[])")
@@ -106,7 +110,12 @@ object WeDb {
                 out.add(row)
             }
         } catch (e: Throwable) {
-            WxDownloader.fileLog(ctx, "WeDb query failed: ${e.message}")
+            val cause = e.cause ?: e
+            WxDownloader.fileLog(
+                ctx,
+                "WeDb query failed: ${e.message} cause=${cause.javaClass.name}:${cause.message}\n" +
+                    cause.stackTraceToString().take(1200)
+            )
         } finally {
             try {
                 c?.close()
