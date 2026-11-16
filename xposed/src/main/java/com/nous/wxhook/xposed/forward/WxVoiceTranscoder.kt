@@ -30,7 +30,14 @@ object WxVoiceTranscoder {
     }
 
     fun transcode(ctx: Context, src: File): File? {
-        val exe = File(ctx.applicationInfo.nativeLibraryDir, "libsilkdec.so")
+        // 注意：ctx 是微信进程的 Context，applicationInfo.nativeLibraryDir 指向微信自己的 lib 目录；
+        // silk 解码器在模块 APK 里，必须按模块包名取。
+        val exe = try {
+            val info = ctx.packageManager.getApplicationInfo("com.nous.wxhook.xposed", 0)
+            File(info.nativeLibraryDir, "libsilkdec.so")
+        } catch (_: Throwable) {
+            File(ctx.applicationInfo.nativeLibraryDir, "libsilkdec.so")
+        }
         if (!exe.isFile) {
             WxDownloader.fileLog(ctx, "silk decoder missing: ${exe.absolutePath}")
             return null
