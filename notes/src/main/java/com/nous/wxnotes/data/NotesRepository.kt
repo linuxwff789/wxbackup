@@ -82,9 +82,12 @@ class NotesRepository(private val context: Context) {
         var lastText = ""
         var lastTime = 0L
         for (m in batch.messages) {
-            val dedupe = buildString {
+            // 去重作用域限定在"同一笔记"：同一条微信消息可以保存进不同笔记（例如不同批次），
+            // 但同一笔记内重复保存不产生重复条目。
+            val legacyKey = buildString {
                 append(talker).append('|').append(m.effectiveDedupeKey())
             }
+            val dedupe = "$legacyKey|n:$noteId"
             val parsed = if (m.text.isBlank()) {
                 WxMessageParser.parse(m.type, m.rawXml, m.subType)
             } else null
@@ -93,6 +96,7 @@ class NotesRepository(private val context: Context) {
                 ?: parsed?.mediaKind.orEmpty()
             // 已经存过：如果这次带了更完整的媒体（例如自动补全的原图），更新它
             val existing = messageDao.getByKey(dedupe)
+                ?: messageDao.getByKey(legacyKey)?.takeIf { it.noteId == noteId }
             if (existing != null) {
                 val newerMedia = m.mediaBase64.isNotBlank() ||
                     (m.localPath.isNotBlank() && !m.localPath.startsWith("lss://") && !m.localPath.startsWith("http"))
