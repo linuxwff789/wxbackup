@@ -197,12 +197,12 @@ object MultiSelectHook {
             ?.toSet()
             .orEmpty()
 
-        val adapterIds = selectedMsgIds(ctxObj)
-        if (adapterIds.isNotEmpty()) {
-            val byId = adapterIds.mapNotNull { msgById(ctxObj, it) }
+        val items = selectedItems(ctxObj)
+        if (items.isNotEmpty()) {
+            val byId = items.mapNotNull { (id, tk) -> msgById(ctxObj, id, tk) }
             if (byId.isNotEmpty()) {
                 val out = dedupe(byId)
-                XposedBridge.log("$TAG selected from adapter.W size=${out.size} ids=$adapterIds")
+                XposedBridge.log("$TAG selected from adapter.W size=${out.size} ids=${items.map { it.first }}")
                 return out
             }
         }
@@ -284,88 +284,127 @@ object MultiSelectHook {
         return out
     }
 
-    /** 用 ChattingContext 里 (long)->MsgInfo 的方法按 msgId 查消息。 */
     /** 微信真正维护多选状态的是 adapter.k.W（CopyOnWriteArraySet<MsgIdTalker>）。 */
-    private fun selectedMsgIds(ctx: Any?): Set<Long> {
+    private fun selectedItems(ctx: Any?): List<Pair<Long, String>> {
         val adapter = cachedAdapter
         if (adapter != null) {
             runCatching {
                 val w = de.robv.android.xposed.XposedHelpers.getObjectField(adapter, "W") as? Collection<*>
-                val ids = w?.mapNotNull { (readField(it, "f149692d") as? Number)?.toLong() }?.toSet().orEmpty()
-                XposedBridge.log("$TAG cachedAdapter.W size=${w?.size} ids=$ids")
-                if (ids.isNotEmpty()) return ids
+                val items = (w?.toList() ?: emptyList()).mapNotNull { e -> e?.let { msgIdTalkerOf(it) } }
+                XposedBridge.log("$TAG cachedAdapter.W size=${w?.size} ids=${items.map { it.first }}")
+                if (items.isNotEmpty()) return items
             }.onFailure { XposedBridge.log("$TAG cachedAdapter.W failed: ${it.message}") }
         }
         if (ctx == null) {
             XposedBridge.log("$TAG ids ctx=null")
-            return emptySet()
+            return emptyList()
         }
         return try {
             val cls = Class.forName("wl5.z", false, ctx.javaClass.classLoader)
             // cm5.d 有公开方法 a(Class)（内部转发给 manager），避免读私有字段
             val comp = de.robv.android.xposed.XposedHelpers.callMethod(ctx, "a", cls)
-            XposedBridge.log("$TAG ids comp=${comp?.javaClass?.name}")
-            if (comp == null) return emptySet()
-            val w = de.robv.android.xposed.XposedHelpers.getObjectField(comp, "W")
-            XposedBridge.log("$TAG ids w=${w?.javaClass?.name} size=${(w as? Collection<*>)?.size}")
-            val col = w as? Collection<*> ?: return emptySet()
-            val ids = col.mapNotNull { (readField(it, "f149692d") as? Number)?.toLong() }.toSet()
-            XposedBridge.log("$TAG adapter.W ids=$ids")
-            ids
+            if (comp == null) return emptyList()
+            val w = de.robv.android.xposed.XposedHelpers.getObjectField(comp, "W") as? Collection<*>
+            val items = (w?.toList() ?: emptyList()).mapNotNull { e -> e?.let { msgIdTalkerOf(it) } }
+            XposedBridge.log("$TAG adapter.W ids=${items.map { it.first }}")
+            items
         } catch (e: Throwable) {
             XposedBridge.log("$TAG ids failed: ${e.message}")
-            emptySet()
+            emptyList()
         }
     }
 
-    private fun msgById(ctxObj: Any?, id: Long): Any? {
-        // 首选 adapter.X0(long)：微信自己按 msgId 取 MsgInfo
+    /** MsgIdTalker: f149692d=msgId，另有 String 字段存 talker。 */
+    private fun msgIdTalkerOf(o: Any): Pair<Long, String>? {
+        val id = (readField(o, "f149692d") as? Number)?.toLong() ?: return null
+        var talker = ""
         runCatching {
-            val adapter = cachedAdapter
-            if (adapter != null) {
-                val m = adapter.javaClass.methods.firstOrNull {
-                    it.parameterCount == 1 && it.parameterTypes[0] == java.lang.Long.TYPE
-                } ?: return@runCatching
-                val v = m.invoke(adapter, id)
-                if (MessageExtractor.looksLikeMsgInfo(v)) {
-                    val got = MessageExtractor.extract(v)
-                    XposedBridge.log("$TAG adapter.X0 want=$id got=${got?.msgId} type=${got?.type}")
-                    return v
+            o.javaClass.declaredFields.forEach { f ->
+                if (f.type == String::class.java) {
+                    f.isAccessible = true
+                    val s = f.get(o) as? String
+                    if (!s.isNullOrBlank() && (s.contains("@") || s.startsWith("wxid_"))) talker = s
                 }
             }
         }
-        // 其次微信自己的查询：oy0.k0.Zi(talker, msgId)
-        runCatching {
-            val talker = ctxObj?.javaClass?.getMethod("x")?.invoke(ctxObj) as? String
-            if (!talker.isNullOrBlank()) {
-                val mi = Class.forName("oy0.k0", false, ctxObj.javaClass.classLoader)
+        return id to talker
+    }
+
+    /**
+     * 按 msgId 取 MsgInfo。
+     *
+     * 注意：不能盲信 adapter 上的单参 long 方法（可能是按 position 取值），
+     * 否则会把选中的文字消息解析成相邻的其它消息。所有路径都必须校验 msgId。
+     */
+    private fun msgById(ctxObj: Any?, id: Long, hintTalker: String = ""): Any? {
+        val loader = (ctxObj ?: cachedAdapter)?.javaClass?.classLoader ?: return null
+
+        // talker：优先用调用方给的，其次从 ChattingContext 的无参 String 方法里找
+        var talker = hintTalker
+        if (talker.isBlank() && ctxObj != null) {
+            runCatching {
+                ctxObj.javaClass.methods.forEach { m ->
+                    if (m.parameterCount != 0 || m.returnType != String::class.java) return@forEach
+                    if (m.name == "toString" || m.name == "getClass") return@forEach
+                    val s = runCatching { m.invoke(ctxObj) as? String }.getOrNull()
+                    if (!s.isNullOrBlank() && (s.contains("@") || s.startsWith("wxid_"))) {
+                        talker = s
+                        return@runCatching
+                    }
+                }
+            }
+        }
+
+        // 1) 微信自己的查询：oy0.k0.Zi(talker, msgId)——最可靠
+        if (talker.isNotBlank()) {
+            runCatching {
+                val mi = Class.forName("oy0.k0", false, loader)
                     .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
                     .invoke(null, talker, id)
-                if (MessageExtractor.looksLikeMsgInfo(mi)) {
-                    val got = MessageExtractor.extract(mi)
-                    XposedBridge.log("$TAG msgById want=$id got=${got?.msgId} svr=${got?.msgSvrId} type=${got?.type} talker=$talker")
+                if (MessageExtractor.looksLikeMsgInfo(mi) && MessageExtractor.extract(mi)?.msgId == id) {
+                    XposedBridge.log("$TAG msgById Zi ok want=$id talker=$talker")
                     return mi
                 }
             }
         }
-        if (ctxObj == null) return null
-        val methods = ctxObj.javaClass.methods ?: return null
-        for (m in methods) {
-            if (m.parameterCount != 1) continue
-            val pt = m.parameterTypes[0]
-            if (pt != java.lang.Long.TYPE && pt != java.lang.Integer.TYPE) continue
-            val rt = m.returnType.name
-            if (rt != "com.tencent.mm.storage.e9") continue
-            try {
-                val arg: Any = if (pt == java.lang.Integer.TYPE) id.toInt() else id
-                val v = m.invoke(ctxObj, arg)
-                if (MessageExtractor.looksLikeMsgInfo(v)) {
-                    XposedBridge.log("$TAG msgById via ${m.name}(${pt.simpleName})")
-                    return v
+
+        // 2) adapter 上的单参 long 方法（可能按 position），必须校验 msgId
+        val adapter = cachedAdapter
+        if (adapter != null) {
+            adapter.javaClass.methods.forEach { m ->
+                if (m.parameterCount != 1 || m.parameterTypes[0] != java.lang.Long.TYPE) return@forEach
+                runCatching {
+                    val v = m.invoke(adapter, id)
+                    if (MessageExtractor.looksLikeMsgInfo(v)) {
+                        val got = MessageExtractor.extract(v)
+                        if (got?.msgId == id) {
+                            XposedBridge.log("$TAG msgById ${m.name}(long) ok want=$id")
+                            return v
+                        }
+                        XposedBridge.log("$TAG msgById ${m.name}($id) mismatch got=${got?.msgId} type=${got?.type}")
+                    }
                 }
-            } catch (_: Throwable) {
             }
         }
+
+        // 3) ChattingContext 上返回 MsgInfo 的单参方法，同样校验
+        if (ctxObj != null) {
+            ctxObj.javaClass.methods.forEach { m ->
+                if (m.parameterCount != 1) return@forEach
+                val pt = m.parameterTypes[0]
+                if (pt != java.lang.Long.TYPE && pt != java.lang.Integer.TYPE) return@forEach
+                if (m.returnType.name != "com.tencent.mm.storage.e9") return@forEach
+                runCatching {
+                    val arg: Any = if (pt == java.lang.Integer.TYPE) id.toInt() else id
+                    val v = m.invoke(ctxObj, arg)
+                    if (MessageExtractor.looksLikeMsgInfo(v) && MessageExtractor.extract(v)?.msgId == id) {
+                        XposedBridge.log("$TAG msgById ctx.${m.name} ok want=$id")
+                        return v
+                    }
+                }
+            }
+        }
+        XposedBridge.log("$TAG msgById NOT FOUND id=$id talker=$talker")
         return null
     }
 
