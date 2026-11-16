@@ -628,8 +628,6 @@ class NotesRepository(private val context: Context) {
 
     companion object {
         const val KEY_SKIP_MEDIA_SCAN = "skip_media_scan"
-        const val KEY_AGGREGATE_WINDOW = "aggregate_window_min"
-        const val DEFAULT_AGGREGATE_WINDOW = 30L
         const val KEY_KEEP_RAW = "keep_raw_xml"
         const val KEY_AUTO_NOTIFY = "auto_notify"
     }

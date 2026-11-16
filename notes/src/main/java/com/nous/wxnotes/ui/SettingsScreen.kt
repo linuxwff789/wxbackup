@@ -50,12 +50,6 @@ fun SettingsScreen(onBack: () -> Unit) {
     val prefs = remember {
         context.getSharedPreferences("wxnotes", Context.MODE_PRIVATE)
     }
-    var window by remember {
-        mutableStateOf(
-            prefs.getLong(NotesRepository.KEY_AGGREGATE_WINDOW, NotesRepository.DEFAULT_AGGREGATE_WINDOW).toString()
-        )
-    }
-    var saved by remember { mutableStateOf(false) }
     var skipMediaScan by remember {
         mutableStateOf(prefs.getBoolean(NotesRepository.KEY_SKIP_MEDIA_SCAN, true))
     }
@@ -80,35 +74,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Text("消息聚合", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text(
-                "同一会话在窗口期内连续转发，会自动追加到同一篇笔记。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = window,
-                    onValueChange = {
-                        if (it.length <= 4 && it.all(Char::isDigit)) {
-                            window = it
-                            saved = false
-                        }
-                    },
-                    singleLine = true,
-                    label = { Text("窗口（分钟）") },
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(onClick = {
-                    val v = window.toLongOrNull()?.coerceIn(1, 1440) ?: NotesRepository.DEFAULT_AGGREGATE_WINDOW
-                    prefs.edit().putLong(NotesRepository.KEY_AGGREGATE_WINDOW, v).apply()
-                    window = v.toString()
-                    saved = true
-                }) { Text(if (saved) "已保存" else "保存") }
-            }
-
-            HorizontalDivider()
-
             Text("媒体", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
@@ -181,7 +146,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             Text(
                 buildString {
                     appendLine("笔记数据库：应用私有目录（Room）")
-                    appendLine("媒体：应用私有 files/media/<笔记ID>/")
+                    appendLine("媒体：Download/wxnotes/media/<笔记ID>/（默认 .nomedia，不进相册）")
                     append("导出：${Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)}/wxnotes/exports/")
                 },
                 style = MaterialTheme.typography.bodySmall,
