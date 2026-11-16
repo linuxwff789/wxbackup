@@ -36,9 +36,11 @@ object VoiceTranscoder {
         val pcm = File(src.parentFile, "$stem.pcm")
         val wav = File(src.parentFile, "$stem.wav")
         return try {
-            val p = ProcessBuilder(exe.absolutePath, src.absolutePath, pcm.absolutePath)
+            val pb = ProcessBuilder(exe.absolutePath, src.absolutePath, pcm.absolutePath)
                 .redirectErrorStream(true)
-                .start()
+            // 子进程默认不会去 nativeLibraryDir 找 libc++_shared.so，显式指过去
+            pb.environment()["LD_LIBRARY_PATH"] = exe.parentFile?.absolutePath.orEmpty()
+            val p = pb.start()
             p.inputStream.bufferedReader().readText()
             if (!p.waitFor(30, TimeUnit.SECONDS)) {
                 p.destroy()
