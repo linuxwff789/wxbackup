@@ -482,11 +482,22 @@ object ForwardSender {
 
     private fun resolveUnderMicroMsg(rel: String): String? {
         if (rel.isBlank()) return null
+        // ImgInfo2.bigImgPath 通常只是文件名（如 <md5>.jpg），需按 image2/xx/yy/ 拼
+        val candidates = ArrayList<String>()
+        candidates.add(rel)
+        if (!rel.contains('/')) {
+            val stem = rel.substringBefore('.').substringBefore('_')
+            if (stem.length >= 4) {
+                candidates.add("image2/${stem.take(2)}/${stem.drop(2).take(2)}/$rel")
+            }
+        }
         return try {
             val root = File("/data/data/com.tencent.mm/MicroMsg")
             root.listFiles()?.forEach { d ->
-                val f = File(d, rel)
-                if (f.isFile && f.length() > 0) return f.absolutePath
+                candidates.forEach { c ->
+                    val f = File(d, c)
+                    if (f.isFile && f.length() > 0) return f.absolutePath
+                }
             }
             null
         } catch (_: Throwable) {
