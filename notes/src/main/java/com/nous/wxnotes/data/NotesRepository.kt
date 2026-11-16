@@ -37,7 +37,6 @@ class NotesRepository(private val context: Context) {
         val conv = batch.conversation
         val talker = conv.talker
         val talkerTitle = conv.title.ifBlank { talker.ifBlank { "微信消息" } }
-        val windowMs = prefs.getLong(KEY_AGGREGATE_WINDOW, DEFAULT_AGGREGATE_WINDOW) * 60_000L
         val firstText = batch.messages
             .firstOrNull { it.type == WxMessageParser.TYPE_TEXT && it.text.isNotBlank() }
             ?.text
@@ -52,11 +51,9 @@ class NotesRepository(private val context: Context) {
             val m0 = batch.messages[0]
             messageDao.getByKeyPrefix("$talker|${m0.effectiveDedupeKey()}")
         } else null
-        val existing = if (updateTarget != null) {
-            noteDao.getById(updateTarget.noteId)
-        } else if (talker.isNotBlank()) {
-            noteDao.findAggregateTarget(talker, now - windowMs)
-        } else null
+        // 每次保存单独成篇（不再按会话时间窗口合并）；
+        // 只有"补全原图/大图"这类单条更新才回到消息原本所属的笔记。
+        val existing = updateTarget?.let { noteDao.getById(it.noteId) }
         val noteId: Long
         var created = false
         if (existing != null) {
@@ -389,6 +386,18 @@ class NotesRepository(private val context: Context) {
     }
 
     suspend fun deleteNote(noteId: Long) = withContext(Dispatchers.IO) {
+        deleteNoteInternal(noteId)
+    }
+
+    /** 批量删除：连同消息与媒体文件一起清掉。 */
+    suspend fun deleteNotes(ids: List<Long>) = withContext(Dispatchers.IO) {
+        ids.forEach { deleteNoteInternal(it) }
+    }
+
+    private suspend fun deleteNoteInternal(noteId: Long) {
+        runCatching {
+            File(File(context.filesDir, "media"), noteId.toString()).deleteRecursively()
+        }
         messageDao.deleteByNote(noteId)
         noteDao.delete(noteId)
     }

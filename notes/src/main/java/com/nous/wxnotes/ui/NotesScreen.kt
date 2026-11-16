@@ -1,7 +1,10 @@
 package com.nous.wxnotes.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +21,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -37,6 +44,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,32 +72,83 @@ fun NotesScreen(
     var showNewDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    var selectionMode by remember { mutableStateOf(false) }
+    val selected = remember { mutableStateListOf<Long>() }
+    var renameTarget by remember { mutableStateOf<NoteEntity?>(null) }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    fun exitSelection() {
+        selectionMode = false
+        selected.clear()
+    }
+
+    BackHandler(enabled = selectionMode) { exitSelection() }
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("微信笔记", fontWeight = FontWeight.Bold)
-                        Text(
-                            "转发消息自动归档 · 本地存储",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "设置")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
+            if (selectionMode) {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = { exitSelection() }) {
+                            Icon(Icons.Default.Close, contentDescription = "退出多选")
+                        }
+                    },
+                    title = { Text("已选 ${selected.size} 项") },
+                    actions = {
+                        TextButton(onClick = {
+                            if (selected.size == notes.size && notes.isNotEmpty()) {
+                                selected.clear()
+                            } else {
+                                selected.clear()
+                                selected.addAll(notes.map { it.id })
+                            }
+                        }) { Text(if (selected.size == notes.size && notes.isNotEmpty()) "取消全选" else "全选") }
+                        if (selected.size == 1) {
+                            IconButton(onClick = {
+                                renameTarget = notes.firstOrNull { it.id == selected.first() }
+                            }) {
+                                Icon(Icons.Default.Edit, contentDescription = "重命名")
+                            }
+                        }
+                        IconButton(
+                            enabled = selected.isNotEmpty(),
+                            onClick = { confirmDelete = true }
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = "删除")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
                 )
-            )
+            } else {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text("微信笔记", fontWeight = FontWeight.Bold)
+                            Text(
+                                "转发消息自动归档 · 本地存储",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(Icons.Default.Settings, contentDescription = "设置")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background
+                    )
+                )
+            }
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showNewDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "新建笔记")
+            if (!selectionMode) {
+                FloatingActionButton(onClick = { showNewDialog = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "新建笔记")
+                }
             }
         }
     ) { padding ->
@@ -124,7 +183,26 @@ fun NotesScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(notes, key = { it.id }) { note ->
-                        NoteCard(note = note, onClick = { onOpenNote(note.id) })
+                        NoteCard(
+                            note = note,
+                            selectionMode = selectionMode,
+                            selected = selected.contains(note.id),
+                            onClick = {
+                                if (selectionMode) {
+                                    if (selected.contains(note.id)) selected.remove(note.id)
+                                    else selected.add(note.id)
+                                } else {
+                                    onOpenNote(note.id)
+                                }
+                            },
+                            onLongClick = {
+                                if (!selectionMode) {
+                                    selectionMode = true
+                                    selected.clear()
+                                    selected.add(note.id)
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -154,25 +232,100 @@ fun NotesScreen(
             dismissButton = { TextButton(onClick = { showNewDialog = false }) { Text("取消") } }
         )
     }
+
+    renameTarget?.let { target ->
+        var newTitle by remember(target.id) { mutableStateOf(target.title) }
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("重命名笔记") },
+            text = {
+                OutlinedTextField(
+                    value = newTitle,
+                    onValueChange = { newTitle = it },
+                    singleLine = true,
+                    label = { Text("标题") }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = newTitle.isNotBlank(),
+                    onClick = {
+                        val t = newTitle.trim()
+                        renameTarget = null
+                        scope.launch {
+                            vm.rename(target.id, t)
+                            exitSelection()
+                        }
+                    }
+                ) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("取消") } }
+        )
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除笔记") },
+            text = {
+                Text("确定删除选中的 ${selected.size} 篇笔记？笔记内的消息和媒体文件会一起删除，不可恢复。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val ids = selected.toList()
+                    confirmDelete = false
+                    scope.launch {
+                        vm.deleteNotes(ids)
+                        exitSelection()
+                    }
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } }
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NoteCard(note: NoteEntity, onClick: () -> Unit) {
+private fun NoteCard(
+    note: NoteEntity,
+    selectionMode: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+        border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            }
+        )
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.Description,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
+                if (selectionMode) {
+                    Icon(
+                        if (selected) Icons.Default.CheckCircle else Icons.Default.Description,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = if (selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Description,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Spacer(Modifier.width(6.dp))
                 Text(
                     note.title,
