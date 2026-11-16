@@ -75,6 +75,15 @@ class WxCliReceiver : BroadcastReceiver() {
                 if (mi == null) "msg not found" else MessageExtractor.dump(mi)
             }
 
+            "raw_sql" -> {
+                val sql = intent.getStringExtra("sql").orEmpty()
+                if (sql.isBlank()) {
+                    "sql required"
+                } else {
+                    WeDb.query(context, sql).joinToString("\n") { it.toString() }
+                }
+            }
+
             "list_conv" -> {
                 val limit = intent.getStringExtra("limit")?.toIntOrNull() ?: 30
                 val rows = WeDb.query(
