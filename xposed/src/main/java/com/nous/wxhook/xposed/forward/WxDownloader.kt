@@ -187,8 +187,13 @@ object WxDownloader {
             val b = jCls.methods.firstOrNull { it.name == "b" && it.parameterCount == 8 }
                 ?: throw NoSuchMethodException("v61.j.b")
             val wCls = b.parameterTypes[5]
-            val listener = java.lang.reflect.Proxy.newProxyInstance(loader, arrayOf(wCls)) { _, m, _ ->
-                if (m.returnType == java.lang.Boolean.TYPE) false else null
+            val listener = java.lang.reflect.Proxy.newProxyInstance(loader, arrayOf(wCls)) { proxy, m, args ->
+                when (m.name) {
+                    "hashCode" -> System.identityHashCode(proxy)
+                    "equals" -> proxy === args?.getOrNull(0)
+                    "toString" -> "wxnotes-download"
+                    else -> if (m.returnType == java.lang.Boolean.TYPE) false else null
+                }
             }
             val code = b.invoke(svc, localId, mt, 0, null, 0, listener, -1, false) as? Int ?: -1
             fileLog(ctx, "imageService code=$code localId=$localId hd=$hd talker=$talkerStr")
@@ -231,16 +236,20 @@ object WxDownloader {
                     return m
                 }
             }
-            var row = query("msgSvrId=?", msgSvrId.toString())
-            fileLog(ctx, "ImgInfo2 svr=$msgSvrId row=$row")
-            val hd = row?.get("reserved1")?.toLongOrNull() ?: 0L
-            if (hd > 0) {
-                row = query("id=?", hd.toString()) ?: row
-                fileLog(ctx, "ImgInfo2 hd=$hd row=$row")
-            }
-            listOf("bigImgPath", "hevcPath", "midImgPath")
-                .mapNotNull { row?.get(it) }
-                .firstOrNull { it.isNotBlank() && !it.startsWith("SERVERID://") }
+            val base = query("msgSvrId=?", msgSvrId.toString())
+            fileLog(ctx, "ImgInfo2 svr=$msgSvrId row=$base")
+            val hd = base?.get("reserved1")?.toLongOrNull() ?: 0L
+            val original = if (hd > 0) query("id=?", hd.toString())?.also {
+                fileLog(ctx, "ImgInfo2 hd=$hd row=$it")
+            } else null
+
+            fun pick(row: Map<String, String>?): String? =
+                listOf("bigImgPath", "hevcPath", "midImgPath")
+                    .mapNotNull { row?.get(it) }
+                    .firstOrNull { it.isNotBlank() && !it.startsWith("SERVERID://") }
+
+            // 优先原图行；原图行还没下载时回退基础行（已下载的大图）
+            pick(original) ?: pick(base)
         } catch (e: Throwable) {
             fileLog(ctx, "ImgInfo2 query failed: ${e.message}")
             null
