@@ -467,6 +467,88 @@ object WxDownloader {
     }
 
     /** 文件/附件：调微信 AppAttach 服务触发下载，轮询 attachment 目录。 */
+    @Volatile
+    private var autoDownloadClsName: String? = null
+
+    /**
+     * 微信内部"自动下载文件"的 Runnable（com.tencent.mm.pluginsdk.model.app 下，
+     * 类里有 "MicroMsg.AppMessageExtension" + "autoDownloadFile2 %s %s" 两个常量）。
+     * 构造参数是 MsgInfo，run() 会解析 appmsg XML、创建 appattach 行并向 CDN 发起下载任务 ——
+     * 这正是点击文件气泡"下载"走的逻辑，全程无 UI。
+     */
+    private fun findAutoDownloadClass(ctx: Context): String? {
+        autoDownloadClsName?.let { return it }
+        return try {
+            val bridge = org.luckypray.dexkit.DexKitBridge.create(ctx.applicationInfo.sourceDir)
+                ?: return null
+            try {
+                val m = bridge.findMethod {
+                    matcher {
+                        usingEqStrings("MicroMsg.AppMessageExtension", "autoDownloadFile2 %s %s")
+                    }
+                }.firstOrNull() ?: return null
+                val name = m.declaredClass?.name ?: return null
+                autoDownloadClsName = name
+                fileLog(ctx, "autoDownload class=$name")
+                name
+            } finally {
+                runCatching { bridge.close() }
+            }
+        } catch (e: Throwable) {
+            fileLog(ctx, "findAutoDownloadClass failed: ${e.javaClass.simpleName} ${e.message}")
+            null
+        }
+    }
+
+    /** 无感下载：直接跑微信内部的 autoDownloadFile。成功返回 true（不代表文件已下完，见 onDone）。 */
+    private fun silentDownloadFile(
+        ctx: Context,
+        talker: String,
+        msgId: Long,
+        fileName: String,
+        expectedSize: Long,
+        onDone: (File?) -> Unit
+    ): Boolean {
+        val key = "file|$talker|$msgId"
+        if (downloading.putIfAbsent(key, true) != null) return true // 已在下载
+        return try {
+            val clsName = findAutoDownloadClass(ctx) ?: run {
+                downloading.remove(key)
+                return false
+            }
+            val msgCls = Class.forName("com.tencent.mm.storage.e9", false, ctx.classLoader)
+            val msgInfo = Class.forName("oy0.k0", false, ctx.classLoader)
+                .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
+                .invoke(null, talker, msgId)
+            if (msgInfo == null) {
+                downloading.remove(key)
+                fileLog(ctx, "silent download: msgInfo null msgId=$msgId")
+                return false
+            }
+            val cls = Class.forName(clsName, false, ctx.classLoader)
+            // 优先选参数类型是 MsgInfo 的构造器
+            val ctor = cls.declaredConstructors
+                .filter { it.parameterCount == 1 }
+                .maxByOrNull { if (msgCls.isAssignableFrom(it.parameterTypes[0])) 1 else 0 }
+                ?: run { downloading.remove(key); return false }
+            ctor.isAccessible = true
+            val runnable = ctor.newInstance(msgInfo)
+            (runnable as? Runnable)?.run()
+            XposedBridge.log("$TAG silent download triggered msgId=$msgId class=$clsName name=$fileName")
+            Thread({
+                val f = waitForAttachment(fileName, expectedSize, 120_000)
+                downloading.remove(key)
+                XposedBridge.log("$TAG silent download result: ${f?.absolutePath} (${f?.length()})")
+                onDone(f)
+            }, "wxnotes-silentdl").apply { isDaemon = true }.start()
+            true
+        } catch (e: Throwable) {
+            downloading.remove(key)
+            XposedBridge.log("$TAG silent download failed: ${e.javaClass.simpleName} ${e.message}")
+            false
+        }
+    }
+
     fun downloadFile(
         ctx: Context?,
         talker: String,
@@ -480,34 +562,26 @@ object WxDownloader {
         val key = "file|$talker|$attachId"
         if (downloading.putIfAbsent(key, true) != null) return false
         return try {
-            val loader = ctx.classLoader
-            val c4 = Class.forName("mp3.c4", false, loader)
-            val inst = Class.forName("pq0.i1", false, loader)
-                .getMethod("v", Class::class.java).invoke(null, c4)
-            val jj = inst!!.javaClass.getMethod("Jj").invoke(inst)
-            val ud = jj!!.javaClass.methods.firstOrNull {
-                it.name == "Ud" && it.parameterCount == 2
-            } ?: throw NoSuchMethodException("Ud")
-            val p2 = ud.parameterTypes[1]
-            val msgInfo = if (p2.name == "com.tencent.mm.storage.e9" && msgId > 0) {
-                Class.forName("oy0.k0", false, loader)
-                    .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
-                    .invoke(null, talker, msgId)
-            } else if (p2 == String::class.java) {
-                attachId
-            } else null
-            XposedBridge.log("$TAG Ud param1=${ud.parameterTypes[0].name} param2=${p2.name} msgInfo=${msgInfo != null}")
-            // 8.0.79 实测签名是 Ud(long, e9)：第一个参数是 localId/msgId，不是 talker
-            val p1 = ud.parameterTypes[0]
-            val arg1: Any = when (p1) {
-                java.lang.Long.TYPE -> msgId
-                java.lang.Integer.TYPE -> msgId.toInt()
-                else -> talker
+            // 首选：复用微信内部的 autoDownloadFile Runnable（无 UI，直接建 appattach 行 + CDN 下载）
+            if (silentDownloadFile(ctx, talker, msgId, fileName, expectedSize, onDone)) {
+                return true
             }
-            ud.invoke(jj, arg1, msgInfo)
-            XposedBridge.log("$TAG enqueued file download attachId=${attachId.take(40)} name=$fileName")
+            // 兜底：微信真正触发文件下载的入口是 AppAttachNewDownloadUI：它内部依次做
+            //   CreateAppAttachInfo（按 msgId 从 XML 建 appattach 记录）
+            //   -> CheckBigFileDownload（拿 signature）
+            //   -> NetSceneDownloadAppAttach（CDN 下载）
+            // 之前调的 com.tencent.mm.storage.f9.Ud(long, e9) 只是 UPDATE message 表，不会下载。
+            val intent = android.content.Intent().apply {
+                setClassName("com.tencent.mm", "com.tencent.mm.ui.chatting.AppAttachNewDownloadUI")
+                putExtra("app_msg_id", msgId)
+                putExtra("msg_talker", talker)
+                putExtra("msg_type", 49)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(intent)
+            XposedBridge.log("$TAG open AppAttachNewDownloadUI msgId=$msgId attachId=${attachId.take(40)} name=$fileName")
             Thread({
-                val f = waitForAttachment(fileName, expectedSize, 60_000)
+                val f = waitForAttachment(fileName, expectedSize, 120_000)
                 downloading.remove(key)
                 XposedBridge.log("$TAG file download result: ${f?.absolutePath} (${f?.length()})")
                 onDone(f)
@@ -515,7 +589,7 @@ object WxDownloader {
             true
         } catch (e: Throwable) {
             downloading.remove(key)
-            XposedBridge.log("$TAG file enqueue failed: ${e.message}")
+            XposedBridge.log("$TAG downloadFile failed: ${e.javaClass.simpleName} ${e.message}")
             false
         }
     }
