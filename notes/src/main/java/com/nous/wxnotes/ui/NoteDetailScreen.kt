@@ -63,6 +63,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -581,7 +582,7 @@ private fun MessageContent(
     if (m.mediaPath.isBlank() && m.mediaKind.isNotBlank() &&
         m.mediaKind != ForwardProtocol.MEDIA_EMOJI
     ) {
-        PendingMedia(m)
+        PendingMedia(m, note.createdAt)
         return
     }
     when (m.mediaKind) {
@@ -670,14 +671,18 @@ private fun AttachmentRow(icon: String, title: String, subtitle: String, onClick
 }
 
 @Composable
-private fun PendingMedia(m: MessageEntity) {
-    var elapsed by remember(m.id) { mutableIntStateOf(0) }
+private fun PendingMedia(m: MessageEntity, since: Long) {
+    // 用"笔记创建时间"算已过时间，而不是从进入页面开始数：
+    // 之前用 remember 计时器，LazyColumn 复用/切页都会重置，进度条永远转不完。
+    var now by remember(m.id) { mutableLongStateOf(System.currentTimeMillis()) }
+    val startedAt = remember(m.id) { if (since > 0) since else System.currentTimeMillis() }
     LaunchedEffect(m.id) {
-        while (elapsed < 180) {
+        while (true) {
             kotlinx.coroutines.delay(1000)
-            elapsed++
+            now = System.currentTimeMillis()
         }
     }
+    val elapsed = ((now - startedAt) / 1000).coerceAtLeast(0L).toInt()
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         if (elapsed < 180) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
