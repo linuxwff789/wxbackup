@@ -27,6 +27,43 @@ object WeDb {
     )
 
     /** 只走已知类名的快速初始化，不触发 DexKit。 */
+    @Volatile
+    private var dexKitReady = false
+
+    /**
+     * 加载 DexKit 的 native 库。
+     * 微信进程的 java.library.path 里没有 libdexkit.so，必须从模块 APK 的 nativeLibraryDir 按绝对路径加载。
+     * fastInit 走已知类名时不会加载它，用到 DexKit 的路径（如附件无感下载）要先调这里。
+     */
+    fun ensureDexKit(ctx: Context?) {
+        if (dexKitReady || ctx == null) return
+        synchronized(this) {
+            if (dexKitReady) return
+            runCatching {
+                System.loadLibrary("dexkit")
+                dexKitReady = true
+            }
+            if (!dexKitReady) {
+                for (pkg in arrayOf("com.nous.wxhook.xposed", "com.nous.wxhook")) {
+                    val ok = runCatching {
+                        val info = ctx.packageManager.getApplicationInfo(pkg, 0)
+                        val so = java.io.File(info.nativeLibraryDir, "libdexkit.so")
+                        if (so.isFile) {
+                            XposedBridgeShim.load(so.absolutePath)
+                            WxDownloader.fileLog(ctx, "dexkit loaded from ${so.absolutePath}")
+                            true
+                        } else false
+                    }.getOrDefault(false)
+                    if (ok) {
+                        dexKitReady = true
+                        break
+                    }
+                }
+            }
+            if (!dexKitReady) WxDownloader.fileLog(ctx, "ensureDexKit failed")
+        }
+    }
+
     fun fastInit(ctx: Context?): Boolean {
         if (db != null) return true
         if (ctx == null) return false

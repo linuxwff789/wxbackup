@@ -478,6 +478,7 @@ object WxDownloader {
      */
     private fun findAutoDownloadClass(ctx: Context): String? {
         autoDownloadClsName?.let { return it }
+        WeDb.ensureDexKit(ctx)
         return try {
             val bridge = org.luckypray.dexkit.DexKitBridge.create(ctx.applicationInfo.sourceDir)
                 ?: return null
