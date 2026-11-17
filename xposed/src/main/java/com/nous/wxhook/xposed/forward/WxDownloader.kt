@@ -557,7 +557,24 @@ object WxDownloader {
             (runnable as? Runnable)?.run()
             XposedBridge.log("$TAG silent download triggered msgId=$msgId class=$clsName name=$fileName")
             Thread({
-                val f = waitForAttachment(fileName, expectedSize, 120_000)
+                var f = waitForAttachment(fileName, expectedSize, 45_000)
+                if (f == null) {
+                    // 微信内部 CDN 下载偶尔会卡在 102（媒体需要重新校验），
+                    // 兜底拉起它自己的下载页继续，成功后再等一会儿。
+                    XposedBridge.log("$TAG silent download stalled, fallback to AppAttachNewDownloadUI")
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        runCatching {
+                            ctx.startActivity(android.content.Intent().apply {
+                                setClassName("com.tencent.mm", "com.tencent.mm.ui.chatting.AppAttachNewDownloadUI")
+                                putExtra("app_msg_id", msgId)
+                                putExtra("msg_talker", talker)
+                                putExtra("msg_type", 49)
+                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            })
+                        }
+                    }
+                    f = waitForAttachment(fileName, expectedSize, 90_000)
+                }
                 downloading.remove(key)
                 XposedBridge.log("$TAG silent download result: ${f?.absolutePath} (${f?.length()})")
                 onDone(f)
