@@ -259,12 +259,27 @@ fun NoteDetailScreen(vm: NotesViewModel, noteId: Long, onBack: () -> Unit) {
             val groups = messages.groupBy { dayKey(it.createTime, n.createdAt) }
             groups.forEach { (day, msgs) ->
                 item(key = "day-$day") {
-                    Text(
-                        day,
-                        modifier = Modifier.padding(top = 12.dp, bottom = 2.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 18.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        HorizontalDivider(
+                            modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                        )
+                        Text(
+                            day,
+                            modifier = Modifier.padding(horizontal = 10.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                        )
+                    }
                 }
                 items(msgs, key = { it.id }) { m ->
                     MessageRow(
@@ -455,7 +470,7 @@ private fun MessageRow(
                     ),
                     shape = RoundedCornerShape(12.dp),
                     color = if (mine) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                    else MaterialTheme.colorScheme.surfaceContainerHigh
                 ) {
                     // 视频要有画面贴边的效果：气泡内不留 padding，由视频自己按比例撑满
                     val videoFullBleed = m.mediaKind == ForwardProtocol.MEDIA_VIDEO && m.mediaPath.isNotBlank()
