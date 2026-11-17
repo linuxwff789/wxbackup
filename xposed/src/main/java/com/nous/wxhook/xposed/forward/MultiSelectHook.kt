@@ -192,35 +192,28 @@ object MultiSelectHook {
     }
 
     /**
-     * 保存后把微信的多选状态清干净：清 adapter.k.W、刷新列表，
-     * 再发一次返回键让微信自己退出多选模式（多选栏隐藏、标题栏恢复）。
+     * 保存后退出多选：微信自己在多选模式下按返回键 = 退出多选 + 清空选中。
+     * 千万不要先手动清 adapter.k.W 再按返回 —— 那样微信已经不在多选态，
+     * 返回键会变成"退出聊天"，再按一次就回桌面了。
      */
     private fun exitMultiSelect(act: Activity) {
         try {
-            val adapter = cachedAdapter
-            if (adapter == null) return
-            val w = runCatching {
-                de.robv.android.xposed.XposedHelpers.getObjectField(adapter, "W") as? MutableCollection<*>
-            }.getOrNull()
-            val had = (w?.size ?: 0) > 0
-            w?.clear()
-            runCatching { adapter.javaClass.getMethod("notifyDataSetChanged").invoke(adapter) }
-            updateRowVisibility()
-            if (had) {
-                // 多选模式下返回键就是"退出多选"；没有选中时不要按，否则会退出聊天界面
-                act.runOnUiThread {
-                    val dispatched = runCatching {
-                        val d = act.javaClass.getMethod("getOnBackPressedDispatcher").invoke(act)
-                        d.javaClass.getMethod("onBackPressed").invoke(d)
-                        true
-                    }.getOrDefault(false)
-                    if (!dispatched) {
-                        @Suppress("DEPRECATION")
-                        runCatching { act.onBackPressed() }
-                    }
+            if (!hasSelection()) {
+                updateRowVisibility()
+                return
+            }
+            act.runOnUiThread {
+                val dispatched = runCatching {
+                    val d = act.javaClass.getMethod("getOnBackPressedDispatcher").invoke(act)
+                    d.javaClass.getMethod("onBackPressed").invoke(d)
+                    true
+                }.getOrDefault(false)
+                if (!dispatched) {
+                    @Suppress("DEPRECATION")
+                    runCatching { act.onBackPressed() }
                 }
             }
-            XposedBridge.log("$TAG exitMultiSelect had=$had")
+            XposedBridge.log("$TAG exitMultiSelect: sent back once")
         } catch (e: Throwable) {
             XposedBridge.log("$TAG exitMultiSelect failed: ${e.message}")
         }
