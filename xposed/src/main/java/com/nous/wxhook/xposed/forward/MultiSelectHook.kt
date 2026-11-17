@@ -58,6 +58,25 @@ object MultiSelectHook {
         }
     }
 
+    @Volatile
+    private var cachedRow: View? = null
+
+    @Volatile
+    private var cachedGroup: ViewGroup? = null
+
+    /** 当前 adapter 里有没有选中的消息（adapter.k.W）。 */
+    private fun hasSelection(): Boolean = runCatching {
+        val a = cachedAdapter ?: return false
+        val w = de.robv.android.xposed.XposedHelpers.getObjectField(a, "W") as? Collection<*>
+        (w?.size ?: 0) > 0
+    }.getOrDefault(false)
+
+    private fun updateRowVisibility() {
+        val r = cachedRow ?: return
+        val g = cachedGroup ?: return
+        r.visibility = if (g.visibility == View.VISIBLE && hasSelection()) View.VISIBLE else View.GONE
+    }
+
     private fun inject(group: ViewGroup) {
         try {
             val parent = group.parent as? ViewGroup
@@ -116,10 +135,11 @@ object MultiSelectHook {
             }
             if (index >= 0) holder.addView(row, index, lp) else holder.addView(row, lp)
 
-            // 跟随多选栏的可见性
-            row.visibility = group.visibility
+            // 只在"多选栏可见且确实有选中消息"时显示按钮
+            cachedRow = row
+            cachedGroup = group
             group.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-                row.visibility = group.visibility
+                updateRowVisibility()
                 if (holder is android.widget.FrameLayout) {
                     (row.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let {
                         it.bottomMargin = group.height
@@ -127,7 +147,9 @@ object MultiSelectHook {
                     }
                 }
             }
+            updateRowVisibility()
             group.post {
+                updateRowVisibility()
                 XposedBridge.log(
                     "$TAG row added parent=${parent?.javaClass?.name} groupH=${group.height} " +
                         "row=${row.width}x${row.height} vis=${row.visibility}"
@@ -162,9 +184,45 @@ object MultiSelectHook {
             val title = act.title?.toString()?.trim().orEmpty()
             val n = ForwardSender.forwardList(act, list, title)
             toast(act, "已保存 $n 条到笔记")
+            exitMultiSelect(act)
         } catch (e: Throwable) {
             XposedBridge.log("$TAG saveSelected error: ${e.message}")
             toast(act, "保存失败：${e.message}")
+        }
+    }
+
+    /**
+     * 保存后把微信的多选状态清干净：清 adapter.k.W、刷新列表，
+     * 再发一次返回键让微信自己退出多选模式（多选栏隐藏、标题栏恢复）。
+     */
+    private fun exitMultiSelect(act: Activity) {
+        try {
+            val adapter = cachedAdapter
+            if (adapter == null) return
+            val w = runCatching {
+                de.robv.android.xposed.XposedHelpers.getObjectField(adapter, "W") as? MutableCollection<*>
+            }.getOrNull()
+            val had = (w?.size ?: 0) > 0
+            w?.clear()
+            runCatching { adapter.javaClass.getMethod("notifyDataSetChanged").invoke(adapter) }
+            updateRowVisibility()
+            if (had) {
+                // 多选模式下返回键就是"退出多选"；没有选中时不要按，否则会退出聊天界面
+                act.runOnUiThread {
+                    val dispatched = runCatching {
+                        val d = act.javaClass.getMethod("getOnBackPressedDispatcher").invoke(act)
+                        d.javaClass.getMethod("onBackPressed").invoke(d)
+                        true
+                    }.getOrDefault(false)
+                    if (!dispatched) {
+                        @Suppress("DEPRECATION")
+                        runCatching { act.onBackPressed() }
+                    }
+                }
+            }
+            XposedBridge.log("$TAG exitMultiSelect had=$had")
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG exitMultiSelect failed: ${e.message}")
         }
     }
 
@@ -485,6 +543,13 @@ object MultiSelectHook {
             XposedBridge.hookAllConstructors(cls, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     cachedAdapter = param.thisObject
+                }
+            })
+            // 选中/取消选中都会触发 notifyDataSetChanged，借它刷新按钮可见性
+            XposedBridge.hookAllMethods(cls, "notifyDataSetChanged", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    cachedAdapter = param.thisObject
+                    updateRowVisibility()
                 }
             })
             XposedBridge.log("$TAG adapter hook installed")
