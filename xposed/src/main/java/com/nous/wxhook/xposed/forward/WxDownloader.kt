@@ -467,61 +467,85 @@ object WxDownloader {
     }
 
     /** 文件/附件：调微信 AppAttach 服务触发下载，轮询 attachment 目录。 */
-    @Volatile
-    private var autoDownloadClsName: String? = null
+    /** 取微信内部 NetSceneQueue（l51.i9.e()），用于提交自建的网络场景。 */
+    private fun sceneQueue(ctx: Context): Any? = runCatching {
+        Class.forName("l51.i9", false, ctx.classLoader).getMethod("e").invoke(null)
+    }.getOrNull()
+
+    private fun submitScene(queue: Any, scene: Any): Boolean = runCatching {
+        val m = queue.javaClass.methods.firstOrNull { it.name == "g" && it.parameterCount == 1 }
+            ?: return false
+        m.invoke(queue, scene)
+        true
+    }.getOrDefault(false)
 
     /**
-     * 微信内部"自动下载文件"的 Runnable（com.tencent.mm.pluginsdk.model.app 下，
-     * 类里有 "MicroMsg.AppMessageExtension" + "autoDownloadFile2 %s %s" 两个常量）。
-     * 构造参数是 MsgInfo，run() 会解析 appmsg XML、创建 appattach 行并向 CDN 发起下载任务 ——
-     * 这正是点击文件气泡"下载"走的逻辑，全程无 UI。
+     * 走微信的 CheckBigFileDownload（CGI /cgi-bin/micromsg-bin/checkbigfiledownload，type 728）
+     * 换 signature。没有它 CDN 只给部分数据就挂住（实测卡在 57KB）。
+     * 结果由微信自己写回 appattach 表，这里轮询等待。
      */
-    private fun findAutoDownloadClass(ctx: Context): String? {
-        autoDownloadClsName?.let { return it }
-        // 8.0.79 已知：com.tencent.mm.pluginsdk.model.app.c0
-        //   implements Runnable，构造参数 MsgInfo；
-        //   run() 里 a0.o(msgInfo) 会创建 appattach 行并返回 mediaId，
-        //   成功则 new e24.l0(msgId, talker, mediaId, null) + l51.i9.e().g(scene) 发起 CDN 下载。
-        for (name in arrayOf(
-            "com.tencent.mm.pluginsdk.model.app.c0",
-            "com.tencent.mm.pluginsdk.model.app.b0"
-        )) {
-            val ok = runCatching {
-                val cls = Class.forName(name, false, ctx.classLoader)
-                Runnable::class.java.isAssignableFrom(cls) &&
-                    cls.declaredConstructors.any { it.parameterCount == 1 }
-            }.getOrDefault(false)
-            if (ok) {
-                autoDownloadClsName = name
-                fileLog(ctx, "autoDownload class=$name (known)")
-                return name
-            }
-        }
-        // 微信升级后类名变了才走 DexKit 兜底
-        WeDb.ensureDexKit(ctx)
+    private fun runCheckBigFileDownload(ctx: Context, msgId: Long, talker: String): Boolean {
         return try {
-            val bridge = org.luckypray.dexkit.DexKitBridge.create(ctx.applicationInfo.sourceDir)
-                ?: return null
-            try {
-                val m = bridge.findMethod {
-                    matcher {
-                        usingEqStrings("MicroMsg.AppMessageExtension", "autoDownloadFile2 %s %s")
-                    }
-                }.firstOrNull() ?: return null
-                val name = m.declaredClass?.name ?: return null
-                autoDownloadClsName = name
-                fileLog(ctx, "autoDownload class=$name")
-                name
-            } finally {
-                runCatching { bridge.close() }
-            }
+            val loader = ctx.classLoader
+            // AppAttachInfo = ((e)((vu.q0)((wu.q0) kj5.n0.c(wu.q0.class)).yj())).t1(msgId, talker)
+            val wuIface = Class.forName("wu.q0", false, loader)
+            val wuInst = Class.forName("kj5.n0", false, loader)
+                .getMethod("c", Class::class.java).invoke(null, wuIface) ?: return false
+            val vuInst = wuInst.javaClass.getMethod("yj").invoke(wuInst) ?: return false
+            val t1 = vuInst.javaClass.methods.firstOrNull { it.name == "t1" && it.parameterCount == 2 }
+                ?: return false
+            val info = t1.invoke(vuInst, msgId, talker) ?: return false
+
+            val infoCls = Class.forName("com.tencent.mm.pluginsdk.model.app.d", false, loader)
+            val i0Cls = Class.forName("e24.i0", false, loader)
+            val ctor = i0Cls.constructors.firstOrNull {
+                it.parameterCount == 6 && it.parameterTypes[0] == infoCls
+            } ?: return false
+            // (info, aesKey, fileMd5, fileName, fileExt, extra)
+            val scene = ctor.newInstance(info, "", "", "", "", "")
+            val queue = sceneQueue(ctx) ?: return false
+            val ok = submitScene(queue, scene)
+            XposedBridge.log("$TAG CheckBigFileDownload submitted=$ok msgId=$msgId")
+            ok
         } catch (e: Throwable) {
-            fileLog(ctx, "findAutoDownloadClass failed: ${e.javaClass.simpleName} ${e.message}")
-            null
+            XposedBridge.log("$TAG CheckBigFileDownload failed: ${e.javaClass.simpleName} ${e.message}")
+            false
         }
     }
 
-    /** 无感下载：直接跑微信内部的 autoDownloadFile。成功返回 true（不代表文件已下完，见 onDone）。 */
+    /** 轮询 appattach.signature（微信在 onGYNetEnd 里写回）。 */
+    private fun waitForSignature(ctx: Context, msgId: Long, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val sig = WeDb.query(ctx, "SELECT signature FROM appattach WHERE msgInfoId=$msgId LIMIT 1")
+                .firstOrNull()?.get("signature") as? String
+            if (!sig.isNullOrBlank()) return true
+            Thread.sleep(500)
+        }
+        return false
+    }
+
+    /** 提交 NetSceneDownloadAppAttach（e24.l0）。 */
+    private fun submitDownloadScene(ctx: Context, msgId: Long, talker: String, mediaId: String): Boolean {
+        return try {
+            val loader = ctx.classLoader
+            val l0Cls = Class.forName("e24.l0", false, loader)
+            val v0Cls = Class.forName("com.tencent.mm.modelbase.v0", false, loader)
+            val ctor = l0Cls.getConstructor(
+                java.lang.Long.TYPE, String::class.java, String::class.java, v0Cls
+            )
+            val scene = ctor.newInstance(msgId, talker, mediaId, null)
+            val queue = sceneQueue(ctx) ?: return false
+            val ok = submitScene(queue, scene)
+            XposedBridge.log("$TAG DownloadAppAttach submitted=$ok msgId=$msgId mediaId=${mediaId.take(24)}")
+            ok
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG DownloadAppAttach failed: ${e.javaClass.simpleName} ${e.message}")
+            false
+        }
+    }
+
+    /** 无感下载：建 appattach 行 -> CheckBigFileDownload 换 signature -> NetSceneDownloadAppAttach。 */
     private fun silentDownloadFile(
         ctx: Context,
         talker: String,
@@ -531,14 +555,11 @@ object WxDownloader {
         onDone: (File?) -> Unit
     ): Boolean {
         val key = "file|$talker|$msgId"
-        if (downloading.putIfAbsent(key, true) != null) return true // 已在下载
+        if (downloading.putIfAbsent(key, true) != null) return true
         return try {
-            val clsName = findAutoDownloadClass(ctx) ?: run {
-                downloading.remove(key)
-                return false
-            }
-            val msgCls = Class.forName("com.tencent.mm.storage.e9", false, ctx.classLoader)
-            val msgInfo = Class.forName("oy0.k0", false, ctx.classLoader)
+            val loader = ctx.classLoader
+            val msgCls = Class.forName("com.tencent.mm.storage.e9", false, loader)
+            val msgInfo = Class.forName("oy0.k0", false, loader)
                 .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
                 .invoke(null, talker, msgId)
             if (msgInfo == null) {
@@ -546,27 +567,39 @@ object WxDownloader {
                 fileLog(ctx, "silent download: msgInfo null msgId=$msgId")
                 return false
             }
-            val cls = Class.forName(clsName, false, ctx.classLoader)
-            // 优先选参数类型是 MsgInfo 的构造器
-            val ctor = cls.declaredConstructors
-                .filter { it.parameterCount == 1 }
-                .maxByOrNull { if (msgCls.isAssignableFrom(it.parameterTypes[0])) 1 else 0 }
-                ?: run { downloading.remove(key); return false }
-            ctor.isAccessible = true
-            val runnable = ctor.newInstance(msgInfo)
-            (runnable as? Runnable)?.run()
-            XposedBridge.log("$TAG silent download triggered msgId=$msgId class=$clsName name=$fileName")
+            val msgIdArg = msgId
             Thread({
-                var f = waitForAttachment(fileName, expectedSize, 45_000)
+                var mediaId = ""
+                try {
+                    // 1) 建/取 appattach 行：a0.o(msgInfo, false) -> Pair(created, mediaId)
+                    val a0 = Class.forName("com.tencent.mm.pluginsdk.model.app.a0", false, loader)
+                    val pair = runCatching {
+                        a0.getMethod("o", msgCls, java.lang.Boolean.TYPE).invoke(null, msgInfo, false)
+                    }.getOrNull() as? android.util.Pair<*, *>
+                    mediaId = (pair?.second as? String).orEmpty()
+                    XposedBridge.log("$TAG tryInitAttach created=${pair?.first} mediaId=${mediaId.take(24)}")
+
+                    // 2) 换 signature（缺了它 CDN 会卡在部分字节）
+                    if (runCheckBigFileDownload(ctx, msgIdArg, talker)) {
+                        val got = waitForSignature(ctx, msgIdArg, 20_000)
+                        XposedBridge.log("$TAG signature ready=$got msgId=$msgIdArg")
+                    }
+
+                    // 3) 真正发起 CDN 下载
+                    submitDownloadScene(ctx, msgIdArg, talker, mediaId)
+                } catch (e: Throwable) {
+                    XposedBridge.log("$TAG silent download prep failed: ${e.javaClass.simpleName} ${e.message}")
+                }
+
+                var f = waitForAttachment(fileName, expectedSize, 90_000)
                 if (f == null) {
-                    // 微信内部 CDN 下载偶尔会卡在 102（媒体需要重新校验），
-                    // 兜底拉起它自己的下载页继续，成功后再等一会儿。
+                    // 仍然没下来：拉起微信自己的下载页兜底（它会补做同样的流程）
                     XposedBridge.log("$TAG silent download stalled, fallback to AppAttachNewDownloadUI")
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         runCatching {
                             ctx.startActivity(android.content.Intent().apply {
                                 setClassName("com.tencent.mm", "com.tencent.mm.ui.chatting.AppAttachNewDownloadUI")
-                                putExtra("app_msg_id", msgId)
+                                putExtra("app_msg_id", msgIdArg)
                                 putExtra("msg_talker", talker)
                                 putExtra("msg_type", 49)
                                 addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
