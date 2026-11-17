@@ -478,6 +478,26 @@ object WxDownloader {
      */
     private fun findAutoDownloadClass(ctx: Context): String? {
         autoDownloadClsName?.let { return it }
+        // 8.0.79 已知：com.tencent.mm.pluginsdk.model.app.c0
+        //   implements Runnable，构造参数 MsgInfo；
+        //   run() 里 a0.o(msgInfo) 会创建 appattach 行并返回 mediaId，
+        //   成功则 new e24.l0(msgId, talker, mediaId, null) + l51.i9.e().g(scene) 发起 CDN 下载。
+        for (name in arrayOf(
+            "com.tencent.mm.pluginsdk.model.app.c0",
+            "com.tencent.mm.pluginsdk.model.app.b0"
+        )) {
+            val ok = runCatching {
+                val cls = Class.forName(name, false, ctx.classLoader)
+                Runnable::class.java.isAssignableFrom(cls) &&
+                    cls.declaredConstructors.any { it.parameterCount == 1 }
+            }.getOrDefault(false)
+            if (ok) {
+                autoDownloadClsName = name
+                fileLog(ctx, "autoDownload class=$name (known)")
+                return name
+            }
+        }
+        // 微信升级后类名变了才走 DexKit 兜底
         WeDb.ensureDexKit(ctx)
         return try {
             val bridge = org.luckypray.dexkit.DexKitBridge.create(ctx.applicationInfo.sourceDir)
