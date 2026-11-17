@@ -192,28 +192,29 @@ object MultiSelectHook {
     }
 
     /**
-     * 保存后退出多选：微信自己在多选模式下按返回键 = 退出多选 + 清空选中。
-     * 千万不要先手动清 adapter.k.W 再按返回 —— 那样微信已经不在多选态，
-     * 返回键会变成"退出聊天"，再按一次就回桌面了。
+     * 保存后退出多选。
+     *
+     * 微信没有暴露"退出多选"的入口（a1.z0 只隐藏快捷选择视图，ChattingUIFragment 里也没有多选状态），
+     * 用返回键又会在 W 清空后变成"退出聊天"（甚至回桌面）。
+     * 所以这里做确定的三件事：清空选中集合、刷新列表、把微信多选栏和我们那行按钮都隐藏掉。
      */
     private fun exitMultiSelect(act: Activity) {
         try {
-            if (!hasSelection()) {
+            val adapter = cachedAdapter
+            if (adapter == null) {
                 updateRowVisibility()
                 return
             }
-            act.runOnUiThread {
-                val dispatched = runCatching {
-                    val d = act.javaClass.getMethod("getOnBackPressedDispatcher").invoke(act)
-                    d.javaClass.getMethod("onBackPressed").invoke(d)
-                    true
-                }.getOrDefault(false)
-                if (!dispatched) {
-                    @Suppress("DEPRECATION")
-                    runCatching { act.onBackPressed() }
-                }
-            }
-            XposedBridge.log("$TAG exitMultiSelect: sent back once")
+            val w = runCatching {
+                de.robv.android.xposed.XposedHelpers.getObjectField(adapter, "W") as? MutableCollection<*>
+            }.getOrNull()
+            val had = (w?.size ?: 0)
+            w?.clear()
+            runCatching { adapter.javaClass.getMethod("notifyDataSetChanged").invoke(adapter) }
+            // 隐藏微信的多选操作栏 + 我们注入的那一行
+            cachedGroup?.visibility = View.GONE
+            cachedRow?.visibility = View.GONE
+            XposedBridge.log("$TAG exitMultiSelect cleared=$had")
         } catch (e: Throwable) {
             XposedBridge.log("$TAG exitMultiSelect failed: ${e.message}")
         }
