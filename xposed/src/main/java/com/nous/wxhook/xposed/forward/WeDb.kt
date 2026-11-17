@@ -202,6 +202,23 @@ object WeDb {
         }
     }
 
+    /** 执行非查询 SQL（UPDATE/DELETE 等）。调试/修复数据用。 */
+    fun execSql(ctx: Context?, sql: String): Boolean {
+        if (!init(ctx)) return false
+        return try {
+            val m = db!!.javaClass.methods.firstOrNull {
+                it.name == "execSQL" && it.parameterCount == 1
+            } ?: throw NoSuchMethodException("execSQL(String)")
+            m.invoke(db, sql)
+            WxDownloader.fileLog(ctx, "WeDb execSql ok sql=${sql.take(80)}")
+            true
+        } catch (e: Throwable) {
+            val cause = e.cause ?: e
+            WxDownloader.fileLog(ctx, "WeDb execSql failed: ${cause.javaClass.simpleName} ${cause.message}")
+            false
+        }
+    }
+
     fun query(ctx: Context?, sql: String, args: Array<String>? = null): List<Map<String, Any?>> {
         if (!init(ctx)) return emptyList()
         val out = ArrayList<Map<String, Any?>>()

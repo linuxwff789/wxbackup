@@ -178,6 +178,11 @@ class WxCliReceiver : BroadcastReceiver() {
                 }
             }
 
+            "exec_sql" -> {
+                val sql = intent.getStringExtra("sql").orEmpty()
+                if (sql.isBlank()) "sql required" else "exec=${WeDb.execSql(context, sql)}"
+            }
+
             "raw_sql" -> {
                 val sql = intent.getStringExtra("sql").orEmpty()
                 if (sql.isBlank()) {
