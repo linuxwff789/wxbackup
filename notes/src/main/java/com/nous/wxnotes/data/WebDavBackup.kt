@@ -216,18 +216,17 @@ object WebDavBackup {
             URLDecoder.decode(href.replace("+", "%2B"), "UTF-8")
         } catch (_: Exception) { href }
 
-        private fun builder(method: String, remote: String, depth: String? = null): okhttp3.Request.Builder {
+        private fun builder(remote: String, depth: String? = null): okhttp3.Request.Builder {
             val b = okhttp3.Request.Builder()
                 .url(resolve(remote))
                 .header("Authorization", auth)
             depth?.let { b.header("Depth", it) }
-            b.method(method, null)
             return b
         }
 
         fun test() {
             val body = PROPFIND_BODY.toRequestBody("application/xml".toMediaType())
-            val req = builder("PROPFIND", "", "0").method("PROPFIND", body).build()
+            val req = builder("", "0").method("PROPFIND", body).build()
             client.newCall(req).execute().use { resp ->
                 if (resp.code !in 200..299) throw IOException("WebDAV 连接失败：HTTP ${resp.code}")
             }
@@ -237,7 +236,7 @@ object WebDavBackup {
             var acc = ""
             for (seg in remote.split('/').filter { it.isNotBlank() }) {
                 acc = if (acc.isEmpty()) seg else "$acc/$seg"
-                val req = builder("MKCOL", acc).build()
+                val req = builder(acc).method("MKCOL", null).build()
                 client.newCall(req).execute().use { resp ->
                     // 405 = 已存在
                     if (resp.code !in 200..299 && resp.code != 405) {
@@ -249,7 +248,7 @@ object WebDavBackup {
 
         fun upload(file: File, remote: String, onProgress: (Long) -> Unit) {
             val body = ProgressBody(file, onProgress)
-            val req = builder("PUT", remote).method("PUT", body).build()
+            val req = builder(remote).method("PUT", body).build()
             client.newCall(req).execute().use { resp ->
                 if (resp.code !in 200..299) throw IOException("上传失败：HTTP ${resp.code}")
             }
@@ -257,7 +256,7 @@ object WebDavBackup {
 
         fun list(remote: String): List<RemoteFile> {
             val body = PROPFIND_BODY.toRequestBody("application/xml".toMediaType())
-            val req = builder("PROPFIND", remote, "1").method("PROPFIND", body).build()
+            val req = builder(remote, "1").method("PROPFIND", body).build()
             val xml = client.newCall(req).execute().use { resp ->
                 if (resp.code !in 200..299) throw IOException("列目录失败：HTTP ${resp.code}")
                 resp.body?.string().orEmpty()
@@ -279,7 +278,7 @@ object WebDavBackup {
         }
 
         fun delete(remote: String) {
-            val req = builder("DELETE", remote).build()
+            val req = builder(remote).delete().build()
             client.newCall(req).execute().use { resp ->
                 if (resp.code !in 200..299) throw IOException("删除失败：HTTP ${resp.code}")
             }
