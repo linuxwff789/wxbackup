@@ -35,6 +35,38 @@ object WeDb {
      * 微信进程的 java.library.path 里没有 libdexkit.so，必须从模块 APK 的 nativeLibraryDir 按绝对路径加载。
      * fastInit 走已知类名时不会加载它，用到 DexKit 的路径（如附件无感下载）要先调这里。
      */
+    /**
+     * 模块 APK 的 nativeLibraryDir。
+     * 微信进程受 Android 11+ 包可见性限制，普通 PackageManager 查不到模块包；
+     * 走 AppGlobals（系统 PackageManager）可以绕过。
+     */
+    private fun moduleLibDir(ctx: Context): String? {
+        val pkgs = arrayOf("com.nous.wxhook.xposed", "com.nous.wxhook")
+        for (pkg in pkgs) {
+            runCatching {
+                val info = ctx.packageManager.getApplicationInfo(pkg, 0)
+                return info.nativeLibraryDir
+            }
+        }
+        return runCatching {
+            val pm = Class.forName("android.app.AppGlobals")
+                .getMethod("getPackageManager").invoke(null) ?: return null
+            val m = pm.javaClass.getMethod(
+                "getApplicationInfo",
+                String::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType
+            )
+            for (pkg in pkgs) {
+                val info = runCatching { m.invoke(pm, pkg, 0, 0) as? android.content.pm.ApplicationInfo }
+                    .getOrNull() ?: continue
+                WxDownloader.fileLog(ctx, "AppGlobals found $pkg lib=${info.nativeLibraryDir}")
+                return info.nativeLibraryDir
+            }
+            null
+        }.getOrNull()
+    }
+
     fun ensureDexKit(ctx: Context?) {
         if (dexKitReady || ctx == null) return
         synchronized(this) {
@@ -44,19 +76,18 @@ object WeDb {
                 dexKitReady = true
             }
             if (!dexKitReady) {
-                for (pkg in arrayOf("com.nous.wxhook.xposed", "com.nous.wxhook")) {
-                    val ok = runCatching {
-                        val info = ctx.packageManager.getApplicationInfo(pkg, 0)
-                        val so = java.io.File(info.nativeLibraryDir, "libdexkit.so")
-                        if (so.isFile) {
+                val libDir = moduleLibDir(ctx)
+                if (libDir != null) {
+                    val so = java.io.File(libDir, "libdexkit.so")
+                    if (so.isFile) {
+                        val ok = runCatching {
                             XposedBridgeShim.load(so.absolutePath)
-                            WxDownloader.fileLog(ctx, "dexkit loaded from ${so.absolutePath}")
                             true
-                        } else false
-                    }.getOrDefault(false)
-                    if (ok) {
-                        dexKitReady = true
-                        break
+                        }.getOrDefault(false)
+                        if (ok) {
+                            dexKitReady = true
+                            WxDownloader.fileLog(ctx, "dexkit loaded from ${so.absolutePath}")
+                        }
                     }
                 }
             }
