@@ -1,5 +1,6 @@
 package com.nous.wxnotes.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -20,6 +21,11 @@ fun AppRoot(initialNoteId: Long, vm: NotesViewModel = viewModel()) {
         mutableStateOf<Route>(
             if (initialNoteId > 0) Route.Detail(initialNoteId) else Route.Notes
         )
+    }
+
+    // 返回键先回到笔记列表，而不是退出 App；在根页面才交给系统处理
+    BackHandler(enabled = route !is Route.Notes) {
+        route = Route.Notes
     }
 
     when (val r = route) {
