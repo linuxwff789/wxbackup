@@ -84,25 +84,39 @@ object WxClasses {
     }.getOrNull()
 
     /**
-     * MsgInfoStorage.get(talker, msgId)：wx 内部按会话+本地 id 取消息。
-     * 方法名在 8.0.80 里依然可能是 `Zi`，但这里只用签名筛选，名字变了也能用。
+     * MsgInfoStorage 的查询：8.0.79 是静态门面 oy0.k0.Zi(talker, msgId)，
+     * 8.0.80 变成实例方法 g9.K3(String, long) -> f9（f9 即 MsgInfo）。
+     * 这里不依赖具体名字：拿 MMKernel.v(MsgInfoStorage) 的实例，
+     * 再按签名 (String, long) -> MsgInfo 反射调用。
      */
     fun msgInfo(ctx0: Context?, talker: String, msgId: Long): Any? {
         val ctx = ctxOf(ctx0)
         if (ctx == null || talker.isBlank() || msgId <= 0) return null
         val store = findClass(ctx, "MsgInfoStorage", "MicroMsg.MsgInfoStorage") ?: return null
-        // 优先叫 Zi 的（历史名字），否则退化为签名匹配
+
+        // 先拿 MsgInfo 类型（静态方法或实例方法的返回类型都行）
+        val msgClsName = "com.tencent.mm.storage.f9"
         val candidates = store.methods.filter { m ->
-            java.lang.reflect.Modifier.isStatic(m.modifiers) &&
-                m.parameterCount == 2 &&
+            m.parameterCount == 2 &&
                 m.parameterTypes[0] == String::class.java &&
-                (m.parameterTypes[1] == java.lang.Long.TYPE || m.parameterTypes[1] == java.lang.Integer.TYPE) &&
-                m.returnType.name != "void" &&
-                !m.returnType.isPrimitive
+                m.parameterTypes[1] == java.lang.Long.TYPE &&
+                (m.returnType.name == msgClsName ||
+                    store.methods.any { it.returnType == m.returnType } && m.returnType.name.startsWith("com.tencent.mm.storage."))
         }
-        val m = candidates.firstOrNull { it.name == "Zi" } ?: candidates.firstOrNull() ?: return null
-        val arg = if (m.parameterTypes[1] == java.lang.Integer.TYPE) msgId.toInt() else msgId
-        return runCatching { m.invoke(null, talker, arg) }.getOrNull()
+        val m = candidates.firstOrNull { it.name == "K3" } ?: candidates.firstOrNull() ?: return null
+
+        val kernelName = WeDb.kernelName
+            ?: findClassName(ctx, "MMKernel", "MicroMsg.MMKernel", "Kernel not null, has initialized.")
+            ?: return null
+        val kernel = runCatching { Class.forName(kernelName, false, ctx.classLoader) }.getOrNull() ?: return null
+        val v = kernel.methods.firstOrNull {
+            java.lang.reflect.Modifier.isStatic(it.modifiers) && it.parameterCount == 1 &&
+                it.parameterTypes[0] == Class::class.java
+        } ?: return null
+        val storeInst = runCatching { v.invoke(null, store) }.getOrNull() ?: return null
+
+        val target = if (java.lang.reflect.Modifier.isStatic(m.modifiers)) null else storeInst
+        return runCatching { m.invoke(target, talker, msgId) }.getOrNull()
     }
 
     /** 聊天上下文（8.0.79 的 cm5.d）。 */
