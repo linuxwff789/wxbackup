@@ -581,7 +581,11 @@ object ForwardSender {
                 val f = File(base, "$md5.$ext")
                 if (f.isFile) return f.absolutePath
             }
-            base.listFiles()?.firstOrNull { it.name.startsWith(md5) }?.let { return it.absolutePath }
+            // 只认原图：th_<md5>/th_<md5>hd/th_<md5>ehd 都是缩略图/预览图，
+            // 直接返回它们会导致上层永远不去下载原图（findImgInfo2Original 被 ?: 短路掉）。
+            base.listFiles()?.firstOrNull {
+                it.name.startsWith(md5) && !it.name.startsWith("th_")
+            }?.let { return it.absolutePath }
         }
         return null
     }
