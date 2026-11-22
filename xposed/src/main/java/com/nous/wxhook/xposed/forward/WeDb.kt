@@ -32,6 +32,10 @@ object WeDb {
         private set
 
     @Volatile
+    var coreName: String? = null
+        private set
+
+    @Volatile
     private var dexKitReady = false
 
     /**
@@ -163,6 +167,7 @@ object WeDb {
             bridge.close()
             WxDownloader.fileLog(ctx, "WeDb classes kernel=$kernel core=$core wrapper=$wrapper")
             kernelName = kernel
+            coreName = core
             if (kernel == null || core == null || wrapper == null) return false
 
             bind(ctx, kernel, core, wrapper)

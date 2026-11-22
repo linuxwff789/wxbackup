@@ -113,10 +113,41 @@ object WxClasses {
             java.lang.reflect.Modifier.isStatic(it.modifiers) && it.parameterCount == 1 &&
                 it.parameterTypes[0] == Class::class.java
         } ?: return null
-        val storeInst = runCatching { v.invoke(null, store) }.getOrNull() ?: return null
+
+        // MsgInfoStorage 是 CoreStorage 的成员（不是 MMKernel 服务），先拿 CoreStorage 实例再取字段/方法
+        var storeInst: Any? = runCatching { v.invoke(null, store) }.getOrNull()
+        if (storeInst == null || !store.isInstance(storeInst)) {
+            val coreName = WeDb.coreName
+            if (coreName != null) {
+                val coreCls = runCatching { Class.forName(coreName, false, ctx.classLoader) }.getOrNull()
+                val coreInst = coreCls?.let { runCatching { v.invoke(null, it) }.getOrNull() }
+                if (coreInst != null) {
+                    storeInst = runCatching {
+                        coreInst.javaClass.fields.firstOrNull {
+                            it.type == store || store.isAssignableFrom(it.type)
+                        }?.apply { isAccessible = true }?.get(coreInst)
+                    }.getOrNull()
+                    if (storeInst == null) {
+                        storeInst = runCatching {
+                            coreInst.javaClass.methods.firstOrNull {
+                                it.parameterCount == 0 && it.returnType == store
+                            }?.invoke(coreInst)
+                        }.getOrNull()
+                    }
+                }
+            }
+        }
+        WxDownloader.fileLog(
+            ctx,
+            "msgInfo store=${store.name} method=${m.name} inst=${storeInst != null} " +
+                "static=${java.lang.reflect.Modifier.isStatic(m.modifiers)}"
+        )
 
         val target = if (java.lang.reflect.Modifier.isStatic(m.modifiers)) null else storeInst
-        return runCatching { m.invoke(target, talker, msgId) }.getOrNull()
+        if (target == null && !java.lang.reflect.Modifier.isStatic(m.modifiers)) return null
+        return runCatching { m.invoke(target, talker, msgId) }
+            .onFailure { WxDownloader.fileLog(ctx, "msgInfo invoke failed: ${it.cause?.message ?: it.message}") }
+            .getOrNull()
     }
 
     /** 聊天上下文（8.0.79 的 cm5.d）。 */
