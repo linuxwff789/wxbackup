@@ -72,6 +72,33 @@ object MultiSelectHook {
                     if (group.javaClass.name.contains("ChattingFooterMoreBtnBar")) inject(group)
                 }
             })
+            // a()=reset, b(int, listener)=加按钮, c(int)=设可见：多选底栏构建必经
+            var lastB = 0L
+            XposedBridge.hookAllMethods(cls, "b", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val self = param.thisObject as? ViewGroup ?: return
+                    if (self !== cachedGroup) {
+                        cachedGroup = self
+                        cachedRow = self.findViewWithTag<View>(BTN_TAG)
+                    }
+                    val now = System.currentTimeMillis()
+                    if (now - lastB > 300) {
+                        lastB = now
+                        XposedBridge.log(
+                            "$TAG MoreBtnBar.b(id=${param.args.getOrNull(0)}) vis=${self.visibility} " +
+                                "sel=${hasSelection()} adapter=${cachedAdapter?.javaClass?.name}"
+                        )
+                    }
+                    self.post { updateRowVisibility() }
+                }
+            })
+            XposedBridge.hookAllMethods(View::class.java, "setVisibility", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val self = param.thisObject as? View ?: return
+                    if (cachedGroup == null || self !== cachedGroup) return
+                    self.post { updateRowVisibility() }
+                }
+            })
             XposedBridge.log("$TAG installed on ${cls.name}")
         } catch (e: Throwable) {
             XposedBridge.log("$TAG install failed: ${e.message}")
@@ -114,7 +141,7 @@ object MultiSelectHook {
             }
         }
         val sel = hasSelection()
-        val want = g.visibility == View.VISIBLE && sel
+        val want = sel && (g.visibility == View.VISIBLE || g.parent != null)
         if (want != (r.visibility == View.VISIBLE)) {
             XposedBridge.log(
                 "$TAG updateRow groupVis=${g.visibility} groupSize=${g.width}x${g.height} " +
