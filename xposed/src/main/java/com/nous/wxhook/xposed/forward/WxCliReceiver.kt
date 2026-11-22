@@ -70,9 +70,7 @@ class WxCliReceiver : BroadcastReceiver() {
             "dump_msg" -> {
                 val msgId = intent.getStringExtra("msgId")?.toLongOrNull() ?: 0L
                 val talker = intent.getStringExtra("talker").orEmpty()
-                val mi = Class.forName("oy0.k0", false, loader)
-                    .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
-                    .invoke(null, talker, msgId)
+                val mi = WxClasses.msgInfo(context, talker, msgId)
                 if (mi == null) "msg not found" else MessageExtractor.dump(mi)
             }
 
@@ -244,10 +242,8 @@ class WxCliReceiver : BroadcastReceiver() {
                 if (talker.isBlank() || ids.isEmpty()) {
                     "talker/msgIds required"
                 } else {
-                    val zi = Class.forName("oy0.k0", false, loader)
-                        .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
                     val list = ids.mapNotNull { id ->
-                        runCatching { zi.invoke(null, talker, id) }.getOrNull()
+                        WxClasses.msgInfo(context, talker, id)
                     }
                     val n = ForwardSender.forwardList(context, list, title)
                     "saved=$n requested=${ids.size} resolved=${list.size}"
@@ -259,9 +255,7 @@ class WxCliReceiver : BroadcastReceiver() {
                 val svrId = intent.getStringExtra("svrId")?.toLongOrNull() ?: 0L
                 val talker = intent.getStringExtra("talker").orEmpty()
                 val title = intent.getStringExtra("title").orEmpty()
-                val mi = Class.forName("oy0.k0", false, loader)
-                    .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
-                    .invoke(null, talker, msgId)
+                val mi = WxClasses.msgInfo(context, talker, msgId)
                 if (mi == null) {
                     "msg not found (msgId=$msgId talker=$talker)"
                 } else {

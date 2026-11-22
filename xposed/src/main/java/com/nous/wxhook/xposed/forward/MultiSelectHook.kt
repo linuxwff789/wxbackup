@@ -459,10 +459,8 @@ object MultiSelectHook {
         // 1) 微信自己的查询：oy0.k0.Zi(talker, msgId)——最可靠
         if (talker.isNotBlank()) {
             runCatching {
-                val mi = Class.forName("oy0.k0", false, loader)
-                    .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
-                    .invoke(null, talker, id)
-                if (MessageExtractor.looksLikeMsgInfo(mi) && MessageExtractor.extract(mi)?.msgId == id) {
+                val mi = WxClasses.msgInfo(null, talker, id)
+                if (mi != null && MessageExtractor.looksLikeMsgInfo(mi) && MessageExtractor.extract(mi)?.msgId == id) {
                     XposedBridge.log("$TAG msgById Zi ok want=$id talker=$talker")
                     return mi
                 }

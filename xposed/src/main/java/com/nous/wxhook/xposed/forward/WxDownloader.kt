@@ -76,10 +76,7 @@ object WxDownloader {
             }
 
             runCatching {
-                val ziCls = Class.forName("oy0.k0", false, loader)
-                val zi = ziCls.getMethod("Zi", String::class.java, java.lang.Long.TYPE)
-                zi.isAccessible = true
-                val mi = zi.invoke(null, talker, msgId)
+                val mi = WxClasses.msgInfo(ctx, talker, msgId)
                 if (mi != null) {
                     val gid = mi.javaClass.getMethod("getMsgId").invoke(mi)
                     val gsvr = mi.javaClass.getMethod("getMsgSvrId").invoke(mi)
@@ -186,9 +183,7 @@ object WxDownloader {
     ): Boolean {
         return try {
             val loader = ctx.classLoader
-            val msgInfo = Class.forName("oy0.k0", false, loader)
-                .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
-                .invoke(null, talker, msgId) ?: run {
+            val msgInfo = WxClasses.msgInfo(ctx, talker, msgId) ?: run {
                 XposedBridge.log("$TAG image helper: msgInfo null msgId=$msgId")
                 return false
             }
@@ -661,9 +656,7 @@ object WxDownloader {
         return try {
             val loader = ctx.classLoader
             val msgCls = Class.forName("com.tencent.mm.storage.e9", false, loader)
-            val msgInfo = Class.forName("oy0.k0", false, loader)
-                .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
-                .invoke(null, talker, msgId)
+            val msgInfo = WxClasses.msgInfo(ctx, talker, msgId)
             if (msgInfo == null) {
                 downloading.remove(key)
                 fileLog(ctx, "silent download: msgInfo null msgId=$msgId")
