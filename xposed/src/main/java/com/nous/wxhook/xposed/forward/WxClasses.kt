@@ -114,23 +114,33 @@ object WxClasses {
                 it.parameterTypes[0] == Class::class.java
         } ?: return null
 
-        // MsgInfoStorage 是 CoreStorage 的成员（不是 MMKernel 服务），先拿 CoreStorage 实例再取字段/方法
+        // MsgInfoStorage 是 CoreStorage 的成员（不是 MMKernel 服务）：先用 WeDb.bind 同款方式
+        // 取 CoreStorage 实例（无参静态方法，返回类型就是 CoreStorage），再取它的字段/方法。
         var storeInst: Any? = runCatching { v.invoke(null, store) }.getOrNull()
         if (storeInst == null || !store.isInstance(storeInst)) {
             val coreName = WeDb.coreName
             if (coreName != null) {
                 val coreCls = runCatching { Class.forName(coreName, false, ctx.classLoader) }.getOrNull()
-                val coreInst = coreCls?.let { runCatching { v.invoke(null, it) }.getOrNull() }
+                val coreInst = coreCls?.let {
+                    runCatching {
+                        kernel.methods.firstOrNull { m2 ->
+                            java.lang.reflect.Modifier.isStatic(m2.modifiers) &&
+                                m2.parameterCount == 0 && m2.returnType == it
+                        }?.invoke(null)
+                    }.getOrNull()
+                }
                 if (coreInst != null) {
                     storeInst = runCatching {
-                        coreInst.javaClass.fields.firstOrNull {
-                            it.type == store || store.isAssignableFrom(it.type)
+                        coreInst.javaClass.fields.firstOrNull { f ->
+                            f.type == store || store.isAssignableFrom(f.type) ||
+                                f.type.isAssignableFrom(store)
                         }?.apply { isAccessible = true }?.get(coreInst)
                     }.getOrNull()
                     if (storeInst == null) {
                         storeInst = runCatching {
-                            coreInst.javaClass.methods.firstOrNull {
-                                it.parameterCount == 0 && it.returnType == store
+                            coreInst.javaClass.methods.firstOrNull { m2 ->
+                                m2.parameterCount == 0 &&
+                                    (m2.returnType == store || m2.returnType.isAssignableFrom(store))
                             }?.invoke(coreInst)
                         }.getOrNull()
                     }
