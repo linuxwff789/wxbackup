@@ -116,7 +116,14 @@ object WxClasses {
 
         // MsgInfoStorage 是 CoreStorage 的成员（不是 MMKernel 服务）：先用 WeDb.bind 同款方式
         // 取 CoreStorage 实例（无参静态方法，返回类型就是 CoreStorage），再取它的字段/方法。
+        // MMKernel.v(Class) 是按接口注册的（g9 implements ip3.m0），直接传实现类拿不到，
+        // 所以先试实现类，再试它的接口。
         var storeInst: Any? = runCatching { v.invoke(null, store) }.getOrNull()
+        if (storeInst == null || !store.isInstance(storeInst)) {
+            storeInst = store.interfaces.firstOrNull { i ->
+                runCatching { v.invoke(null, i) }.getOrNull()?.let { store.isInstance(it) } == true
+            }?.let { i -> runCatching { v.invoke(null, i) }.getOrNull() }
+        }
         if (storeInst == null || !store.isInstance(storeInst)) {
             val coreName = WeDb.coreName
             if (coreName != null) {
