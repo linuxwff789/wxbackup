@@ -334,9 +334,72 @@ class WxCliReceiver : BroadcastReceiver() {
                 }
             }
 
+            "dump_view" -> {
+                // 从当前 Activity 的 decorView 递归打印 View 树，用于定位微信 UI 组件（uiautomator 在微信里被禁）
+                val filter = intent.getStringExtra("filter").orEmpty()
+                val act = currentActivity()
+                    ?: return "no resumed activity"
+                val sb = StringBuilder()
+                fun walk(v: android.view.View, depth: Int) {
+                    if (depth > 25) return
+                    val cn = v.javaClass.name
+                    val hit = filter.isEmpty() || cn.contains(filter, true)
+                    if (hit) {
+                        sb.append("  ".repeat(depth)).append(cn)
+                            .append(' ').append(v.width).append('x').append(v.height)
+                            .append(" vis=").append(v.visibility)
+                        if (v is android.widget.TextView && v.text.isNotEmpty()) {
+                            sb.append(" text=").append(v.text.toString().take(24))
+                        }
+                        sb.append('\n')
+                    }
+                    if (v is android.view.ViewGroup) {
+                        for (i in 0 until v.childCount) walk(v.getChildAt(i), if (hit) depth + 1 else depth)
+                    }
+                }
+                walk(act.window.decorView, 0)
+                WxDownloader.fileLog(context, "VIEWTREE act=${act.javaClass.name} filter=$filter\n$sb")
+                "dumped ${sb.length} chars (act=${act.javaClass.simpleName})"
+            }
+
+            "dump_activity" -> {
+                val act = currentActivity()
+                if (act == null) "no resumed activity" else {
+                    val sb = StringBuilder("act=${act.javaClass.name}\n")
+                    var k: Class<*>? = act.javaClass
+                    while (k != null && k != Any::class.java) {
+                        for (f in k.declaredFields) {
+                            val v = runCatching { f.isAccessible = true; f.get(act) }.getOrNull() ?: continue
+                            if (v is android.view.View) {
+                                sb.append("  ").append(f.name).append(": ").append(v.javaClass.name).append('\n')
+                            }
+                        }
+                        k = k.superclass
+                    }
+                    WxDownloader.fileLog(context, "ACT\n$sb")
+                    "dumped ${sb.length} chars"
+                }
+            }
+
             else -> "unknown cmd=$cmd"
         }
     }
+
+    private fun currentActivity(): android.app.Activity? = runCatching {
+        val at = Class.forName("android.app.ActivityThread")
+        val inst = at.getMethod("currentActivityThread").invoke(null) ?: return null
+        val f = at.getDeclaredField("mActivities").apply { isAccessible = true }
+        val map = f.get(inst) as? Map<*, *> ?: return null
+        for (v in map.values) {
+            val rec = v ?: continue
+            val af = rec.javaClass.getDeclaredField("activity").apply { isAccessible = true }
+            val a = af.get(rec) as? android.app.Activity ?: continue
+            val pf = rec.javaClass.getDeclaredField("paused").apply { isAccessible = true }
+            if (pf.getBoolean(rec)) continue
+            return a
+        }
+        null
+    }.getOrNull()
 
     companion object {
         const val ACTION = "com.nous.wxhook.CMD"
