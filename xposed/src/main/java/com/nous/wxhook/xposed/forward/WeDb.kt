@@ -38,19 +38,21 @@ object WeDb {
     /**
      * 模块 APK 的 nativeLibraryDir。
      * 微信进程受 Android 11+ 包可见性限制，普通 PackageManager 查不到模块包；
-     * 走 AppGlobals（系统 PackageManager）可以绕过。
+     * 依次尝试普通 PM -> AppGlobals（系统 PM）-> /proc/self/maps 里的模块 APK 路径。
      */
     private fun moduleLibDir(ctx: Context): String? {
         val pkgs = arrayOf("com.nous.wxhook.xposed", "com.nous.wxhook")
         for (pkg in pkgs) {
-            runCatching {
-                val info = ctx.packageManager.getApplicationInfo(pkg, 0)
-                return info.nativeLibraryDir
-            }
+            val r = runCatching { ctx.packageManager.getApplicationInfo(pkg, 0).nativeLibraryDir }
+            WxDownloader.fileLog(
+                ctx,
+                "libdir pm $pkg -> ${r.getOrNull()} err=${r.exceptionOrNull()?.javaClass?.simpleName}"
+            )
+            r.getOrNull()?.takeIf { it.isNotBlank() }?.let { return it }
         }
-        return runCatching {
+        runCatching {
             val pm = Class.forName("android.app.AppGlobals")
-                .getMethod("getPackageManager").invoke(null) ?: return null
+                .getMethod("getPackageManager").invoke(null) ?: return@runCatching
             val m = pm.javaClass.getMethod(
                 "getApplicationInfo",
                 String::class.java,
@@ -59,12 +61,29 @@ object WeDb {
             )
             for (pkg in pkgs) {
                 val info = runCatching { m.invoke(pm, pkg, 0, 0) as? android.content.pm.ApplicationInfo }
-                    .getOrNull() ?: continue
-                WxDownloader.fileLog(ctx, "AppGlobals found $pkg lib=${info.nativeLibraryDir}")
-                return info.nativeLibraryDir
+                WxDownloader.fileLog(
+                    ctx,
+                    "libdir ag $pkg -> ${info.getOrNull()?.nativeLibraryDir} err=${info.exceptionOrNull()?.javaClass?.simpleName}"
+                )
+                info.getOrNull()?.nativeLibraryDir?.takeIf { it.isNotBlank() }?.let { return it }
             }
-            null
-        }.getOrNull()
+        }.onFailure {
+            WxDownloader.fileLog(ctx, "libdir AppGlobals failed: ${it.javaClass.simpleName} ${it.message}")
+        }
+        // 最后：从 /proc/self/maps 找模块 APK（LSPosed 可能把模块 apk 映射进进程）
+        runCatching {
+            java.io.File("/proc/self/maps").readLines().forEach { line ->
+                if (line.contains("com.nous.wxhook") && line.contains(".apk")) {
+                    val p = line.trim().split(Regex("\\s+")).lastOrNull().orEmpty()
+                    WxDownloader.fileLog(ctx, "libdir maps apk=$p")
+                    val apk = java.io.File(p)
+                    if (apk.isFile) {
+                        return@runCatching java.io.File(apk.parentFile, "lib/arm64").absolutePath
+                    }
+                }
+            }
+        }
+        return null
     }
 
     fun ensureDexKit(ctx: Context?) {
