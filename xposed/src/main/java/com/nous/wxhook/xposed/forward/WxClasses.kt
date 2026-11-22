@@ -24,6 +24,8 @@ object WxClasses {
 
     private val cache = HashMap<String, Class<*>?>()
 
+    @Volatile private var holderStore: Any? = null
+
     private fun loader(ctx: Context): ClassLoader = ctx.classLoader
 
     @Synchronized
@@ -116,9 +118,33 @@ object WxClasses {
 
         // MsgInfoStorage 是 CoreStorage 的成员（不是 MMKernel 服务）：先用 WeDb.bind 同款方式
         // 取 CoreStorage 实例（无参静态方法，返回类型就是 CoreStorage），再取它的字段/方法。
+        // 8.0.80: MsgInfoStorage 由 com.tencent.mm.plugin.messenger.foundation.h2 持有（字段 g），
+        // 它不是 MMKernel 服务也不是 CoreStorage 成员（Dagger 注入）。先用这个持有者拿实例。
+        runCatching {
+            val holderCls = Class.forName(
+                "com.tencent.mm.plugin.messenger.foundation.h2", false, ctx.classLoader
+            )
+            val holderInst = runCatching { v.invoke(null, holderCls) }.getOrNull()
+            var inst: Any? = null
+            if (holderInst != null) {
+                inst = holderInst.javaClass.fields.firstOrNull { f ->
+                    store.isAssignableFrom(f.type) || f.type == store
+                }?.apply { isAccessible = true }?.get(holderInst)
+            }
+            if (inst == null) {
+                // 静态字段兜底
+                inst = holderCls.fields.firstOrNull { f ->
+                    java.lang.reflect.Modifier.isStatic(f.modifiers) &&
+                        (store.isAssignableFrom(f.type) || f.type == store)
+                }?.apply { isAccessible = true }?.get(null)
+            }
+            if (inst != null) holderStore = inst
+        }
+        var storeInst: Any? = holderStore
+
         // MMKernel.v(Class) 是按接口注册的（g9 implements ip3.m0），直接传实现类拿不到，
         // 所以先试实现类，再试它的接口。
-        var storeInst: Any? = runCatching { v.invoke(null, store) }.getOrNull()
+        if (storeInst == null) storeInst = runCatching { v.invoke(null, store) }.getOrNull()
         if (storeInst == null || !store.isInstance(storeInst)) {
             storeInst = store.interfaces.firstOrNull { i ->
                 runCatching { v.invoke(null, i) }.getOrNull()?.let { store.isInstance(it) } == true
