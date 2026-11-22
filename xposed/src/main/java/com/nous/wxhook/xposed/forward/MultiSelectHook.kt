@@ -226,9 +226,10 @@ object MultiSelectHook {
      * 所以以 z 为准，用 z 过滤 q..u 并去重。
      */
     private fun resolveSelected(quick: Any?): List<Any> {
-        if (quick == null) return emptyList()
-        val ctxObj = readField(quick, "d")
-        val z = readField(quick, "z")
+        // quick 可能为 null（findQuickComponent 找不到 ChattingContext），
+        // 此时不能直接返回空：adapter.k.W 才是真正的选中集合，兜底用它。
+        val ctxObj = quick?.let { readField(it, "d") }
+        val z = quick?.let { readField(it, "z") }
         val zSize = (z as? Collection<*>)?.size ?: -1
         val zFirst = (z as? Collection<*>)?.firstOrNull()?.javaClass?.name
         XposedBridge.log("$TAG resolve z=$zSize first=$zFirst ctx=${ctxObj?.javaClass?.name}")
