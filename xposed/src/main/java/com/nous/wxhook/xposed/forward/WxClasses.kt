@@ -152,6 +152,30 @@ object WxClasses {
         return cls?.name
     }
 
+    private val obfCache = HashMap<String, String?>()
+
+    /**
+     * 从候选类里挑「混淆包名」的那个（wk5.d / g61.k0 这种）。
+     * 微信升级后包名会变，但框架类（com.tencent.mm.*）的名字是稳定的，
+     * 真正的 storage/context 实现都是混淆短名，所以这个规则比「方法最多」更准。
+     */
+    fun findObfuscated(ctx: Context?, key: String, vararg strings: String): String? {
+        synchronized(obfCache) { if (obfCache.containsKey(key)) return obfCache[key] }
+        val obf = Regex("^[a-z][a-z0-9]{1,3}\\.[a-z0-9]{1,4}$")
+        val hit = findClasses(ctx, *strings)
+            .firstOrNull { obf.matches(it.first) }?.first
+        synchronized(obfCache) { obfCache[key] = hit }
+        return hit
+    }
+
+    /** 聊天上下文（8.0.79 cm5.d / 8.0.80 wk5.d）。 */
+    fun chattingContextName(ctx: Context?): String? =
+        findObfuscated(ctx, "ChattingContext", "MicroMsg.ChattingContext")
+
+    /** ImgInfo2 storage（8.0.79 v61.b1 / 8.0.80 g61.k0）。 */
+    fun imgInfoStorageName(ctx: Context?): String? =
+        findObfuscated(ctx, "ImgInfoStorage", "MicroMsg.ImgInfoStorage")
+
     /** 按字符串常量列出所有候选类（name to 方法数），用于版本升级后人工确认。 */
     fun findClasses(ctx0: Context?, vararg strings: String): List<Pair<String, Int>> {
         val ctx = ctxOf(ctx0) ?: return emptyList()

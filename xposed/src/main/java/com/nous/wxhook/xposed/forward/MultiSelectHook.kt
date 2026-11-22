@@ -374,7 +374,7 @@ object MultiSelectHook {
                 } ?: continue
                 if (v.javaClass.name == adapterCls) return v
                 val tn = v.javaClass.name
-                if (tn.contains("ChattingUIFragment") || tn == "com.tencent.mm.ui.chatting.hb") {
+                if (tn.contains("ChattingUI") || tn == "com.tencent.mm.ui.chatting.hb") {
                     adapterOf(v)?.let { return it }
                 }
             }
@@ -390,8 +390,10 @@ object MultiSelectHook {
         var depth = 0
         while (k != null && k != Any::class.java && depth < 6) {
             for (f in k.declaredFields) {
-                // 字段声明类型可能是接口 wl5.z，实际对象才是 adapter.k
-                if (f.type.name == adapterCls || f.type.name == "wl5.z") {
+                // 字段声明类型是混淆接口（8.0.79 wl5.z / 8.0.80 别的名字），
+                // 不再按名字判断，直接看运行时对象是不是 adapter.k
+                if (f.type.isPrimitive || f.type == String::class.java) continue
+                if (true) {
                     try {
                         f.isAccessible = true
                         val v = f.get(obj)
@@ -556,7 +558,9 @@ object MultiSelectHook {
     private fun findQuickComponent(act: Activity): Any? {
         // 优先从当前会话的 ChattingContext 里取组件实例（缓存实例可能是旧会话的，z 为空）
         try {
-            val ctx = findObjectByClass(act, "cm5.d", 3, HashSet())
+            val ctxName = WxClasses.chattingContextName(act) /* 8.0.80: wk5.d */
+            val ctx = ctxName?.let { findObjectByClass(act, it, 3, HashSet()) }
+            if (ctx == null) XposedBridge.log("$TAG chattingContext not found (name=$ctxName)")
             if (ctx != null) {
                 val mgr = readField(ctx, "f35820c")
                 if (mgr != null) {
