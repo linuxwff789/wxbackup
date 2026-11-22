@@ -42,17 +42,24 @@ object WeDb {
      */
     private fun moduleLibDir(ctx: Context): String? {
         val pkgs = arrayOf("com.nous.wxhook.xposed", "com.nous.wxhook")
+
+        fun usable(dir: String?): String? =
+            dir?.takeIf { it.isNotBlank() && java.io.File(it, "libdexkit.so").isFile }
+
+        // 1) 普通 PM（.xposed 通常被 Android 11+ 包可见性挡住）
         for (pkg in pkgs) {
             val r = runCatching { ctx.packageManager.getApplicationInfo(pkg, 0).nativeLibraryDir }
             WxDownloader.fileLog(
                 ctx,
                 "libdir pm $pkg -> ${r.getOrNull()} err=${r.exceptionOrNull()?.javaClass?.simpleName}"
             )
-            r.getOrNull()?.takeIf { it.isNotBlank() }?.let { return it }
+            usable(r.getOrNull())?.let { return it }
         }
-        runCatching {
+
+        // 2) AppGlobals：系统 PackageManager，不受包可见性限制
+        val viaAg = runCatching {
             val pm = Class.forName("android.app.AppGlobals")
-                .getMethod("getPackageManager").invoke(null) ?: return@runCatching
+                .getMethod("getPackageManager").invoke(null) ?: return@runCatching null
             val m = pm.javaClass.getMethod(
                 "getApplicationInfo",
                 String::class.java,
@@ -65,20 +72,27 @@ object WeDb {
                     ctx,
                     "libdir ag $pkg -> ${info.getOrNull()?.nativeLibraryDir} err=${info.exceptionOrNull()?.javaClass?.simpleName}"
                 )
-                info.getOrNull()?.nativeLibraryDir?.takeIf { it.isNotBlank() }?.let { return it }
+                usable(info.getOrNull()?.nativeLibraryDir)?.let { return@runCatching it }
             }
-        }.onFailure {
-            WxDownloader.fileLog(ctx, "libdir AppGlobals failed: ${it.javaClass.simpleName} ${it.message}")
+            null
         }
-        // 最后：从 /proc/self/maps 找模块 APK（LSPosed 可能把模块 apk 映射进进程）
+        WxDownloader.fileLog(
+            ctx,
+            "libdir AppGlobals -> ${viaAg.getOrNull()} err=${viaAg.exceptionOrNull()?.message}"
+        )
+        viaAg.getOrNull()?.let { return it }
+
+        // 3) 最后：从 /proc/self/maps 找模块 apk 的映射
         runCatching {
             java.io.File("/proc/self/maps").readLines().forEach { line ->
                 if (line.contains("com.nous.wxhook") && line.contains(".apk")) {
                     val p = line.trim().split(Regex("\\s+")).lastOrNull().orEmpty()
-                    WxDownloader.fileLog(ctx, "libdir maps apk=$p")
                     val apk = java.io.File(p)
                     if (apk.isFile) {
-                        return@runCatching java.io.File(apk.parentFile, "lib/arm64").absolutePath
+                        usable(java.io.File(apk.parentFile, "lib/arm64").absolutePath)?.let {
+                            WxDownloader.fileLog(ctx, "libdir maps -> $it")
+                            return@runCatching it
+                        }
                     }
                 }
             }
