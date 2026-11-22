@@ -264,6 +264,76 @@ class WxCliReceiver : BroadcastReceiver() {
                 }
             }
 
+            "find_class" -> {
+                val raw = intent.getStringExtra("strings").orEmpty()
+                val keys = raw.split("|").map { it.trim() }.filter { it.isNotEmpty() }
+                if (keys.isEmpty()) {
+                    "strings required (a|b|c)"
+                } else {
+                    val list = WxClasses.findClasses(context, *keys.toTypedArray())
+                    if (list.isEmpty()) "no class matched" else
+                        list.take(15).joinToString("; ") { "${it.first}(${it.second}m)" }
+                }
+            }
+
+            "dump_class" -> {
+                val name = intent.getStringExtra("class").orEmpty()
+                if (name.isBlank()) {
+                    "class required"
+                } else {
+                    val cl = runCatching { Class.forName(name, false, loader) }.getOrNull()
+                        ?: return "class not found: $name"
+                    val sb = StringBuilder()
+                    sb.append("class=").append(name).append("\n")
+                    runCatching { cl.superclass?.name }.getOrNull()?.let { sb.append("extends ").append(it).append('\n') }
+                    for (m in cl.declaredMethods.sortedBy { it.name }) {
+                        sb.append(if (java.lang.reflect.Modifier.isStatic(m.modifiers)) "S " else "  ")
+                            .append(m.name).append('(')
+                            .append(m.parameterTypes.joinToString(",") { it.name })
+                            .append(") -> ").append(m.returnType.name).append('\n')
+                    }
+                    for (f in cl.declaredFields) {
+                        sb.append(if (java.lang.reflect.Modifier.isStatic(f.modifiers)) "S " else "  ")
+                            .append("field ").append(f.name).append(": ").append(f.type.name).append('\n')
+                    }
+                    val text = sb.toString()
+                    WxDownloader.fileLog(context, "DUMP $name\n$text")
+                    "dumped ${text.length} chars to log"
+                }
+            }
+
+            "invoke" -> {
+                val name = intent.getStringExtra("class").orEmpty()
+                val method = intent.getStringExtra("method").orEmpty()
+                val argsRaw = intent.getStringExtra("args").orEmpty()
+                if (name.isBlank() || method.isBlank()) {
+                    "class/method required"
+                } else {
+                    val cl = runCatching { Class.forName(name, false, loader) }.getOrNull()
+                        ?: return "class not found: $name"
+                    val args = if (argsRaw.isEmpty()) emptyArray() else argsRaw.split("|").toTypedArray()
+                    val cands = cl.declaredMethods.filter { it.name == method && it.parameterCount == args.size }
+                    if (cands.isEmpty()) return "no method $method/${args.size}"
+                    var lastErr = ""
+                    for (m in cands) {
+                        m.isAccessible = true
+                        val conv = args.mapIndexed { i, a ->
+                            val t = m.parameterTypes[i]
+                            when {
+                                t == java.lang.Long.TYPE || t == java.lang.Long::class.java -> a.toLong()
+                                t == java.lang.Integer.TYPE || t == java.lang.Integer::class.java -> a.toInt()
+                                t == java.lang.Boolean.TYPE -> a.toBoolean()
+                                else -> a
+                            }
+                        }.toTypedArray()
+                        val r = runCatching { m.invoke(null, *conv) }
+                        if (r.isSuccess) return "ok -> ${r.getOrNull()}"
+                        lastErr = r.exceptionOrNull()?.let { (it.cause ?: it).toString() }.orEmpty()
+                    }
+                    "failed: $lastErr"
+                }
+            }
+
             else -> "unknown cmd=$cmd"
         }
     }

@@ -152,6 +152,18 @@ object WxClasses {
         return cls?.name
     }
 
+    /** 按字符串常量列出所有候选类（name to 方法数），用于版本升级后人工确认。 */
+    fun findClasses(ctx0: Context?, vararg strings: String): List<Pair<String, Int>> {
+        val ctx = ctxOf(ctx0) ?: return emptyList()
+        installHooks(ctx)
+        val b = bridge(ctx) ?: return emptyList()
+        return runCatching {
+            b.findClass { matcher { usingEqStrings(*strings) } }
+                .map { it.name to it.methods.size }
+                .sortedByDescending { it.second }
+        }.getOrElse { emptyList() }
+    }
+
     fun findClass(ctx: Context?, key: String, vararg strings: String): Class<*>? {
         findClassName(ctx, key, *strings)
         synchronized(cache) { return cache[key] }
