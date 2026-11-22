@@ -99,6 +99,9 @@ object MultiSelectHook {
                     self.post { updateRowVisibility() }
                 }
             })
+            // 8.0.80 的底栏常驻可见、selection 变化也不触发 notifyDataSetChanged，
+            // 没有可用事件，直接轻量轮询（读 adapter.W.size 很便宜）。
+            startPolling()
             XposedBridge.log("$TAG installed on ${cls.name}")
         } catch (e: Throwable) {
             XposedBridge.log("$TAG install failed: ${e.message}")
@@ -119,6 +122,23 @@ object MultiSelectHook {
     }.getOrDefault(false)
 
     private var cachedChatCtx: Any? = null
+
+    private fun startPolling() {
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        var tick = 0
+        val runnable = object : Runnable {
+            override fun run() {
+                runCatching {
+                    // 每 3 秒允许重新解析 adapter（切换会话后旧实例的 W 是空的）
+                    if (tick++ % 5 == 0) cachedAdapter = null
+                    updateRowVisibility()
+                }
+                handler.postDelayed(this, 600)
+            }
+        }
+        handler.postDelayed(runnable, 600)
+        XposedBridge.log("$TAG polling started")
+    }
 
     /** 从当前 Activity 对象图现场解析 adapter（hook 早于实例创建，缓存拿不到）。 */
     private fun resolveAdapterLive(ctx: Context?): Any? {
@@ -141,7 +161,7 @@ object MultiSelectHook {
             }
         }
         val sel = hasSelection()
-        val want = sel && (g.visibility == View.VISIBLE || g.parent != null)
+        val want = sel
         if (want != (r.visibility == View.VISIBLE)) {
             XposedBridge.log(
                 "$TAG updateRow groupVis=${g.visibility} groupSize=${g.width}x${g.height} " +
