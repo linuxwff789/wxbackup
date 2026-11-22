@@ -57,6 +57,25 @@ object WxClasses {
                 }
             )
             log("WxClasses: hooked g9 constructors")
+
+            // 构造可能早于 hook 生效，再挂几个高频实例方法：任何一次调用都能拿到 thisObject
+            for (name in listOf("Gb", "P1", "Qd", "Sd", "be", "sc", "jb", "K3")) {
+                runCatching {
+                    de.robv.android.xposed.XposedBridge.hookAllMethods(
+                        storeCls, name,
+                        object : de.robv.android.xposed.XC_MethodHook() {
+                            override fun afterHookedMethod(param: MethodHookParam?) {
+                                val obj = param?.thisObject ?: return
+                                if (holderStore == null) {
+                                    holderStore = obj
+                                    log("WxClasses: captured MsgInfoStorage via $name()")
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+            log("WxClasses: hooked g9 sample methods")
         }.onFailure { log("WxClasses: hook g9 failed: $it") }
 
         runCatching {
