@@ -27,10 +27,30 @@ object MultiSelectHook {
     @Volatile
     private var installed = false
 
-    fun install(loader: ClassLoader) {
+    fun install(loader: ClassLoader, appContext: Context? = null) {
         if (installed) return
         installed = true
+        // 预热 ChattingContext 的 DexKit 查找（首次要几秒，不能放在点击/布局回调里做）
+        if (appContext != null) {
+            Thread {
+                runCatching { WxClasses.chattingContextName(appContext) }
+                runCatching { WxClasses.imgInfoStorageName(appContext) }
+                XposedBridge.log("$TAG dexkit prewarm done ctx=${WxClasses.chattingContextName(appContext)}")
+            }.start()
+        }
         hookAdapter(loader)
+        // 多选模式底栏变可见时刷新按钮（8.0.80 的 adapter 实例早于 hook 创建，只能现场解析）
+        runCatching {
+            XposedBridge.hookAllMethods(View::class.java, "setVisibility", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val self = param.thisObject as? View ?: return
+                    if (cachedGroup == null || self !== cachedGroup) return
+                    val v = (param.args?.firstOrNull() as? Int) ?: return
+                    if (v == View.VISIBLE) self.post { updateRowVisibility() }
+                }
+            })
+            XposedBridge.log("$TAG setVisibility hook installed")
+        }.onFailure { XposedBridge.log("$TAG setVisibility hook failed: ${it.message}") }
         XposedBridge.log("$TAG install(): adapter hook step done")
         try {
             val cls = Class.forName(
@@ -71,9 +91,28 @@ object MultiSelectHook {
         (w?.size ?: 0) > 0
     }.getOrDefault(false)
 
+    private var cachedChatCtx: Any? = null
+
+    /** 从当前 Activity 对象图现场解析 adapter（hook 早于实例创建，缓存拿不到）。 */
+    private fun resolveAdapterLive(ctx: Context?): Any? {
+        val act = findActivity(ctx) ?: return null
+        val name = WxClasses.chattingContextName(act) ?: return null
+        val cc = cachedChatCtx?.takeIf { it.javaClass.name == name }
+            ?: findObjectByClass(act, name, 3, HashSet())
+            ?: return null
+        cachedChatCtx = cc
+        return findAdapter(cc)
+    }
+
     private fun updateRowVisibility() {
         val r = cachedRow ?: return
         val g = cachedGroup ?: return
+        if (cachedAdapter == null) {
+            resolveAdapterLive(g.context)?.let {
+                cachedAdapter = it
+                XposedBridge.log("$TAG adapter resolved live: ${it.javaClass.name}")
+            }
+        }
         val sel = hasSelection()
         val want = g.visibility == View.VISIBLE && sel
         if (want != (r.visibility == View.VISIBLE)) {

@@ -137,7 +137,7 @@ object ForwardProbe {
         }
         hookViewMenuBuilders(candidates, loader)
         OriginalFetcher.install()
-        MultiSelectHook.install(loader)
+        MultiSelectHook.install(loader, context)
         AutoViewOriginal.install(loader)
         try {
             if (context != null) {
