@@ -337,8 +337,8 @@ class WxCliReceiver : BroadcastReceiver() {
             "dump_view" -> {
                 // 从当前 Activity 的 decorView 递归打印 View 树，用于定位微信 UI 组件（uiautomator 在微信里被禁）
                 val filter = intent.getStringExtra("filter").orEmpty()
-                val act = currentActivity()
-                    ?: return "no resumed activity"
+                val roots = windowRoots()
+                if (roots.isEmpty()) return "no window roots"
                 val sb = StringBuilder()
                 fun walk(v: android.view.View, depth: Int) {
                     if (depth > 25) return
@@ -357,9 +357,9 @@ class WxCliReceiver : BroadcastReceiver() {
                         for (i in 0 until v.childCount) walk(v.getChildAt(i), if (hit) depth + 1 else depth)
                     }
                 }
-                walk(act.window.decorView, 0)
-                WxDownloader.fileLog(context, "VIEWTREE act=${act.javaClass.name} filter=$filter\n$sb")
-                "dumped ${sb.length} chars (act=${act.javaClass.simpleName})"
+                roots.forEach { walk(it, 0) }
+                WxDownloader.fileLog(context, "VIEWTREE roots=${roots.size} filter=$filter\n$sb")
+                "dumped ${sb.length} chars (roots=${roots.size})"
             }
 
             "dump_activity" -> {
@@ -386,6 +386,7 @@ class WxCliReceiver : BroadcastReceiver() {
     }
 
     private fun currentActivity(): android.app.Activity? = runCatching {
+        var fallback: android.app.Activity? = null
         val at = Class.forName("android.app.ActivityThread")
         val inst = at.getMethod("currentActivityThread").invoke(null) ?: return null
         val f = at.getDeclaredField("mActivities").apply { isAccessible = true }
@@ -395,11 +396,25 @@ class WxCliReceiver : BroadcastReceiver() {
             val af = rec.javaClass.getDeclaredField("activity").apply { isAccessible = true }
             val a = af.get(rec) as? android.app.Activity ?: continue
             val pf = rec.javaClass.getDeclaredField("paused").apply { isAccessible = true }
-            if (pf.getBoolean(rec)) continue
-            return a
+            if (!pf.getBoolean(rec)) return a
+            fallback = a
         }
-        null
+        fallback
     }.getOrNull()
+
+    /** 当前进程所有窗口的 decorView（不依赖 Activity 状态，后台也能 dump）。 */
+    private fun windowRoots(): List<android.view.View> = runCatching {
+        val wmg = Class.forName("android.view.WindowManagerGlobal")
+            .getMethod("getInstance").invoke(null) ?: return emptyList()
+        val f = wmg.javaClass.getDeclaredField("mRoots").apply { isAccessible = true }
+        val list = f.get(wmg) as? List<*> ?: return emptyList()
+        list.mapNotNull { r ->
+            runCatching {
+                val mv = r!!.javaClass.getDeclaredField("mView").apply { isAccessible = true }
+                mv.get(r) as? android.view.View
+            }.getOrNull()
+        }
+    }.getOrElse { emptyList() }
 
     companion object {
         const val ACTION = "com.nous.wxhook.CMD"
