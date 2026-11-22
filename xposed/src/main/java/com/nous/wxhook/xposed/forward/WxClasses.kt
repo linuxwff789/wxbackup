@@ -50,8 +50,11 @@ object WxClasses {
             }
         }
         val b = bridge(ctx) ?: return null
+        // 同一个字符串常量可能出现在多个类里（比如只有日志 tag 的辅助类），
+        // 取方法数最多的那个——真正的实现类（storage/helper）方法数远多于日志壳子。
         val name = runCatching {
-            b.findClass { matcher { usingEqStrings(*strings) } }.firstOrNull()?.name
+            b.findClass { matcher { usingEqStrings(*strings) } }
+                .maxByOrNull { it.methods.size }?.name
         }.getOrNull()
         val cls = name?.let { runCatching { Class.forName(it, false, loader(ctx)) }.getOrNull() }
         synchronized(cache) { cache[key] = cls }
