@@ -172,6 +172,96 @@ object WxDownloader {
      *
      * 实测很多图片消息的 XML 没有 md5 属性，用 md5 做条件会完全跳过下载。
      */
+    /**
+     * 8.0.79 的原图下载：dn5.n（MsgHistoryGalleryMediaHelper）的 suspend 方法 b(msgInfo, z, cont)。
+     * z=true 表示下载 Big（原图）：内部 genDownloadParams -> 已存在直接返回 a(path)，
+     * 否则发起 CDN 下载，完成后通过 Continuation.resumeWith 返回 a(path)。
+     * （旧的 v61.b1 / v61.j 在 8.0.79 已被改名，反射直接 ClassNotFound。）
+     */
+    private fun downloadImageViaHelper(
+        ctx: Context,
+        talker: String,
+        msgId: Long,
+        onDone: (File?) -> Unit
+    ): Boolean {
+        return try {
+            val loader = ctx.classLoader
+            val msgInfo = Class.forName("oy0.k0", false, loader)
+                .getMethod("Zi", String::class.java, java.lang.Long.TYPE)
+                .invoke(null, talker, msgId) ?: run {
+                XposedBridge.log("$TAG image helper: msgInfo null msgId=$msgId")
+                return false
+            }
+            val helperCls = Class.forName("dn5.n", false, loader)
+            val helper = helperCls.declaredFields
+                .firstOrNull { java.lang.reflect.Modifier.isStatic(it.modifiers) && it.type == helperCls }
+                ?.apply { isAccessible = true }?.get(null)
+                ?: helperCls.declaredConstructors.firstOrNull()
+                    ?.apply { isAccessible = true }?.newInstance()
+                ?: return false
+
+            val b = helperCls.methods.firstOrNull { it.name == "b" && it.parameterCount == 3 } ?: return false
+            val contIface = Class.forName("kotlin.coroutines.Continuation", false, loader)
+            val emptyCtx = Class.forName("kotlin.coroutines.EmptyCoroutineContext", false, loader)
+                .declaredFields.firstOrNull { java.lang.reflect.Modifier.isStatic(it.modifiers) }
+                ?.apply { isAccessible = true }?.get(null)
+            val done = java.util.concurrent.atomic.AtomicBoolean(false)
+            val cont = java.lang.reflect.Proxy.newProxyInstance(loader, arrayOf(contIface)) { _, m, args ->
+                when (m.name) {
+                    "getContext" -> emptyCtx
+                    "resumeWith" -> {
+                        if (done.compareAndSet(false, true)) {
+                            val path = extractImagePath(args?.firstOrNull())
+                            XposedBridge.log("$TAG image helper resumed path=$path")
+                            onDone(path?.let { File(it) }?.takeIf { it.isFile })
+                        }
+                        null
+                    }
+                    else -> null
+                }
+            }
+            // z=true -> 原图（Big）
+            val ret = runCatching { b.invoke(helper, msgInfo, true, cont) }.getOrElse { e ->
+                XposedBridge.log("$TAG image helper invoke failed: ${e.javaClass.simpleName} ${e.cause?.message ?: e.message}")
+                return false
+            }
+            if (ret != null && done.compareAndSet(false, true)) {
+                val path = extractImagePath(ret)
+                XposedBridge.log("$TAG image helper returned path=$path")
+                onDone(path?.let { File(it) }?.takeIf { it.isFile })
+            }
+            XposedBridge.log("$TAG image helper invoked msgId=$msgId")
+            true
+        } catch (e: Throwable) {
+            XposedBridge.log("$TAG image helper failed: ${e.javaClass.simpleName} ${e.message}")
+            false
+        }
+    }
+
+    /** 从 kotlin.Result<a> 或 a 里取出图片路径。 */
+    private fun extractImagePath(o: Any?): String? {
+        var cur = o ?: return null
+        if (cur.javaClass.name == "kotlin.Result") {
+            cur = runCatching {
+                cur.javaClass.getDeclaredField("value").apply { isAccessible = true }.get(cur)
+            }.getOrNull() ?: return null
+        }
+        var k: Class<*>? = cur.javaClass
+        var depth = 0
+        while (k != null && k != Any::class.java && depth < 3) {
+            for (f in k.declaredFields) {
+                runCatching {
+                    f.isAccessible = true
+                    val v = f.get(cur)
+                    if (v is String && v.startsWith("/")) return v
+                }
+            }
+            k = k.superclass
+            depth++
+        }
+        return null
+    }
+
     fun downloadOriginal(
         ctx: Context?,
         talker: String,
@@ -182,18 +272,29 @@ object WxDownloader {
         if (ctx == null || msgSvrId <= 0) return false
         val key = "orig|$msgSvrId"
         if (downloading.putIfAbsent(key, true) != null) return false
+        val directPath = java.util.concurrent.atomic.AtomicReference<String>()
+        val latch = java.util.concurrent.CountDownLatch(1)
         val queued = try {
-            downloadViaImageService(ctx, msgSvrId, talker)
+            val viaHelper = downloadImageViaHelper(ctx, talker, msgId) { f ->
+                if (f != null) directPath.set(f.absolutePath)
+                latch.countDown()
+            }
+            if (!viaHelper) {
+                downloadViaImageService(ctx, msgSvrId, talker)
+            } else true
         } catch (e: Throwable) {
             fileLog(ctx, "downloadOriginal enqueue failed: ${e.message}")
             false
         }
         Thread({
             var f: File? = null
+            // 先等 helper 的 resumeWith（通常 1-3 秒；已存在则同步就给了）
+            runCatching { latch.await(15, java.util.concurrent.TimeUnit.SECONDS) }
+            directPath.get()?.let { p -> f = File(p).takeIf { it.isFile } }
             val started = System.currentTimeMillis()
             val deadline = started + 90_000
             var retried = false
-            while (System.currentTimeMillis() < deadline) {
+            while (f == null && System.currentTimeMillis() < deadline) {
                 val rel = findImgInfo2Original(ctx, msgSvrId)
                 if (rel != null) {
                     val cand = resolveImage2(rel)
@@ -205,6 +306,7 @@ object WxDownloader {
                 // 微信下载队列慢时 30s 内可能没完成，再触发一次
                 if (!retried && System.currentTimeMillis() - started > 30_000) {
                     retried = true
+                    runCatching { downloadImageViaHelper(ctx, talker, msgId) { null } }
                     runCatching { downloadViaImageService(ctx, msgSvrId, talker) }
                     fileLog(ctx, "downloadOriginal retry svr=$msgSvrId")
                 }
