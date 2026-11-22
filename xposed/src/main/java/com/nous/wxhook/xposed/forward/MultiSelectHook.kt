@@ -74,7 +74,15 @@ object MultiSelectHook {
     private fun updateRowVisibility() {
         val r = cachedRow ?: return
         val g = cachedGroup ?: return
-        r.visibility = if (g.visibility == View.VISIBLE && hasSelection()) View.VISIBLE else View.GONE
+        val sel = hasSelection()
+        val want = g.visibility == View.VISIBLE && sel
+        if (want != (r.visibility == View.VISIBLE)) {
+            XposedBridge.log(
+                "$TAG updateRow groupVis=${g.visibility} groupSize=${g.width}x${g.height} " +
+                    "sel=$sel adapter=${cachedAdapter?.javaClass?.name} -> ${if (want) "SHOW" else "HIDE"}"
+            )
+        }
+        r.visibility = if (want) View.VISIBLE else View.GONE
     }
 
     private fun inject(group: ViewGroup) {
@@ -544,6 +552,10 @@ object MultiSelectHook {
             XposedBridge.hookAllMethods(cls, "notifyDataSetChanged", object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     cachedAdapter = param.thisObject
+                    val w = runCatching {
+                        de.robv.android.xposed.XposedHelpers.getObjectField(param.thisObject, "W") as? Collection<*>
+                    }.getOrNull()
+                    XposedBridge.log("$TAG notifyDataSetChanged W=${w?.size ?: -1}")
                     updateRowVisibility()
                 }
             })
