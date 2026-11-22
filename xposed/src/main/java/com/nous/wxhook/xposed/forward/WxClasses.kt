@@ -276,10 +276,16 @@ object WxClasses {
         )
 
         val target = if (java.lang.reflect.Modifier.isStatic(m.modifiers)) null else storeInst
-        if (target == null && !java.lang.reflect.Modifier.isStatic(m.modifiers)) return null
+        if (target == null && !java.lang.reflect.Modifier.isStatic(m.modifiers)) {
+            // 8.0.80: MsgInfoStorage 实例拿不到，直接查库造等价对象
+            return MessageExtractor.fromDb(ctx, talker, msgId).also {
+                WxDownloader.fileLog(ctx, "msgInfo fallback db -> ${it != null}")
+            }
+        }
         return runCatching { m.invoke(target, talker, msgId) }
             .onFailure { WxDownloader.fileLog(ctx, "msgInfo invoke failed: ${it.cause?.message ?: it.message}") }
             .getOrNull()
+            ?: MessageExtractor.fromDb(ctx, talker, msgId)
     }
 
     /** 聊天上下文（8.0.79 的 cm5.d）。 */

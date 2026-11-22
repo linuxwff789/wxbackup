@@ -51,6 +51,62 @@ object MessageExtractor {
         return Extracted(msgId, msgSvrId, type, createTime, isSend, talker, content, imgPath, fileFullPath, fileName)
     }
 
+
+    /**
+     * 8.0.80 起 MsgInfoStorage 的实例拿不到（Dagger 注入，类甚至没被实例化），
+     * 但 message 表结构没变。这里直接用 SQL 拼一个「字段名与 MsgInfo 一致」的替身，
+     * extract() 走反射读 field_*，两种来源完全通用。
+     */
+    class DbMsgInfo(
+        @JvmField val field_msgId: Long,
+        @JvmField val field_msgSvrId: Long,
+        @JvmField val field_type: Int,
+        @JvmField val field_createTime: Long,
+        @JvmField val field_isSend: Int,
+        @JvmField val field_talker: String,
+        @JvmField val field_content: String,
+        @JvmField val field_imgPath: String,
+        @JvmField val field_fileFullPath: String,
+        @JvmField val field_fileName: String
+    )
+
+    fun fromDb(ctx: android.content.Context?, talker: String, msgId: Long): DbMsgInfo? {
+        if (ctx == null || talker.isBlank() || msgId <= 0) return null
+        val rows = WeDb.query(
+            ctx,
+            "SELECT msgId,msgSvrId,type,createTime,isSend,talker,content,imgPath " +
+                "FROM message WHERE talker=? AND msgId=? LIMIT 1",
+            arrayOf(talker, msgId.toString())
+        )
+        val r = rows.firstOrNull() ?: return null
+
+        fun num(k: String): Long = (r[k] as? Number)?.toLong() ?: 0L
+        fun str(k: String): String = (r[k] as? String) ?: ""
+
+        // 文件类消息的落盘路径在 appattach 表
+        var filePath = ""
+        runCatching {
+            WeDb.query(
+                ctx,
+                "SELECT fileFullPath FROM appattach WHERE msgInfoId=? LIMIT 1",
+                arrayOf(msgId.toString())
+            ).firstOrNull()?.get("fileFullPath")?.toString()?.let { filePath = it }
+        }
+
+        return DbMsgInfo(
+            field_msgId = num("msgId"),
+            field_msgSvrId = num("msgSvrId"),
+            field_type = num("type").toInt(),
+            field_createTime = num("createTime"),
+            field_isSend = num("isSend").toInt(),
+            field_talker = str("talker").ifBlank { talker },
+            field_content = str("content"),
+            field_imgPath = str("imgPath"),
+            field_fileFullPath = filePath,
+            field_fileName = ""
+        )
+    }
+
     /** 诊断用：打印对象全部字段（首次遇到某类时调用）。 */
     fun dump(obj: Any): String {
         val sb = StringBuilder("class=${obj.javaClass.name}\n")
