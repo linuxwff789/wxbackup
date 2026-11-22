@@ -131,20 +131,8 @@ object WeDb {
         if (ctx == null) return false
         // 先试已知类名，绝大多数情况不用付出 DexKit 的代价
         if (fastInit(ctx)) return true
+        ensureDexKit(ctx)
         return try {
-            // DexKit 的 .so 在模块 APK 里，微信进程的 java.library.path 找不到，必须按绝对路径加载
-            try {
-                System.loadLibrary("dexkit")
-            } catch (_: Throwable) {
-                try {
-                    val info = ctx.packageManager.getApplicationInfo("com.nous.wxhook", 0)
-                    val so = java.io.File(info.nativeLibraryDir, "libdexkit.so")
-                    XposedBridgeShim.load(so.absolutePath)
-                    WxDownloader.fileLog(ctx, "WeDb loaded dexkit from ${so.absolutePath}")
-                } catch (e2: Throwable) {
-                    WxDownloader.fileLog(ctx, "WeDb load dexkit failed: ${e2.message}")
-                }
-            }
             val bridge = DexKitBridge.create(ctx.applicationInfo.sourceDir) ?: return false
             fun find(vararg strings: String): String? =
                 bridge.findClass {
