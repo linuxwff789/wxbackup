@@ -27,6 +27,16 @@ class WeChatHookEntry : IXposedHookLoadPackage {
         // Hook 消息拦截
         MessageHook.hook(lpparam)
 
+        // 尽早 hook MsgInfoStorage 构造，抓 8.0.80 的实例（Dagger 注入，查表拿不到）
+        try {
+            com.nous.wxhook.xposed.forward.WxClasses.installHooks(
+                android.app.AndroidAppHelper.currentApplication(),
+                lpparam.classLoader
+            )
+        } catch (e: Throwable) {
+            XposedBridge.log("[wxhook] WxClasses.installHooks error: $e")
+        }
+
         // 转发到笔记 App（长按菜单 / 多选）
         try {
             ForwardHook.hook(lpparam)

@@ -25,6 +25,75 @@ object WxClasses {
     private val cache = HashMap<String, Class<*>?>()
 
     @Volatile private var holderStore: Any? = null
+    @Volatile private var hooksInstalled = false
+
+    /**
+     * 8.0.80 的 MsgInfoStorage（com.tencent.mm.storage.g9）是 Dagger 注入的，
+     * MMKernel/CoreStorage 都拿不到实例，只能等它被创建时抓一份。
+     * 同时 hook h2.Pj() 与 h2 的构造做兜底。
+     */
+    fun installHooks(ctx: Context?, cl0: ClassLoader? = null) {
+        if (hooksInstalled) return
+        val c = ctxOf(ctx)
+        val cl = cl0 ?: c?.classLoader ?: return
+        hooksInstalled = true
+
+        fun log(msg: String) {
+            if (c != null) WxDownloader.fileLog(c, msg) else de.robv.android.xposed.XposedBridge.log("[wxhook] $msg")
+        }
+
+        runCatching {
+            val storeCls = Class.forName("com.tencent.mm.storage.g9", false, cl)
+            de.robv.android.xposed.XposedBridge.hookAllConstructors(
+                storeCls,
+                object : de.robv.android.xposed.XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam?) {
+                        val obj = param?.thisObject ?: return
+                        if (holderStore == null) {
+                            holderStore = obj
+                            log("WxClasses: captured MsgInfoStorage(g9) via <init>")
+                        }
+                    }
+                }
+            )
+            log("WxClasses: hooked g9 constructors")
+        }.onFailure { log("WxClasses: hook g9 failed: $it") }
+
+        runCatching {
+            val holderCls = Class.forName(
+                "com.tencent.mm.plugin.messenger.foundation.h2", false, cl
+            )
+            // 构造里读 g9 类型字段（字段名混淆，按类型匹配）
+            de.robv.android.xposed.XposedBridge.hookAllConstructors(
+                holderCls,
+                object : de.robv.android.xposed.XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam?) {
+                        val obj = param?.thisObject ?: return
+                        if (holderStore != null) return
+                        runCatching {
+                            obj.javaClass.fields.firstOrNull { f ->
+                                f.type.name == "com.tencent.mm.storage.g9"
+                            }?.apply { isAccessible = true }?.get(obj)
+                        }.getOrNull()?.let {
+                            holderStore = it
+                            log("WxClasses: captured MsgInfoStorage via h2 field")
+                        }
+                    }
+                }
+            )
+            // Pj() 兜底
+            de.robv.android.xposed.XposedBridge.hookAllMethods(
+                holderCls, "Pj",
+                object : de.robv.android.xposed.XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam?) {
+                        val r = param?.result ?: return
+                        if (holderStore == null) holderStore = r
+                    }
+                }
+            )
+            log("WxClasses: hooked h2 constructors + Pj")
+        }.onFailure { log("WxClasses: hook h2 failed: $it") }
+    }
 
     private fun loader(ctx: Context): ClassLoader = ctx.classLoader
 
@@ -94,6 +163,7 @@ object WxClasses {
     fun msgInfo(ctx0: Context?, talker: String, msgId: Long): Any? {
         val ctx = ctxOf(ctx0)
         if (ctx == null || talker.isBlank() || msgId <= 0) return null
+        installHooks(ctx)
         val store = findClass(ctx, "MsgInfoStorage", "MicroMsg.MsgInfoStorage") ?: return null
 
         // 先拿 MsgInfo 类型（静态方法或实例方法的返回类型都行）
