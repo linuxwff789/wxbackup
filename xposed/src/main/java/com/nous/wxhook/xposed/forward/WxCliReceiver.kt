@@ -381,6 +381,33 @@ class WxCliReceiver : BroadcastReceiver() {
                 }
             }
 
+            "dump_adapter" -> {
+                val roots = windowRoots()
+                if (roots.isEmpty()) return "no window roots"
+                val rv = roots.firstNotNullOfOrNull { findViewByClass(it, "RecyclerView") }
+                    ?: return "no recycler view"
+                val ad = runCatching {
+                    rv.javaClass.getMethod("getAdapter").invoke(rv)
+                }.getOrNull() ?: return "no adapter on ${rv.javaClass.name}"
+                val sb = StringBuilder("rv=${rv.javaClass.name}\nadapter=${ad.javaClass.name}\n")
+                var k: Class<*>? = ad.javaClass
+                while (k != null && k != Any::class.java) {
+                    for (f in k.declaredFields) {
+                        val cur = runCatching { f.isAccessible = true; f.get(ad) }.getOrNull()
+                        val desc = when (cur) {
+                            is Collection<*> -> "size=${cur.size} first=${cur.firstOrNull()?.javaClass?.simpleName}"
+                            null -> ""
+                            else -> cur.toString().take(40)
+                        }
+                        sb.append("  ").append(f.name).append(": ").append(f.type.name)
+                            .append(' ').append(desc).append('\n')
+                    }
+                    k = k.superclass
+                }
+                WxDownloader.fileLog(context, "ADAPTER\n$sb")
+                "dumped ${sb.length} adapter=${ad.javaClass.name}"
+            }
+
             else -> "unknown cmd=$cmd"
         }
     }
@@ -401,6 +428,16 @@ class WxCliReceiver : BroadcastReceiver() {
         }
         fallback
     }.getOrNull()
+
+    private fun findViewByClass(root: android.view.View, key: String): android.view.View? {
+        if (root.javaClass.name.contains(key)) return root
+        if (root is android.view.ViewGroup) {
+            for (i in 0 until root.childCount) {
+                findViewByClass(root.getChildAt(i), key)?.let { return it }
+            }
+        }
+        return null
+    }
 
     /** 当前进程所有窗口的 decorView（不依赖 Activity 状态，后台也能 dump）。 */
     private fun windowRoots(): List<android.view.View> = runCatching {
