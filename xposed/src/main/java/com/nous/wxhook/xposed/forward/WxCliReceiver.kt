@@ -449,6 +449,30 @@ class WxCliReceiver : BroadcastReceiver() {
                 }
             }
 
+            "dbkey" -> {
+                // 从已打开的 SQLiteDatabase 实例反射挖 SQLCipher 密码（Java 层常见于 byte[]/String 字段）
+                val db = WeDb.dbInstance(context) ?: return "db not open"
+                val sb = StringBuilder("db=${db.javaClass.name} ")
+                var k: Class<*>? = db.javaClass
+                while (k != null && k != Any::class.java) {
+                    for (f in k.declaredFields) {
+                        val v = runCatching { f.isAccessible = true; f.get(db) }.getOrNull() ?: continue
+                        when (v) {
+                            is ByteArray -> if (v.isNotEmpty() && v.size <= 64) {
+                                sb.append(k.simpleName).append('.').append(f.name)
+                                    .append("=hex:").append(v.joinToString("") { b -> "%02x".format(b) })
+                                    .append(" text:").append(String(v, Charsets.UTF_8)).append(' ')
+                            }
+                            is String -> if (v.length in 7..64) {
+                                sb.append(k.simpleName).append('.').append(f.name).append("=str:").append(v).append(' ')
+                            }
+                        }
+                    }
+                    k = k.superclass
+                }
+                sb.toString()
+            }
+
             "probe" -> WxProbe.run(context)
 
             else -> "unknown cmd=$cmd"

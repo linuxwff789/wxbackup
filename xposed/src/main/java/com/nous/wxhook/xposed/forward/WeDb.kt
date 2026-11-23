@@ -210,6 +210,12 @@ object WeDb {
      * 会话/联系人的微信昵称（rcontact.nickname）。群聊返回群名称。
      * 缓存到进程结束，避免每次保存都查库。
      */
+    /** 已打开的 SQLiteDatabase 实例（探针用）。 */
+    fun dbInstance(ctx: Context?): Any? {
+        if (!init(ctx)) return null
+        return db
+    }
+
     fun contactNickname(ctx: Context?, talker: String): String {
         if (ctx == null || talker.isBlank()) return ""
         nickCache[talker]?.let { return it }
