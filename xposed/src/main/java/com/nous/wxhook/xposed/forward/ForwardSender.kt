@@ -577,39 +577,8 @@ object ForwardSender {
         return name.startsWith("th_") || path.contains("/th_")
     }
 
-    private fun findImageByMd5(md5: String): String? {
-        if (md5.length < 4) return null
-        val root = File("/data/data/com.tencent.mm/MicroMsg")
-        val dirs = root.listFiles() ?: return null
-        dirs.forEach { dir ->
-            if (!dir.isDirectory) return@forEach
-            val base = File(dir, "image2/${md5.substring(0, 2)}/${md5.substring(2, 4)}")
-            if (!base.isDirectory) return@forEach
-
-            // 8.0.80 的 vfs：文件可能叫 `<md5>.jpg⌖`，内容只是 UUID 引用，
-            // 真实数据在 image2/.ref/d/<uuid>（由 WxVfs 解析）。
-            fun existing(vararg names: String, minBytes: Long = 1024): File? {
-                for (n in names) {
-                    val f = File(base, n)
-                    if (!f.isFile) continue
-                    val r = WxVfs.resolve(f) ?: continue
-                    if (r.length() >= minBytes) return r
-                }
-                return null
-            }
-
-            // 1) 原图优先
-            listOf("jpg", "png", "gif", "webp", "heic").forEach { ext ->
-                existing("$md5.$ext", "$md5.$ext\u2316")?.let { return it.absolutePath }
-            }
-            // 2) 原图不可用（服务端已过期/从未下载）时，退回点开过的预览大图：
-            //    ehd(约 27KB) > hd(约 16KB) > 缩略图(约 5KB)，避免笔记里一直转圈
-            for (suffix in listOf("ehd", "hd", "")) {
-                existing("th_$md5$suffix", "th_$md5$suffix\u2316")?.let { return it.absolutePath }
-            }
-        }
-        return null
-    }
+    private fun findImageByMd5(md5: String): String? =
+        WxImageFiles.find(md5)?.absolutePath
 
     /** 从消息 item view 里找图片控件并压成 JPEG（排除头像小图）。 */
     private fun captureImageFromView(view: android.view.View?): ByteArray? {

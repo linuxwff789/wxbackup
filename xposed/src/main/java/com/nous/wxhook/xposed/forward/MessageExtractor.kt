@@ -141,6 +141,10 @@ object MessageExtractor {
         if (path.isBlank()) return path
         // 微信 8.0 的 field_imgPath 常是伪协议 THUMBNAIL_DIRPATH://th_<md5>
         if (path.startsWith("THUMBNAIL_DIRPATH://")) {
+            // 8.0.80：文件名可能带 ⌖ 且内容是 UUID 引用，统一交给 WxImageFiles 处理
+            WxImageFiles.md5OfThumbPath(path)?.let { md5 ->
+                WxImageFiles.find(md5)?.let { return it.absolutePath }
+            }
             val thumb = path.removePrefix("THUMBNAIL_DIRPATH://")
             val x = thumb.removePrefix("th_")
             if (x.length >= 4) {
