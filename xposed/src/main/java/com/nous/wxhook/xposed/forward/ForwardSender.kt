@@ -121,7 +121,9 @@ object ForwardSender {
                 }
             }
         }
-        val thumbOnly = localMedia != null && isThumbnailPath(localMedia)
+        // vfs 解析后 ehd/hd 的真实路径不含 th_，用大小兜底判断（原图通常 60KB+）
+        val thumbOnly = localMedia != null &&
+            (isThumbnailPath(localMedia) || runCatching { File(localMedia).length() < 30_000 }.getOrDefault(false))
         XposedBridge.log("$TAG image thumbOnly=$thumbOnly local=$localMedia")
         if (false && mediaKind == ForwardProtocol.MEDIA_IMAGE && (localMedia == null || thumbOnly) &&
             parsed.mediaHint.isNotBlank()
@@ -396,7 +398,9 @@ object ForwardSender {
                     }
                 }
             }
-            val thumbOnly = localMedia != null && isThumbnailPath(localMedia)
+            // vfs 解析后 ehd/hd 的真实路径不含 th_，用大小兜底判断（原图通常 60KB+）
+        val thumbOnly = localMedia != null &&
+            (isThumbnailPath(localMedia) || runCatching { File(localMedia).length() < 30_000 }.getOrDefault(false))
             if (false && (localMedia == null || thumbOnly) && mediaKind == ForwardProtocol.MEDIA_IMAGE &&
                 parsed.mediaHint.isNotBlank()
             ) {
