@@ -423,44 +423,26 @@ object WxDownloader {
     fun findImgInfo2Original(ctx: Context?, msgSvrId: Long): String? {
         if (ctx == null || msgSvrId <= 0) return null
         return try {
-            val loader = ctx.classLoader
-            val storage = Class.forName("v61.b1", false, loader).getMethod("Bj").invoke(null)!!
-            val x4 = storage.javaClass.getMethod(
-                "X4",
-                String::class.java,
-                Array<String>::class.java,
-                String::class.java,
-                Array<String>::class.java,
-                String::class.java,
-                String::class.java,
-                String::class.java
-            )
-            fun query(sel: String, arg: String): Map<String, String>? {
-                val c = x4.invoke(storage, "ImgInfo2", null, sel, arrayOf(arg), null, null, null)
-                    as? android.database.Cursor ?: return null
-                c.use {
-                    if (!it.moveToFirst()) return null
-                    val m = HashMap<String, String>()
-                    for (name in listOf("id", "msgTalker", "bigImgPath", "hevcPath", "midImgPath", "reserved1")) {
-                        val idx = it.getColumnIndex(name)
-                        if (idx >= 0) m[name] = if (it.isNull(idx)) "" else it.getString(idx)
-                    }
-                    return m
-                }
-            }
-            val base = query("msgSvrId=?", msgSvrId.toString())
+            // 8.0.80 起 ImgInfo2Storage 的混淆类变了（v61.b1 -> g61.k0）且实例拿不到，
+            // 但表结构没变，直接 SQL 查最稳。只查确认存在的列，避免 no such column。
+            val cols = "id,msgTalker,bigImgPath,midImgPath,reserved1"
+            fun query(sql: String, arg: String): Map<String, Any?>? =
+                WeDb.query(ctx, sql, arrayOf(arg)).firstOrNull()
+
+            val base = query("SELECT $cols FROM ImgInfo2 WHERE msgSvrId=? LIMIT 1", msgSvrId.toString())
             fileLog(ctx, "ImgInfo2 svr=$msgSvrId row=$base")
-            val hd = base?.get("reserved1")?.toLongOrNull() ?: 0L
-            val original = if (hd > 0) query("id=?", hd.toString())?.also {
-                fileLog(ctx, "ImgInfo2 hd=$hd row=$it")
+            val hd = (base?.get("reserved1") as? Number)?.toLong() ?: 0L
+            val original = if (hd > 0) {
+                query("SELECT $cols FROM ImgInfo2 WHERE id=? LIMIT 1", hd.toString())
+                    ?.also { fileLog(ctx, "ImgInfo2 hd=$hd row=$it") }
             } else null
 
-            fun pick(row: Map<String, String>?): String? =
-                listOf("bigImgPath", "hevcPath", "midImgPath")
-                    .mapNotNull { row?.get(it) }
+            fun pick(row: Map<String, Any?>?): String? =
+                listOf("bigImgPath", "midImgPath")
+                    .mapNotNull { row?.get(it)?.toString() }
                     .firstOrNull { it.isNotBlank() && !it.startsWith("SERVERID://") }
 
-            // 优先原图行；原图行还没下载时回退基础行（已下载的大图）
+            // 优先原图行；原图行还没下载时回退基础行
             pick(original) ?: pick(base)
         } catch (e: Throwable) {
             fileLog(ctx, "ImgInfo2 query failed: ${e.message}")
