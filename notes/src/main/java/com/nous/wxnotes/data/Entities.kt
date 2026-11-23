@@ -193,6 +193,16 @@ interface MessageDao {
         """
     )
     suspend fun clearMisdetectedVoice(textType: Int, voiceKind: String)
+
+    /**
+     * 把「等媒体等到超时」的旧记录标记为已过期（老版本保存的消息没有 mediaUnavailable，
+     * 界面会一直转圈）。只处理创建超过 5 分钟的，避免误伤正在下载的。
+     */
+    @Query(
+        "UPDATE messages SET mediaUnavailable=1 WHERE mediaPath='' AND mediaKind!='' " +
+            "AND mediaKind!='emoji' AND mediaUnavailable=0 AND createTime>0 AND createTime<:cutoff"
+    )
+    suspend fun markStaleMediaUnavailable(cutoff: Long): Int
 }
 
 @Dao

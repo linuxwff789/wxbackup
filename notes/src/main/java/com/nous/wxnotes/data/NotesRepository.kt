@@ -446,6 +446,10 @@ class NotesRepository(private val context: Context) {
     suspend fun fixMisdetectedVoice() = withContext(Dispatchers.IO) {
         runCatching {
             messageDao.clearMisdetectedVoice(WxMessageParser.TYPE_TEXT, ForwardProtocol.MEDIA_VOICE)
+            // 老版本保存的「等媒体」消息没有过期标记，界面会一直转圈：超过 5 分钟的直接标记为已过期
+            val cutoff = System.currentTimeMillis() / 1000 - 300
+            val n = messageDao.markStaleMediaUnavailable(cutoff)
+            if (n > 0) android.util.Log.i("wxnotes", "marked $n stale media as unavailable")
         }
     }
 
