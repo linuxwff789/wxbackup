@@ -213,19 +213,25 @@ object WxClasses {
         synchronized(ctxCache) { if (ctxCache.containsKey("empty")) return ctxCache["empty"] }
         val ctx = ctxOf(ctx0)
         val inst = if (ctx == null) null else runCatching {
-            val iface = kotlin.coroutines.CoroutineContext::class.java
-            val names = listOf(
-                "ua6.l",                            // 8.0.80 实测名
-                "kotlin.coroutines.EmptyCoroutineContext"
-            )
+            // 注意：不能校验它实现了 kotlin.coroutines.CoroutineContext ——
+            // 微信 R8 后它实现的是微信自己的混淆接口，模块这边看不到继承关系。
+            val names = listOf("ua6.l", "kotlin.coroutines.EmptyCoroutineContext")
             for (n in names) {
                 val c = runCatching { Class.forName(n, false, ctx.classLoader) }.getOrNull() ?: continue
-                if (!iface.isAssignableFrom(c)) continue
-                // object 单例：静态字段类型就是自己
-                val single = c.declaredFields.firstOrNull {
-                    java.lang.reflect.Modifier.isStatic(it.modifiers) && c.isAssignableFrom(it.type)
-                }?.apply { isAccessible = true }?.get(null)
-                if (single != null) return@runCatching single
+                // 1) object 单例
+                runCatching {
+                    c.declaredFields.firstOrNull {
+                        java.lang.reflect.Modifier.isStatic(it.modifiers) && c.isInstance(
+                            it.type.takeIf { _ -> false } ?: it.type
+                        )
+                    }
+                }
+                for (f in c.declaredFields) {
+                    if (!java.lang.reflect.Modifier.isStatic(f.modifiers)) continue
+                    val v = runCatching { f.isAccessible = true; f.get(null) }.getOrNull() ?: continue
+                    if (c.isInstance(v)) return@runCatching v
+                }
+                // 2) 无参构造（8.0.80 的 ua6.l 没有静态字段）
                 runCatching {
                     val ctor = c.getDeclaredConstructor()
                     ctor.isAccessible = true
