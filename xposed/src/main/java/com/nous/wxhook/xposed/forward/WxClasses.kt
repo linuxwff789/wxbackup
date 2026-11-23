@@ -213,35 +213,39 @@ object WxClasses {
         synchronized(ctxCache) { if (ctxCache.containsKey("empty")) return ctxCache["empty"] }
         val ctx = ctxOf(ctx0)
         val inst = if (ctx == null) null else runCatching {
-            // 注意：不能校验它实现了 kotlin.coroutines.CoroutineContext ——
-            // 微信 R8 后它实现的是微信自己的混淆接口，模块这边看不到继承关系。
             val names = listOf("ua6.l", "kotlin.coroutines.EmptyCoroutineContext")
             for (n in names) {
                 val c = runCatching { Class.forName(n, false, ctx.classLoader) }.getOrNull() ?: continue
-                // 1) object 单例
-                runCatching {
-                    c.declaredFields.firstOrNull {
-                        java.lang.reflect.Modifier.isStatic(it.modifiers) && c.isInstance(
-                            it.type.takeIf { _ -> false } ?: it.type
-                        )
-                    }
-                }
+                WxDownloader.fileLog(
+                    ctx,
+                    "emptyCtx probe $n: fields=${c.declaredFields.map { it.name + "/" + it.type.simpleName }}" +
+                        " ctors=${c.declaredConstructors.map { ct -> ct.parameterTypes.joinToString(",") { it.simpleName } }}"
+                )
+                // 1) 静态单例字段
                 for (f in c.declaredFields) {
                     if (!java.lang.reflect.Modifier.isStatic(f.modifiers)) continue
                     val v = runCatching { f.isAccessible = true; f.get(null) }.getOrNull() ?: continue
                     if (c.isInstance(v)) return@runCatching v
                 }
-                // 2) 无参构造（8.0.80 的 ua6.l 没有静态字段）
+                // 2) 无参构造
                 runCatching {
                     val ctor = c.getDeclaredConstructor()
                     ctor.isAccessible = true
                     ctor.newInstance()
                 }.getOrNull()?.let { return@runCatching it }
+                // 3) Unsafe.allocateInstance（R8 可能把 object 的单例字段和构造都优化掉）
+                runCatching {
+                    val unsafeCls = Class.forName("sun.misc.Unsafe")
+                    val theUnsafe = unsafeCls.getDeclaredField("theUnsafe").apply { isAccessible = true }
+                        .get(null)
+                    unsafeCls.getMethod("allocateInstance", Class::class.java)
+                        .invoke(theUnsafe, c)
+                }.getOrNull()?.let { return@runCatching it }
             }
             null
         }.getOrNull()
         synchronized(ctxCache) { ctxCache["empty"] = inst }
-        if (inst != null) WxDownloader.fileLog(ctx, "WxClasses: emptyContext=${inst.javaClass.name}")
+        if (ctx != null) WxDownloader.fileLog(ctx, "WxClasses: emptyContext=${inst?.javaClass?.name}")
         return inst
     }
 
