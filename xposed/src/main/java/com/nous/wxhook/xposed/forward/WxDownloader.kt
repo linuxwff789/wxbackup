@@ -270,18 +270,22 @@ object WxDownloader {
         if (downloading.putIfAbsent(key, true) != null) return false
         val directPath = java.util.concurrent.atomic.AtomicReference<String>()
         val latch = java.util.concurrent.CountDownLatch(1)
-        val queued = try {
-            val viaHelper = downloadImageViaHelper(ctx, talker, msgId) { f ->
-                if (f != null) directPath.set(f.absolutePath)
-                latch.countDown()
+        // 必须在后台线程：realMsgInfo 要遍历 adapter 并反射，主线程做会卡 UI
+        val queued = true
+        Thread({
+            try {
+                val viaHelper = downloadImageViaHelper(ctx, talker, msgId) { f ->
+                    if (f != null) directPath.set(f.absolutePath)
+                    latch.countDown()
+                }
+                if (!viaHelper) {
+                    fileLog(ctx, "helper unavailable, fallback ImageService")
+                    downloadViaImageService(ctx, msgSvrId, talker)
+                }
+            } catch (e: Throwable) {
+                fileLog(ctx, "downloadOriginal enqueue failed: ${e.message}")
             }
-            if (!viaHelper) {
-                downloadViaImageService(ctx, msgSvrId, talker)
-            } else true
-        } catch (e: Throwable) {
-            fileLog(ctx, "downloadOriginal enqueue failed: ${e.message}")
-            false
-        }
+        }, "wxhook-orig-enqueue").start()
         Thread({
             var f: File? = null
             // 先等 helper 的 resumeWith（通常 1-3 秒；已存在则同步就给了）

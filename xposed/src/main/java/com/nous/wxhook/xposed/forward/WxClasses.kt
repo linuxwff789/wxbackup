@@ -394,7 +394,9 @@ object WxClasses {
         val count = runCatching {
             ad.javaClass.getMethod("getItemCount").invoke(ad) as? Int
         }.getOrNull() ?: 0
-        for (i in 0 until count) {
+        // 新消息在末尾，倒序找且限制范围，避免几千条全量反射（会卡主线程）
+        val start = maxOf(0, count - 400)
+        for (i in count - 1 downTo start) {
             val item = runCatching { getItem.invoke(ad, i) }.getOrNull() ?: continue
             val ex = MessageExtractor.extract(item) ?: continue
             if (ex.msgId == msgId) return item
