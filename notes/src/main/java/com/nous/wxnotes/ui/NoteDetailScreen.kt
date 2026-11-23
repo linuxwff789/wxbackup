@@ -578,6 +578,11 @@ private fun MessageContent(
     onImageClick: (String) -> Unit
 ) {
     val context = LocalContext.current
+    // 微信本地各级缓存都没有、服务端也拿不到 → 直接说清楚，别一直转圈
+    if (m.mediaPath.isBlank() && m.mediaUnavailable) {
+        ExpiredMedia(m)
+        return
+    }
     // 媒体还不在本地（插件正在下载原图/附件，或大文件还在传输）
     if (m.mediaPath.isBlank() && m.mediaKind.isNotBlank() &&
         m.mediaKind != ForwardProtocol.MEDIA_EMOJI
@@ -667,6 +672,28 @@ private fun AttachmentRow(icon: String, title: String, subtitle: String, onClick
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ExpiredMedia(m: MessageEntity) {
+    val label = when (m.mediaKind) {
+        ForwardProtocol.MEDIA_IMAGE -> "图片已过期，微信服务器已清理，无法获取"
+        ForwardProtocol.MEDIA_FILE -> "文件已过期，微信服务器已清理，无法获取"
+        ForwardProtocol.MEDIA_VIDEO -> "视频已过期，微信服务器已清理，无法获取"
+        else -> "媒体已过期，无法获取"
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall
+        )
     }
 }
 

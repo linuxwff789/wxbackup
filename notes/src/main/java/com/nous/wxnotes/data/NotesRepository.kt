@@ -186,6 +186,7 @@ class NotesRepository(private val context: Context) {
                 text = text,
                 rawXml = m.rawXml.take(if (prefs.getBoolean(KEY_KEEP_RAW, true)) Int.MAX_VALUE else 0),
                 mediaKind = mediaKind,
+                mediaUnavailable = m.mediaUnavailable,
                 mediaPath = mediaPath,
                 fileName = m.fileName.ifBlank { parsed?.fileName.orEmpty() },
                 fileSize = m.fileSize.takeIf { it > 0 } ?: parsed?.fileSize ?: 0,

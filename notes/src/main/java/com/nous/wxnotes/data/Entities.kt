@@ -46,6 +46,8 @@ data class MessageEntity(
     val msgId: Long = 0,
     val msgSvrId: Long = 0,
     val talker: String = "",
+    /** 插件标记：媒体在微信本地和服务端都拿不到（图片已过期等） */
+    val mediaUnavailable: Boolean = false,
     val talkerTitle: String = "",
     val sender: String = "",
     val senderName: String = "",

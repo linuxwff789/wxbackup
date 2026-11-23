@@ -179,6 +179,9 @@ object ForwardSender {
             text = parsed.text,
             rawXml = content.take(4_000),
             mediaKind = mediaKind,
+            // 本地 4 级缓存（原图/ehd/hd/缩略图）全都没拿到 → 先按"可能已过期"标记，
+            // 后台下载成功后 publishUpdate 会把这条更新成真实图片
+            mediaUnavailable = mediaKind == ForwardProtocol.MEDIA_IMAGE && localMedia == null,
             localPath = mediaUrl,
             fileName = parsed.fileName,
             fileSize = parsed.fileSize,
@@ -458,6 +461,7 @@ object ForwardSender {
                 text = parsed.text,
                 rawXml = content.take(4_000),
                 mediaKind = mediaKind,
+                mediaUnavailable = mediaKind == ForwardProtocol.MEDIA_IMAGE && localMedia == null,
                 fileName = parsed.fileName,
                 fileSize = if (localMedia != null) File(localMedia).length() else parsed.fileSize,
                 durationMs = parsed.durationMs,

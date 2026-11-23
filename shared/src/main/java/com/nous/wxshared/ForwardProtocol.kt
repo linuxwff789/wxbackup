@@ -178,6 +178,8 @@ object ForwardProtocol {
         val mediaKind: String = MEDIA_NONE,
         /** 插件复制到公共目录后的绝对路径；拿不到媒体时为空 */
         val localPath: String = "",
+        /** 本地各级缓存都拿不到、且服务端也可能已过期：笔记端直接显示"已过期"而不是一直转圈 */
+        val mediaUnavailable: Boolean = false,
         val fileName: String = "",
         val fileSize: Long = 0,
         val durationMs: Long = 0,
