@@ -140,6 +140,12 @@ object MultiSelectHook {
                             "$TAG rebind footer row=${cachedRow != null} parent=${footer.parent?.javaClass?.name}"
                         )
                     }
+                    if (tick % 8 == 0) {
+                        XposedBridge.log(
+                            "$TAG tick decor=${decor?.javaClass?.name} footer=${footer?.javaClass?.name} " +
+                                "group=${cachedGroup?.javaClass?.name} row=${cachedRow != null}"
+                        )
+                    }
                     // 每 3 秒允许重新解析 adapter（切换会话后旧实例的 W 是空的）
                     if (tick++ % 5 == 0) cachedAdapter = null
                     updateRowVisibility()
