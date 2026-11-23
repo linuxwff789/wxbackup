@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.nous.wxnotes.NotesApp
 import com.nous.wxnotes.data.WebDavBackup
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +26,17 @@ class DebugReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 when (cmd) {
+                    "delete_note" -> {
+                        val ids = intent.getStringExtra("ids").orEmpty()
+                            .split(",").mapNotNull { it.trim().toLongOrNull() }
+                        if (ids.isEmpty()) {
+                            Log.w(TAG, "delete_note: ids required")
+                        } else {
+                            NotesApp.instance.repository.deleteNotes(ids)
+                            Log.i(TAG, "deleted=${ids.joinToString(",")}")
+                        }
+                    }
+
                     "set_dav" -> {
                         prefs.edit()
                             .putString(WebDavBackup.KEY_URL, intent.getStringExtra("url").orEmpty())

@@ -412,6 +412,43 @@ class WxCliReceiver : BroadcastReceiver() {
                 "dumped ${sb.length} adapter=${ad.javaClass.name}"
             }
 
+            "repair_media" -> {
+                // 把「当时没拿到图」的消息用微信本地现有图片补回原笔记（ForwardBatch.update=true）
+                val talker = intent.getStringExtra("talker").orEmpty()
+                val title = intent.getStringExtra("title").orEmpty()
+                val ids = intent.getStringExtra("msgIds").orEmpty()
+                    .split(",").mapNotNull { it.trim().toLongOrNull() }
+                if (talker.isBlank() || ids.isEmpty()) {
+                    "talker/msgIds required"
+                } else {
+                    var ok = 0
+                    val sb = StringBuilder()
+                    for (id in ids) {
+                        val row = WeDb.query(
+                            context,
+                            "SELECT msgSvrId,type,createTime,isSend,imgPath FROM message " +
+                                "WHERE msgId=? AND talker=?",
+                            arrayOf(id.toString(), talker)
+                        ).firstOrNull()
+                        if (row == null) { sb.append("$id:no-row "); continue }
+                        val md5 = WxImageFiles.md5OfThumbPath(row["imgPath"]?.toString().orEmpty())
+                        val f = md5?.let { WxImageFiles.find(it) }
+                        if (f == null) { sb.append("$id:no-file "); continue }
+                        WxDownloader.publishUpdate(
+                            context, talker, title,
+                            (row["isSend"] as? Number)?.toInt() == 1,
+                            id,
+                            (row["msgSvrId"] as? Number)?.toLong() ?: 0L,
+                            (row["createTime"] as? Number)?.toLong() ?: 0L,
+                            (row["type"] as? Number)?.toInt() ?: 3,
+                            "", f
+                        )
+                        ok++
+                    }
+                    "repaired=$ok/${ids.size} ${sb.toString().trim()}"
+                }
+            }
+
             else -> "unknown cmd=$cmd"
         }
     }
