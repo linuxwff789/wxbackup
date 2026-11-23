@@ -193,18 +193,39 @@ object WxDownloader {
                 return false
             }
             val helperCls = Class.forName(helperName, false, loader)
-            val helper = helperCls.declaredFields
-                .firstOrNull { java.lang.reflect.Modifier.isStatic(it.modifiers) && it.type == helperCls }
-                ?.apply { isAccessible = true }?.get(null)
-                ?: helperCls.declaredConstructors.firstOrNull()
-                    ?.apply { isAccessible = true }?.newInstance()
-                ?: return false
+            // 先找静态单例字段（8.0.80 的 xl5.n 是 `static xl5.n a`）；
+            // 类型判断放宽成「值本身就是 helperCls 实例」，避免声明类型写成父类/接口时漏掉。
+            var helper: Any? = null
+            runCatching {
+                helperCls.declaredFields.forEach { f ->
+                    if (helper == null && java.lang.reflect.Modifier.isStatic(f.modifiers) &&
+                        !f.type.isPrimitive
+                    ) {
+                        val v = runCatching { f.isAccessible = true; f.get(null) }.getOrNull()
+                        if (v != null && helperCls.isInstance(v)) helper = v
+                    }
+                }
+            }
+            if (helper == null) {
+                runCatching {
+                    val ctor = helperCls.declaredConstructors.firstOrNull()
+                    ctor?.isAccessible = true
+                    helper = ctor?.let {
+                        // 有参构造就传 null 试一次（部分单例构造参数只是 context）
+                        it.newInstance(*Array(it.parameterCount) { _ -> null })
+                    }
+                }
+            }
+            val h = helper ?: run {
+                XposedBridge.log("$TAG image helper: cannot obtain instance of ${helperCls.name}")
+                return false
+            }
 
             val b = helperCls.methods.firstOrNull { it.name == "b" && it.parameterCount == 3 } ?: return false
             val contIface = Class.forName("kotlin.coroutines.Continuation", false, loader)
-            val emptyCtx = Class.forName("kotlin.coroutines.EmptyCoroutineContext", false, loader)
-                .declaredFields.firstOrNull { java.lang.reflect.Modifier.isStatic(it.modifiers) }
-                ?.apply { isAccessible = true }?.get(null)
+            // 微信 R8 内联了 kotlin.coroutines.EmptyCoroutineContext，反射找不到；
+            // getContext() 只需要返回任意 CoroutineContext，用模块自己的实例即可。
+            val emptyCtx: Any? = kotlin.coroutines.EmptyCoroutineContext
             val done = java.util.concurrent.atomic.AtomicBoolean(false)
             val cont = java.lang.reflect.Proxy.newProxyInstance(loader, arrayOf(contIface)) { _, m, args ->
                 when (m.name) {
@@ -221,7 +242,7 @@ object WxDownloader {
                 }
             }
             // z=true -> 原图（Big）
-            val ret = runCatching { b.invoke(helper, msgInfo, true, cont) }.getOrElse { e ->
+            val ret = runCatching { b.invoke(h, msgInfo, true, cont) }.getOrElse { e ->
                 XposedBridge.log("$TAG image helper invoke failed: ${e.javaClass.simpleName} ${e.cause?.message ?: e.message}")
                 return false
             }
