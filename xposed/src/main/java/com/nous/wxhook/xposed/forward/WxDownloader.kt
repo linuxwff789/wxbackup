@@ -437,13 +437,18 @@ object WxDownloader {
                     ?.also { fileLog(ctx, "ImgInfo2 hd=$hd row=$it") }
             } else null
 
-            fun pick(row: Map<String, Any?>?): String? =
+            // 关键：ImgInfo2 里「原图行」可能只有记录没有文件（微信清理过/还没下载完），
+            // 所以必须校验文件真实存在，否则轮询会一直等一个永远不出现的路径。
+            fun pickExisting(row: Map<String, Any?>?): String? =
                 listOf("bigImgPath", "midImgPath")
                     .mapNotNull { row?.get(it)?.toString() }
-                    .firstOrNull { it.isNotBlank() && !it.startsWith("SERVERID://") }
+                    .firstOrNull { rel ->
+                        rel.isNotBlank() && !rel.startsWith("SERVERID://") &&
+                            resolveImage2(rel) != null
+                    }
 
-            // 优先原图行；原图行还没下载时回退基础行
-            pick(original) ?: pick(base)
+            // 优先原图行（且文件存在）；否则回退基础行
+            pickExisting(original) ?: pickExisting(base)
         } catch (e: Throwable) {
             fileLog(ctx, "ImgInfo2 query failed: ${e.message}")
             null
