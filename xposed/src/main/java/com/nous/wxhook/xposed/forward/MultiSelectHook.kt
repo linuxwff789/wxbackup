@@ -129,6 +129,17 @@ object MultiSelectHook {
         val runnable = object : Runnable {
             override fun run() {
                 runCatching {
+                    // 每次都绑定「当前窗口」的 footer：缓存的实例可能属于已销毁的 Activity
+                    val decor = currentDecor()
+                    val footer = decor?.let { findViewClass(it, "ChattingFooterMoreBtnBar") } as? ViewGroup
+                    if (footer != null && footer !== cachedGroup) {
+                        cachedGroup = footer
+                        cachedRow = footer.findViewWithTag(BTN_TAG)
+                        if (cachedRow == null) inject(footer)
+                        XposedBridge.log(
+                            "$TAG rebind footer row=${cachedRow != null} parent=${footer.parent?.javaClass?.name}"
+                        )
+                    }
                     // 每 3 秒允许重新解析 adapter（切换会话后旧实例的 W 是空的）
                     if (tick++ % 5 == 0) cachedAdapter = null
                     updateRowVisibility()
@@ -141,6 +152,19 @@ object MultiSelectHook {
     }
 
     /** 从当前 Activity 对象图现场解析 adapter（hook 早于实例创建，缓存拿不到）。 */
+    /** 当前前台窗口的 decorView（不依赖缓存的 Activity/footer 实例）。 */
+    private fun currentDecor(): View? = runCatching {
+        val wmg = Class.forName("android.view.WindowManagerGlobal")
+            .getMethod("getInstance").invoke(null) ?: return null
+        val f = wmg.javaClass.getDeclaredField("mRoots").apply { isAccessible = true }
+        val list = f.get(wmg) as? List<*> ?: return null
+        list.firstNotNullOfOrNull { r ->
+            runCatching {
+                r!!.javaClass.getDeclaredField("mView").apply { isAccessible = true }.get(r) as? View
+            }.getOrNull()
+        }
+    }.getOrNull()
+
     private fun findViewClass(root: View, key: String): View? {
         if (root.javaClass.name.contains(key)) return root
         if (root is ViewGroup) {
@@ -182,7 +206,7 @@ object MultiSelectHook {
     private fun resolveAdapterLive(ctx: Context?): Any? {
         // 8.0.80: 消息列表是 RecyclerView（ScrollControlRecyclerView），adapter 直接从它取
         val act0 = findActivity(ctx)
-        val decor = act0?.window?.decorView
+        val decor = currentDecor() ?: act0?.window?.decorView
         if (decor != null) {
             val rv = findViewClass(decor, "ScrollControlRecyclerView")
                 ?: findViewClass(decor, "MMChattingListView")?.let { findViewClass(it, "RecyclerView") }
