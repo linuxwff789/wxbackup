@@ -176,6 +176,32 @@ object WxClasses {
     fun imgInfoStorageName(ctx: Context?): String? =
         findObfuscated(ctx, "ImgInfoStorage", "MicroMsg.ImgInfoStorage")
 
+    private val helperCache = HashMap<String, String?>()
+
+    /**
+     * 图片下载 helper（8.0.79 dn5.n / 8.0.80 xl5.n，tag MicroMsg.MsgHistoryGalleryMediaHelper）。
+     * 候选里有多个同类 tag 的类，靠「有 (f9, boolean, Continuation) 方法」这个签名挑出真正的那个。
+     */
+    fun mediaHelperName(ctx0: Context?): String? {
+        synchronized(helperCache) { if (helperCache.containsKey("helper")) return helperCache["helper"] }
+        val ctx = ctxOf(ctx0)
+        val hit = if (ctx == null) null else runCatching {
+            findClasses(ctx, "MicroMsg.MsgHistoryGalleryMediaHelper").firstNotNullOfOrNull { (name, _) ->
+                val cls = runCatching { Class.forName(name, false, ctx.classLoader) }.getOrNull()
+                val ok = cls?.declaredMethods?.any { m ->
+                    m.parameterCount == 3 &&
+                        m.parameterTypes[0].name == "com.tencent.mm.storage.f9" &&
+                        m.parameterTypes[1] == java.lang.Boolean.TYPE &&
+                        m.parameterTypes[2].name == "kotlin.coroutines.Continuation"
+                } == true
+                if (ok) name else null
+            }
+        }.getOrNull()
+        synchronized(helperCache) { helperCache["helper"] = hit }
+        if (hit != null) WxDownloader.fileLog(ctx, "WxClasses: mediaHelper=$hit")
+        return hit
+    }
+
     /** 按字符串常量列出所有候选类（name to 方法数），用于版本升级后人工确认。 */
     fun findClasses(ctx0: Context?, vararg strings: String): List<Pair<String, Int>> {
         val ctx = ctxOf(ctx0) ?: return emptyList()

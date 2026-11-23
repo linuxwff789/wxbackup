@@ -188,7 +188,11 @@ object WxDownloader {
                 XposedBridge.log("$TAG image helper: realMsgInfo null msgId=$msgId (adapter 里没有这条)")
                 return false
             }
-            val helperCls = Class.forName("dn5.n", false, loader)
+            val helperName = WxClasses.mediaHelperName(ctx) ?: run {
+                XposedBridge.log("$TAG image helper: class not found (MsgHistoryGalleryMediaHelper)")
+                return false
+            }
+            val helperCls = Class.forName(helperName, false, loader)
             val helper = helperCls.declaredFields
                 .firstOrNull { java.lang.reflect.Modifier.isStatic(it.modifiers) && it.type == helperCls }
                 ?.apply { isAccessible = true }?.get(null)
