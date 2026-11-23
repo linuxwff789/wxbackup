@@ -176,7 +176,11 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE dedupeKey LIKE :prefix || '%' ORDER BY id DESC LIMIT 1")
     suspend fun getByKeyPrefix(prefix: String): MessageEntity?
 
-    @Query("UPDATE messages SET mediaPath=:path, mediaKind=:kind, fileName=:name, fileSize=:size WHERE id=:id")
+    /** 补全媒体时同时清掉「已过期」标记 */
+    @Query(
+        "UPDATE messages SET mediaPath=:path, mediaKind=:kind, fileName=:name, fileSize=:size, " +
+            "mediaUnavailable=0 WHERE id=:id"
+    )
     suspend fun updateMedia(id: Long, path: String, kind: String, name: String, size: Long)
 
     @Query("SELECT * FROM messages WHERE id=:id")
