@@ -331,4 +331,75 @@ object WxClasses {
     /** 消息 adapter（8.0.79 的 wl5.z，真实类型是 adapter.k）。 */
     fun chatAdapter(ctx: Context?): Class<*>? =
         findClass(ctx, "ChatAdapter", "MicroMsg.ChattingAdapter", "ChattingItemAdapter")
+
+    // ── 真实 MsgInfo（从当前聊天列表的 adapter 里取） ─────────────────
+
+    private fun findViewByClass(root: android.view.View, key: String): android.view.View? {
+        if (root.javaClass.name.contains(key)) return root
+        if (root is android.view.ViewGroup) {
+            for (i in 0 until root.childCount) findViewByClass(root.getChildAt(i), key)?.let { return it }
+        }
+        return null
+    }
+
+    private fun windowRoots(): List<android.view.View> = runCatching {
+        val wmg = Class.forName("android.view.WindowManagerGlobal")
+            .getMethod("getInstance").invoke(null) ?: return emptyList()
+        val f = wmg.javaClass.getDeclaredField("mRoots").apply { isAccessible = true }
+        val list = f.get(wmg) as? List<*> ?: return emptyList()
+        list.mapNotNull { r ->
+            runCatching {
+                r!!.javaClass.getDeclaredField("mView").apply { isAccessible = true }
+                    .get(r) as? android.view.View
+            }.getOrNull()
+        }
+    }.getOrElse { emptyList() }
+
+    private fun digChatAdapter(o: Any?, depth: Int, seen: MutableSet<Int>): Any? {
+        if (o == null || depth > 3) return null
+        if (!seen.add(System.identityHashCode(o))) return null
+        if (o.javaClass.name == "com.tencent.mm.ui.chatting.adapter.k") return o
+        var k: Class<*>? = o.javaClass
+        while (k != null && k != Any::class.java) {
+            for (f in k.declaredFields) {
+                if (f.type.isPrimitive) continue
+                val v = runCatching { f.isAccessible = true; f.get(o) }.getOrNull() ?: continue
+                digChatAdapter(v, depth + 1, seen)?.let { return it }
+            }
+            k = k.superclass
+        }
+        return null
+    }
+
+    /**
+     * 拿真实的 f9(MsgInfo)：微信自己的图片/文件下载 API 只认这个类型，
+     * SQL 造出来的 DbMsgInfo 会因为参数类型不匹配被拒。
+     * 当前聊天列表 adapter 的 getItem(i) 返回的正是 f9。
+     */
+    fun realMsgInfo(ctx0: Context?, talker: String, msgId: Long): Any? {
+        if (msgId <= 0) return null
+        val roots = windowRoots()
+        if (roots.isEmpty()) return null
+        val rv = roots.firstNotNullOfOrNull { findViewByClass(it, "ScrollControlRecyclerView") }
+            ?: roots.firstNotNullOfOrNull { findViewByClass(it, "MMChattingListView") }
+                ?.let { findViewByClass(it, "RecyclerView") }
+            ?: return null
+        val wrapper = runCatching { rv.javaClass.getMethod("getAdapter").invoke(rv) }.getOrNull()
+            ?: return null
+        val ad = digChatAdapter(wrapper, 0, HashSet()) ?: return null
+        val getItem = ad.javaClass.methods.firstOrNull {
+            it.name == "getItem" && it.parameterCount == 1 &&
+                it.parameterTypes[0] == java.lang.Integer.TYPE
+        } ?: return null
+        val count = runCatching {
+            ad.javaClass.getMethod("getItemCount").invoke(ad) as? Int
+        }.getOrNull() ?: 0
+        for (i in 0 until count) {
+            val item = runCatching { getItem.invoke(ad, i) }.getOrNull() ?: continue
+            val ex = MessageExtractor.extract(item) ?: continue
+            if (ex.msgId == msgId) return item
+        }
+        return null
+    }
+
 }

@@ -183,8 +183,9 @@ object WxDownloader {
     ): Boolean {
         return try {
             val loader = ctx.classLoader
-            val msgInfo = WxClasses.msgInfo(ctx, talker, msgId) ?: run {
-                XposedBridge.log("$TAG image helper: msgInfo null msgId=$msgId")
+            // 微信的下载 API 只认真实 f9(MsgInfo)；SQL 替身参数类型不符会被拒
+            val msgInfo = WxClasses.realMsgInfo(ctx, talker, msgId) ?: run {
+                XposedBridge.log("$TAG image helper: realMsgInfo null msgId=$msgId (adapter 里没有这条)")
                 return false
             }
             val helperCls = Class.forName("dn5.n", false, loader)
