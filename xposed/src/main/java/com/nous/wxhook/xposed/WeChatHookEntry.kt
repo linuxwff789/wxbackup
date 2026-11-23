@@ -21,13 +21,6 @@ class WeChatHookEntry : IXposedHookLoadPackage {
 
         XposedBridge.log("[wxhook] loaded in WeChat (pid=${android.os.Process.myPid()})")
 
-        // 尽早 hook WCDB 拿数据库密码（必须在微信打开 DB 之前）
-        try {
-            com.nous.wxhook.xposed.forward.WxProbe.installDbKeyHook(lpparam.classLoader)
-        } catch (e: Throwable) {
-            XposedBridge.log("[wxhook] installDbKeyHook error: $e")
-        }
-
         // Hook 密钥捕获
         KeyCaptureHook.hook(lpparam)
 

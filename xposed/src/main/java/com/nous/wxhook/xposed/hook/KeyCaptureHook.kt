@@ -15,9 +15,6 @@ object KeyCaptureHook {
     private const val PROVIDER_URI = "content://com.nous.wxhook.db_provider/key"
     private var keyCaptured = false
 
-    private external fun nativeHello(): String
-    private external fun nativeInstallHooks(): String
-
     fun hook(lpparam: de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam) {
         de.robv.android.xposed.XposedBridge.hookAllMethods(
             android.app.Application::class.java,
@@ -26,17 +23,11 @@ object KeyCaptureHook {
                 override fun afterHookedMethod(param: de.robv.android.xposed.XC_MethodHook.MethodHookParam) {
                     val ctx = param.args[0] as? Context ?: return
 
-                    // Load native library
-                    try {
-                        val moduleInfo = ctx.packageManager.getApplicationInfo("com.nous.wxhook.xposed", 0)
-                        val loadPath = moduleInfo.nativeLibraryDir + "/libwcdbhook.so"
-                        if (File(loadPath).exists()) {
-                            System.load(loadPath)
-                            XposedBridge.log("$TAG NATIVE loaded: ${nativeHello()}")
-                        }
-                    } catch (e: Throwable) {
-                        XposedBridge.log("$TAG NATIVE load failed: ${e.message}")
-                    }
+                    // 注：原 libwcdbhook.so 的 native hook（inline hook sqlite3_rekey_v2）已移除：
+                    // 1) 用 packageManager.getApplicationInfo 查模块包在 Android 11+ 被包可见性拦截；
+                    // 2) 该 so 导出的是旧包名 Java_com_nous_wechatxposed_* 符号，与现包名不匹配；
+                    // 3) 源码不在仓库（仅预编译 so），无法重编。
+                    // WCDB 的 setCipherKey(Java 层) 已能稳定拿到密码，无需 native 兜底。
 
                     // Hook setCipherKey
                     try {

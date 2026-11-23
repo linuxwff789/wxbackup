@@ -110,44 +110,6 @@ object WxProbe {
         Triple("EmptyCoroutineContext", "ua6.m", "d")
     )
 
-    /**
-     * 尽早 hook WCDB 的 openOrCreateDatabase，把 SQLCipher 的密码（byte[]）打到日志，
-     * 用于确认密码算法（是否仍是 MD5(imei/androidId + uin) 前 7 位）。
-     * 必须在微信打开数据库之前调用（handleLoadPackage 里）。
-     */
-    fun installDbKeyHook(cl: ClassLoader) {
-        runCatching {
-            val cls = Class.forName("com.tencent.wcdb.database.SQLiteDatabase", false, cl)
-            var hooked = 0
-            for (m in cls.declaredMethods) {
-                // 微信实际走 openDatabase(String, byte[], CipherSpec, ...)，
-                // 所以对所有「静态 + 带 byte[] 参数」的方法都挂上，不按名字过滤
-                if (!java.lang.reflect.Modifier.isStatic(m.modifiers)) continue
-                val idx = m.parameterTypes.indexOfFirst { it == ByteArray::class.java }
-                if (idx < 0) continue
-                de.robv.android.xposed.XposedBridge.hookMethod(
-                    m,
-                    object : de.robv.android.xposed.XC_MethodHook() {
-                        override fun beforeHookedMethod(param: MethodHookParam) {
-                            val pwd = param.args.getOrNull(idx) as? ByteArray ?: return
-                            val hex = pwd.joinToString("") { b -> "%02x".format(b) }
-                            val asText = runCatching { String(pwd, Charsets.UTF_8) }.getOrDefault("")
-                            de.robv.android.xposed.XposedBridge.log(
-                                "[wxhook:DBKEY] len=${pwd.size} hex=$hex text=$asText " +
-                                    "path=${param.args.getOrNull(0)} " +
-                                    "stack=${Throwable().stackTrace.take(8).joinToString(" <- ") { it.className + "." + it.methodName }}"
-                            )
-                        }
-                    }
-                )
-                hooked++
-            }
-            de.robv.android.xposed.XposedBridge.log("[wxhook:DBKEY] hooked $hooked byte[]-arg methods")
-        }.onFailure {
-            de.robv.android.xposed.XposedBridge.log("[wxhook:DBKEY] hook failed: $it")
-        }
-    }
-
     fun run(ctx: Context?): String {
         if (ctx == null) return "no context"
         val sb = StringBuilder()
