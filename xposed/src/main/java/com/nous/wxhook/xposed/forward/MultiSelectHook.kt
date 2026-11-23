@@ -130,8 +130,10 @@ object MultiSelectHook {
             override fun run() {
                 runCatching {
                     // 每次都绑定「当前窗口」的 footer：缓存的实例可能属于已销毁的 Activity
-                    val decor = currentDecor()
-                    val footer = decor?.let { findViewClass(it, "ChattingFooterMoreBtnBar") } as? ViewGroup
+                    val roots = currentRoots()
+                    val footer = roots.firstNotNullOfOrNull {
+                        findViewClass(it, "ChattingFooterMoreBtnBar")
+                    } as? ViewGroup
                     if (footer != null && footer !== cachedGroup) {
                         cachedGroup = footer
                         cachedRow = footer.findViewWithTag(BTN_TAG)
@@ -142,7 +144,7 @@ object MultiSelectHook {
                     }
                     if (tick % 8 == 0) {
                         XposedBridge.log(
-                            "$TAG tick decor=${decor?.javaClass?.name} footer=${footer?.javaClass?.name} " +
+                            "$TAG tick roots=${roots.size} footer=${footer?.javaClass?.name} " +
                                 "group=${cachedGroup?.javaClass?.name} row=${cachedRow != null}"
                         )
                     }
@@ -158,18 +160,20 @@ object MultiSelectHook {
     }
 
     /** 从当前 Activity 对象图现场解析 adapter（hook 早于实例创建，缓存拿不到）。 */
-    /** 当前前台窗口的 decorView（不依赖缓存的 Activity/footer 实例）。 */
-    private fun currentDecor(): View? = runCatching {
+    /** 本进程所有窗口的根 View（微信聊天页可能不在第一个窗口里）。 */
+    private fun currentRoots(): List<View> = runCatching {
         val wmg = Class.forName("android.view.WindowManagerGlobal")
-            .getMethod("getInstance").invoke(null) ?: return null
+            .getMethod("getInstance").invoke(null) ?: return emptyList()
         val f = wmg.javaClass.getDeclaredField("mRoots").apply { isAccessible = true }
-        val list = f.get(wmg) as? List<*> ?: return null
-        list.firstNotNullOfOrNull { r ->
+        val list = f.get(wmg) as? List<*> ?: return emptyList()
+        list.mapNotNull { r ->
             runCatching {
                 r!!.javaClass.getDeclaredField("mView").apply { isAccessible = true }.get(r) as? View
             }.getOrNull()
         }
-    }.getOrNull()
+    }.getOrElse { emptyList() }
+
+    private fun currentDecor(): View? = currentRoots().firstOrNull()
 
     private fun findViewClass(root: View, key: String): View? {
         if (root.javaClass.name.contains(key)) return root
@@ -183,30 +187,23 @@ object MultiSelectHook {
     private fun unwrapChatAdapter(wrapper: Any): Any? {
         val target = "com.tencent.mm.ui.chatting.adapter.k"
         if (wrapper.javaClass.name == target) return wrapper
-        var k: Class<*>? = wrapper.javaClass
-        while (k != null && k != Any::class.java) {
-            for (f in k.declaredFields) {
-                val tn = f.type.name
-                if (tn == target || tn.startsWith("com.tencent.mm.ui.chatting.adapter.")) {
-                    val v = runCatching { f.isAccessible = true; f.get(wrapper) }.getOrNull() ?: continue
-                    if (v.javaClass.name == target) return v
-                    // 类型是接口，再看一层
-                    var k2: Class<*>? = v.javaClass
-                    while (k2 != null && k2 != Any::class.java) {
-                        for (f2 in k2.declaredFields) {
-                            if (f2.type.name == target) {
-                                return runCatching {
-                                    f2.isAccessible = true; f2.get(v)
-                                }.getOrNull()
-                            }
-                        }
-                        k2 = k2.superclass
-                    }
+        // 包装器的字段声明类型是 androidx.recyclerview.widget.f2，值是 adapter.k
+        fun dig(o: Any?, depth: Int, seen: MutableSet<Int>): Any? {
+            if (o == null || depth > 3) return null
+            if (!seen.add(System.identityHashCode(o))) return null
+            if (o.javaClass.name == target) return o
+            var k: Class<*>? = o.javaClass
+            while (k != null && k != Any::class.java) {
+                for (f in k.declaredFields) {
+                    if (f.type.isPrimitive) continue
+                    val v = runCatching { f.isAccessible = true; f.get(o) }.getOrNull() ?: continue
+                    dig(v, depth + 1, seen)?.let { return it }
                 }
+                k = k.superclass
             }
-            k = k.superclass
+            return null
         }
-        return null
+        return dig(wrapper, 0, HashSet())
     }
 
     private fun resolveAdapterLive(ctx: Context?): Any? {
@@ -214,8 +211,10 @@ object MultiSelectHook {
         val act0 = findActivity(ctx)
         val decor = currentDecor() ?: act0?.window?.decorView
         if (decor != null) {
-            val rv = findViewClass(decor, "ScrollControlRecyclerView")
-                ?: findViewClass(decor, "MMChattingListView")?.let { findViewClass(it, "RecyclerView") }
+            val roots = currentRoots()
+            val rv = roots.firstNotNullOfOrNull { findViewClass(it, "ScrollControlRecyclerView") }
+                ?: roots.firstNotNullOfOrNull { findViewClass(it, "MMChattingListView") }
+                    ?.let { findViewClass(it, "RecyclerView") }
             if (rv != null) {
                 val wrapper = runCatching { rv.javaClass.getMethod("getAdapter").invoke(rv) }.getOrNull()
                 if (wrapper != null) {
