@@ -449,6 +449,8 @@ class WxCliReceiver : BroadcastReceiver() {
                 }
             }
 
+            "probe" -> WxProbe.run(context)
+
             else -> "unknown cmd=$cmd"
         }
     }

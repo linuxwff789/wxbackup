@@ -245,6 +245,10 @@ object WxClasses {
         return inst
     }
 
+    /** 探针用：不做缓存的多候选查询。 */
+    fun candidates(ctx0: Context?, vararg strings: String): List<Pair<String, Int>> =
+        findClasses(ctx0, *strings)
+
     /** 按字符串常量列出所有候选类（name to 方法数），用于版本升级后人工确认。 */
     fun findClasses(ctx0: Context?, vararg strings: String): List<Pair<String, Int>> {
         val ctx = ctxOf(ctx0) ?: return emptyList()
