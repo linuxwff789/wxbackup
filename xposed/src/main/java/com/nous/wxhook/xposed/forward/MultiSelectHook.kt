@@ -149,6 +149,36 @@ object MultiSelectHook {
         return null
     }
 
+    /** 从 RecyclerView 的包装 adapter 里挖出 chatting.adapter.k（W 选中集合在它上面）。 */
+    private fun unwrapChatAdapter(wrapper: Any): Any? {
+        val target = "com.tencent.mm.ui.chatting.adapter.k"
+        if (wrapper.javaClass.name == target) return wrapper
+        var k: Class<*>? = wrapper.javaClass
+        while (k != null && k != Any::class.java) {
+            for (f in k.declaredFields) {
+                val tn = f.type.name
+                if (tn == target || tn.startsWith("com.tencent.mm.ui.chatting.adapter.")) {
+                    val v = runCatching { f.isAccessible = true; f.get(wrapper) }.getOrNull() ?: continue
+                    if (v.javaClass.name == target) return v
+                    // 类型是接口，再看一层
+                    var k2: Class<*>? = v.javaClass
+                    while (k2 != null && k2 != Any::class.java) {
+                        for (f2 in k2.declaredFields) {
+                            if (f2.type.name == target) {
+                                return runCatching {
+                                    f2.isAccessible = true; f2.get(v)
+                                }.getOrNull()
+                            }
+                        }
+                        k2 = k2.superclass
+                    }
+                }
+            }
+            k = k.superclass
+        }
+        return null
+    }
+
     private fun resolveAdapterLive(ctx: Context?): Any? {
         // 8.0.80: 消息列表是 RecyclerView（ScrollControlRecyclerView），adapter 直接从它取
         val act0 = findActivity(ctx)
@@ -157,10 +187,15 @@ object MultiSelectHook {
             val rv = findViewClass(decor, "ScrollControlRecyclerView")
                 ?: findViewClass(decor, "MMChattingListView")?.let { findViewClass(it, "RecyclerView") }
             if (rv != null) {
-                val ad = runCatching { rv.javaClass.getMethod("getAdapter").invoke(rv) }.getOrNull()
-                if (ad != null) {
-                    XposedBridge.log("$TAG adapter via RecyclerView: ${ad.javaClass.name}")
-                    return ad
+                val wrapper = runCatching { rv.javaClass.getMethod("getAdapter").invoke(rv) }.getOrNull()
+                if (wrapper != null) {
+                    // 8.0.80: RecyclerView 的 adapter 是包装器（pluginsdk.ui.tools.r0），
+                    // 真正带 W 选中集合的 adapter.k 在它的字段里。
+                    val inner = unwrapChatAdapter(wrapper)
+                    if (inner != null) {
+                        XposedBridge.log("$TAG adapter via RecyclerView: ${inner.javaClass.name}")
+                        return inner
+                    }
                 }
             }
         }
