@@ -384,7 +384,11 @@ class WxCliReceiver : BroadcastReceiver() {
             "dump_adapter" -> {
                 val roots = windowRoots()
                 if (roots.isEmpty()) return "no window roots"
-                val rv = roots.firstNotNullOfOrNull { findViewByClass(it, "RecyclerView") }
+                // 优先聊天消息列表（8.0.80: ScrollControlRecyclerView），最后才退回任意 RecyclerView
+                val rv = roots.firstNotNullOfOrNull { findViewByClass(it, "ScrollControlRecyclerView") }
+                    ?: roots.firstNotNullOfOrNull { findViewByClass(it, "MMChattingListView") }
+                        ?.let { findViewByClass(it, "RecyclerView") }
+                    ?: roots.firstNotNullOfOrNull { findViewByClass(it, "RecyclerView") }
                     ?: return "no recycler view"
                 val ad = runCatching {
                     rv.javaClass.getMethod("getAdapter").invoke(rv)

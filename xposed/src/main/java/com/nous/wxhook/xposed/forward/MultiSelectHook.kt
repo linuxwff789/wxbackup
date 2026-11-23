@@ -141,8 +141,30 @@ object MultiSelectHook {
     }
 
     /** 从当前 Activity 对象图现场解析 adapter（hook 早于实例创建，缓存拿不到）。 */
+    private fun findViewClass(root: View, key: String): View? {
+        if (root.javaClass.name.contains(key)) return root
+        if (root is ViewGroup) {
+            for (i in 0 until root.childCount) findViewClass(root.getChildAt(i), key)?.let { return it }
+        }
+        return null
+    }
+
     private fun resolveAdapterLive(ctx: Context?): Any? {
-        val act = findActivity(ctx) ?: return null
+        // 8.0.80: 消息列表是 RecyclerView（ScrollControlRecyclerView），adapter 直接从它取
+        val act0 = findActivity(ctx)
+        val decor = act0?.window?.decorView
+        if (decor != null) {
+            val rv = findViewClass(decor, "ScrollControlRecyclerView")
+                ?: findViewClass(decor, "MMChattingListView")?.let { findViewClass(it, "RecyclerView") }
+            if (rv != null) {
+                val ad = runCatching { rv.javaClass.getMethod("getAdapter").invoke(rv) }.getOrNull()
+                if (ad != null) {
+                    XposedBridge.log("$TAG adapter via RecyclerView: ${ad.javaClass.name}")
+                    return ad
+                }
+            }
+        }
+        val act = act0 ?: return null
         val name = WxClasses.chattingContextName(act) ?: return null
         val cc = cachedChatCtx?.takeIf { it.javaClass.name == name }
             ?: findObjectByClass(act, name, 3, HashSet())
