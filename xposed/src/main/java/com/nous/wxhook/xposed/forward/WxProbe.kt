@@ -120,7 +120,9 @@ object WxProbe {
             val cls = Class.forName("com.tencent.wcdb.database.SQLiteDatabase", false, cl)
             var hooked = 0
             for (m in cls.declaredMethods) {
-                if (m.name != "openOrCreateDatabase") continue
+                // 微信实际走 openDatabase(String, byte[], CipherSpec, ...)，
+                // 所以对所有「静态 + 带 byte[] 参数」的方法都挂上，不按名字过滤
+                if (!java.lang.reflect.Modifier.isStatic(m.modifiers)) continue
                 val idx = m.parameterTypes.indexOfFirst { it == ByteArray::class.java }
                 if (idx < 0) continue
                 de.robv.android.xposed.XposedBridge.hookMethod(
@@ -140,7 +142,7 @@ object WxProbe {
                 )
                 hooked++
             }
-            de.robv.android.xposed.XposedBridge.log("[wxhook:DBKEY] hooked $hooked openOrCreateDatabase overloads")
+            de.robv.android.xposed.XposedBridge.log("[wxhook:DBKEY] hooked $hooked byte[]-arg methods")
         }.onFailure {
             de.robv.android.xposed.XposedBridge.log("[wxhook:DBKEY] hook failed: $it")
         }
