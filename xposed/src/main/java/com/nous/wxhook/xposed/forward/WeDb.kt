@@ -250,7 +250,15 @@ object WeDb {
         }
     }
 
-    fun query(ctx: Context?, sql: String, args: Array<String>? = null): List<Map<String, Any?>> {
+    /**
+     * @param maxRows 行数上限（防止误跑无 LIMIT 的大查询把几十万行塞进内存）
+     */
+    fun query(
+        ctx: Context?,
+        sql: String,
+        args: Array<String>? = null,
+        maxRows: Int = 500
+    ): List<Map<String, Any?>> {
         if (!init(ctx)) return emptyList()
         val out = ArrayList<Map<String, Any?>>()
         var c: Cursor? = null
@@ -264,7 +272,7 @@ object WeDb {
             } ?: throw NoSuchMethodException("rawQuery(String,String[])")
             c = m.invoke(db, sql, args ?: arrayOf<String>()) as? Cursor ?: return emptyList()
             val names = c.columnNames
-            while (c.moveToNext()) {
+            while (out.size < maxRows && c.moveToNext()) {
                 val row = HashMap<String, Any?>()
                 for (i in names.indices) {
                     row[names[i]] = when (c.getType(i)) {
@@ -276,6 +284,9 @@ object WeDb {
                     }
                 }
                 out.add(row)
+            }
+            if (out.size >= maxRows) {
+                WxDownloader.fileLog(ctx, "WeDb query truncated at $maxRows rows sql=${sql.take(60)}")
             }
         } catch (e: Throwable) {
             val cause = e.cause ?: e
