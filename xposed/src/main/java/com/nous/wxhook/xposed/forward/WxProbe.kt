@@ -148,8 +148,15 @@ object WxProbe {
                 continue
             }
             val has = member == null || runCatching {
-                c.declaredFields.any { it.name == member } ||
-                    c.declaredMethods.any { it.name == member }
+                var k: Class<*>? = c
+                var found = false
+                while (k != null && k != Any::class.java && !found) {
+                    // 8.0.80 的 MsgInfo 字段可能落在父类里
+                    found = k.declaredFields.any { it.name == member } ||
+                        k.declaredMethods.any { it.name == member }
+                    k = k.superclass
+                }
+                found
             }.getOrDefault(false)
             sb.append("[probe] ").append(label).append(" = ").append(clsName)
                 .append(if (has) " ok" else " [member '$member' missing]").append('\n')

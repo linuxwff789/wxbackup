@@ -245,9 +245,21 @@ object WxClasses {
         return inst
     }
 
-    /** 探针用：不做缓存的多候选查询。 */
-    fun candidates(ctx0: Context?, vararg strings: String): List<Pair<String, Int>> =
-        findClasses(ctx0, *strings)
+    /**
+     * 探针用：多字符串候选按 OR 合并。
+     * 注意 DexKit 的 usingEqStrings(*strings) 是 AND（类必须同时包含全部字符串），
+     * 所以这里逐个查询再合并，方法数降序。
+     */
+    fun candidates(ctx0: Context?, vararg strings: String): List<Pair<String, Int>> {
+        val merged = LinkedHashMap<String, Int>()
+        for (s in strings) {
+            for ((name, count) in findClasses(ctx0, s)) {
+                val old = merged[name]
+                if (old == null || count > old) merged[name] = count
+            }
+        }
+        return merged.map { it.key to it.value }.sortedByDescending { it.second }
+    }
 
     /** 按字符串常量列出所有候选类（name to 方法数），用于版本升级后人工确认。 */
     fun findClasses(ctx0: Context?, vararg strings: String): List<Pair<String, Int>> {
