@@ -45,7 +45,9 @@ object MessageExtractor {
         val isSend = ((read(obj, "field_isSend", "isSend") as? Number)?.toInt() ?: 0) == 1
         val talker = read(obj, "field_talker", "talker") as? String ?: ""
         val content = read(obj, "field_content", "content") as? String ?: ""
-        val imgPath = resolveOriginalImage(read(obj, "field_imgPath", "imgPath") as? String ?: "")
+        val imgPath = WxVfs.resolvePath(
+            resolveOriginalImage(read(obj, "field_imgPath", "imgPath") as? String ?: "")
+        ) ?: ""
         val fileFullPath = read(obj, "field_fileFullPath", "fileFullPath") as? String ?: ""
         val fileName = read(obj, "field_fileName", "fileName") as? String ?: ""
         return Extracted(msgId, msgSvrId, type, createTime, isSend, talker, content, imgPath, fileFullPath, fileName)

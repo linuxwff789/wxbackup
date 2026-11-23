@@ -154,7 +154,10 @@ object WxDownloader {
             File("/data/data/com.tencent.mm/MicroMsg").listFiles()?.forEach { d ->
                 candidates.forEach { c ->
                     val f = File(d, c)
-                    if (f.isFile && f.length() > 0) return f
+                    if (f.isFile && f.length() > 0) {
+                        // 8.0.80 的 vfs 引用：真实文件在 .ref/d/<uuid>
+                        return WxVfs.resolve(f)
+                    }
                 }
             }
             null
