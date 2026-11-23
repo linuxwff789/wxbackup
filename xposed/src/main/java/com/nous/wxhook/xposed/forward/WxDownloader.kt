@@ -223,9 +223,10 @@ object WxDownloader {
 
             val b = helperCls.methods.firstOrNull { it.name == "b" && it.parameterCount == 3 } ?: return false
             val contIface = Class.forName("kotlin.coroutines.Continuation", false, loader)
-            // 微信 R8 内联了 kotlin.coroutines.EmptyCoroutineContext，反射找不到；
-            // getContext() 只需要返回任意 CoroutineContext，用模块自己的实例即可。
-            val emptyCtx: Any? = kotlin.coroutines.EmptyCoroutineContext
+            // 必须返回微信自己的 EmptyCoroutineContext 实例（8.0.80 是 ua6.l），
+            // 否则 ContinuationImpl 转换时会抛 "Couldn't convert ... to ua6.l"
+            val emptyCtx: Any? = WxClasses.emptyCoroutineContext(ctx)
+                ?: kotlin.coroutines.EmptyCoroutineContext
             val done = java.util.concurrent.atomic.AtomicBoolean(false)
             val cont = java.lang.reflect.Proxy.newProxyInstance(loader, arrayOf(contIface)) { _, m, args ->
                 when (m.name) {

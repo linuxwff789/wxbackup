@@ -202,6 +202,43 @@ object WxClasses {
         return hit
     }
 
+    private val ctxCache = HashMap<String, Any?>()
+
+    /**
+     * 微信的 kotlin.coroutines.EmptyCoroutineContext 被 R8 重命名（8.0.80 是 ua6.l）。
+     * 传给微信 Continuation 的 getContext() 必须是它自己的实例，否则
+     * "Couldn't convert result of type ... to ua6.l"。
+     */
+    fun emptyCoroutineContext(ctx0: Context?): Any? {
+        synchronized(ctxCache) { if (ctxCache.containsKey("empty")) return ctxCache["empty"] }
+        val ctx = ctxOf(ctx0)
+        val inst = if (ctx == null) null else runCatching {
+            val iface = kotlin.coroutines.CoroutineContext::class.java
+            val names = listOf(
+                "ua6.l",                            // 8.0.80 实测名
+                "kotlin.coroutines.EmptyCoroutineContext"
+            )
+            for (n in names) {
+                val c = runCatching { Class.forName(n, false, ctx.classLoader) }.getOrNull() ?: continue
+                if (!iface.isAssignableFrom(c)) continue
+                // object 单例：静态字段类型就是自己
+                val single = c.declaredFields.firstOrNull {
+                    java.lang.reflect.Modifier.isStatic(it.modifiers) && c.isAssignableFrom(it.type)
+                }?.apply { isAccessible = true }?.get(null)
+                if (single != null) return@runCatching single
+                runCatching {
+                    val ctor = c.getDeclaredConstructor()
+                    ctor.isAccessible = true
+                    ctor.newInstance()
+                }.getOrNull()?.let { return@runCatching it }
+            }
+            null
+        }.getOrNull()
+        synchronized(ctxCache) { ctxCache["empty"] = inst }
+        if (inst != null) WxDownloader.fileLog(ctx, "WxClasses: emptyContext=${inst.javaClass.name}")
+        return inst
+    }
+
     /** 按字符串常量列出所有候选类（name to 方法数），用于版本升级后人工确认。 */
     fun findClasses(ctx0: Context?, vararg strings: String): List<Pair<String, Int>> {
         val ctx = ctxOf(ctx0) ?: return emptyList()
